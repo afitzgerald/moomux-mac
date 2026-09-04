@@ -124,6 +124,12 @@ jobs:
         run: |
           sha256="$(cut -d' ' -f1 "${{ steps.archive.outputs.name }}.sha256")"
 
+          # `gh repo clone` authenticates through the gh binary itself, but a
+          # plain `git push` afterwards uses git's own HTTP transport, which
+          # has no credential helper in a headless runner. This registers gh
+          # as that helper so the push below can actually authenticate.
+          gh auth setup-git
+
           rm -rf /tmp/tap
           gh repo clone afitzgerald/homebrew-moomux-mac /tmp/tap
           mkdir -p /tmp/tap/Casks
