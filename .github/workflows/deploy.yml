@@ -1,0 +1,59 @@
+name: Deploy
+
+# Runs after the Test workflow finishes on main (i.e. right after a PR
+# merges and the post-merge test run goes green). Computes the next semver
+# tag from conventional-commit messages since the last tag, pushes it, and
+# explicitly dispatches Release for it — the app build + Homebrew cask
+# publish happen over there.
+#
+# The dispatch is explicit rather than relying on Release's own `push:
+# tags` trigger because this job pushes using the default GITHUB_TOKEN, and
+# GitHub deliberately doesn't cascade further workflow runs off of pushes
+# authenticated that way (anti-recursion rule) — so the tag push alone
+# would never start Release.
+on:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+
+# Serialize: two "Test" runs completing close together (e.g. two merges in
+# quick succession) must tag/release one at a time, not race and compute the
+# same "next version" twice. Never cancel a run in progress — it may already
+# have pushed a tag or dispatched Release.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next version
+        id: version
+        run: echo "next=$(./Scripts/next_version.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and push
+        if: steps.version.outputs.next != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.next }}" -m "${{ steps.version.outputs.next }}"
+          git push origin "${{ steps.version.outputs.next }}"
+
+      - name: Trigger release
+        if: steps.version.outputs.next != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref main -f tag="${{ steps.version.outputs.next }}"

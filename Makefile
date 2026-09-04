@@ -1,12 +1,31 @@
 CONFIG ?= release
 BUNDLE_ID := app.moomux.Moomux
 APP := .build/Moomux.app
+# Distribution signs with a Developer ID instead of the ad-hoc identity `app`
+# uses — that's the only cert that can be notarized. Falls back to "-" (ad-hoc)
+# when no Developer ID cert is installed, so `dist` still produces something,
+# just one Gatekeeper will block on any other Mac.
+DIST_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null \
+	| grep -o 'Developer ID Application: [^"]*' | head -1)
+DIST_IDENTITY := $(if $(DIST_IDENTITY),$(DIST_IDENTITY),-)
+# Hardened runtime and a secure timestamp are both required for notarization
+# and neither is possible ad-hoc, so they only go on with a real identity.
+SIGNFLAGS := $(if $(filter -,$(DIST_IDENTITY)),,--options runtime --timestamp)
+# One-time local setup before `make notarize` will work:
+#   xcrun notarytool store-credentials moomux-mac-notary \
+#     --apple-id <you@example.com> --team-id <TEAMID> --password <app-specific-password>
+# CI does not use this profile — release.yml passes API-key credentials to
+# notarytool directly instead of storing them in a keychain.
+NOTARY_PROFILE ?= moomux-mac-notary
+VERSION := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
+DMG := dist/Moomux-$(VERSION).dmg
+STAGE := .build/dmg
 # Deferred (=) rather than immediate (:=): `dev` sets CONFIG per-target, and :=
 # would bake in the release path at parse time.
 BINDIR = $(shell swift build -c $(CONFIG) --show-bin-path)
 BIN = $(BINDIR)/Moomux
 
-.PHONY: build app run dev selfcheck install shot clean
+.PHONY: build app run dev selfcheck install shot dist notarize clean
 
 build:
 	swift build -c $(CONFIG)
@@ -69,5 +88,51 @@ install: app
 shot:
 	bash Scripts/shot.sh $(OUT)
 
+# A drag-to-Applications disk image — what someone downloading this expects, and
+# the one artifact `notarize` stamps. Plain hdiutil, no create-dmg dependency:
+# that buys a background image and icon placement, which this doesn't have anyway.
+#
+# Re-signs first: `app` used the ad-hoc identity, which no other Mac will trust.
+# Nothing nested to sign separately — this bundle has no dylib.
+dist: app
+	@if [ "$(DIST_IDENTITY)" = "-" ]; then \
+		echo "WARNING: no Developer ID cert — packaging the ad-hoc build as-is."; \
+		echo "Gatekeeper will block it on any other Mac."; \
+	else \
+		codesign --force --sign "$(DIST_IDENTITY)" $(SIGNFLAGS) --identifier $(BUNDLE_ID) $(APP); \
+	fi
+	mkdir -p dist
+	rm -f $(DMG)
+	rm -rf $(STAGE)
+	mkdir -p $(STAGE)
+	cp -R $(APP) $(STAGE)/
+	ln -s /Applications $(STAGE)/Applications
+	hdiutil create -volname "Moomux $(VERSION)" -srcfolder $(STAGE) -ov -quiet \
+		-format UDZO $(DMG)
+	rm -rf $(STAGE)
+	@# Signing the image itself (not just the app inside) is what lets the staple in
+	@# `notarize` attach to it. No-op on the ad-hoc path.
+	$(if $(filter -,$(DIST_IDENTITY)),,codesign --force --sign "$(DIST_IDENTITY)" --timestamp $(DMG))
+	@echo "$(DMG)"
+
+# Ships a disk image anyone can open without the right-click > Open dance.
+# Stapling writes the notarization ticket into the .dmg, so the file that gets
+# uploaded afterwards is the same one that was submitted — no re-packaging step
+# that could throw the ticket away.
+#
+# notarytool and stapler both ship in CommandLineTools, so this needs no Xcode —
+# only a Developer ID certificate, which needs a paid Apple Developer account.
+# Local use only: CI (release.yml) calls notarytool directly with API-key
+# credentials instead of a stored keychain profile.
+notarize: dist
+	@[ "$(DIST_IDENTITY)" != "-" ] || { \
+		echo "No 'Developer ID Application' certificate installed — this build is signed"; \
+		echo "ad-hoc and can't be notarized. Needs an Apple Developer Program membership."; \
+		exit 1; }
+	xcrun notarytool submit $(DMG) --keychain-profile $(NOTARY_PROFILE) --wait
+	xcrun stapler staple $(DMG)
+	spctl --assess --type open --context context:primary-signature -vv $(DMG)
+	@echo "notarized: $(DMG)"
+
 clean:
-	rm -rf .build
+	rm -rf .build dist

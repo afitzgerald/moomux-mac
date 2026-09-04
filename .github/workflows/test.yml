@@ -1,0 +1,54 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # There is no Xcode on the dev machine this app is built on, and CI mirrors
+  # that: swift build + the assert-based demo() selfcheck, same as `make
+  # build selfcheck` locally. No macOS version matrix — SwiftUI/AppKit APIs
+  # used here (Package.swift pins .macOS(.v14)) aren't available on older
+  # runners, and there's only one platform this app ships for.
+  test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build (debug)
+        run: swift build
+
+      # Debug, not release: -O deletes every `assert`, which is the whole
+      # selfcheck mechanism (see Scripts/selfcheck.sh). SelfTest itself
+      # refuses to run under -O rather than reporting a hollow pass, so this
+      # would fail loudly rather than silently if it were ever built wrong.
+      - name: Selfcheck
+        run: make selfcheck
+
+      # Confirms a release build still produces a working, ad-hoc-signed
+      # bundle — the shape release.yml ships. Not a substitute for selfcheck
+      # above, which needs the debug build to keep its asserts.
+      - name: Release build + app bundle
+        run: make app
+
+  lint:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Whole tree, zero warnings — matches the standing rule in CLAUDE.md.
+      # A clean build is required here (not incremental) because swift build
+      # only re-emits diagnostics for files it recompiles.
+      - name: Build with warnings as errors
+        run: swift build -Xswiftc -warnings-as-errors
+
+      - name: Release version rules
+        run: ./Scripts/next_version_test.sh
