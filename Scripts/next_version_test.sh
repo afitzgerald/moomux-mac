@@ -7,6 +7,26 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+fail=0
+
+# A repo with commits but no v* tag at all: `git tag -l ... | grep -E ...`
+# finds nothing and exits 1, which used to kill the whole script under
+# `pipefail` before it ever got to print a version.
+cd "$tmp"
+git init -q
+git config user.email test@test.com
+git config user.name test
+git commit -q --allow-empty -m "feat: first commit, no tags yet"
+got="$("$script_dir/next_version.sh")"
+if [ "$got" != "v0.0.1" ]; then
+  echo "FAIL: untagged repo -> got '$got', want 'v0.0.1'"
+  fail=1
+else
+  echo "ok: untagged repo -> $got"
+fi
+
+rm -rf "$tmp"
+mkdir -p "$tmp"
 cd "$tmp"
 git init -q
 git config user.email test@test.com
@@ -14,8 +34,6 @@ git config user.name test
 
 git commit -q --allow-empty -m "chore: initial"
 git tag v0.5.0
-
-fail=0
 
 assert_next() {
   local msg="$1" want="$2"

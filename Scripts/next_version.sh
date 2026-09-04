@@ -20,7 +20,7 @@ fi
 # Only exact vX.Y.Z tags reachable from HEAD count as a release baseline —
 # a stray "v*" tag with a different shape (v1, v1.2.3-rc1) or one that lives
 # on an unrelated branch must not be picked as the last release.
-last_tag=$(git tag -l --merged HEAD 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+last_tag=$(git tag -l --merged HEAD 'v*' | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n1)
 
 if [ -z "$last_tag" ]; then
   range=""
