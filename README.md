@@ -41,6 +41,40 @@ make dev ARGS="--socket /tmp/mmx.sock"
 
 With no `--socket` it uses `~/.local/share/moomux/moomux.sock`, same default as `moomux ui`.
 
+## Running the core at login
+
+The app talks to `moomux serve`, but doesn't start it — you need something running that socket
+before you open Moomux.app. A LaunchAgent does that at login instead of a terminal you have to
+remember to leave open. Find the full path to your `moomux` binary first (`which moomux`), since
+launchd does not use your shell's `PATH`:
+
+```sh
+cat > ~/Library/LaunchAgents/com.erickgnclvs.moomux.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.erickgnclvs.moomux</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(which moomux)</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+EOF
+launchctl load ~/Library/LaunchAgents/com.erickgnclvs.moomux.plist
+```
+
+No `-socket` flag, so it serves the same default (`~/.local/share/moomux/moomux.sock`) the app
+connects to when you don't pass `--socket` either. `launchctl unload` the same path to stop it, or
+delete the plist to remove it for good.
+
 ## Compatibility
 
 `Sources/Moomux/Core/Models.swift` decodes the core's `internal/ipc` JSON into Swift structs with
