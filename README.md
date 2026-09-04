@@ -44,9 +44,22 @@ With no `--socket` it uses `~/.local/share/moomux/moomux.sock`, same default as 
 ## Running the core at login
 
 The app talks to `moomux serve`, but doesn't start it — you need something running that socket
-before you open Moomux.app. A LaunchAgent does that at login instead of a terminal you have to
-remember to leave open. Find the full path to your `moomux` binary first (`which moomux`), since
-launchd does not use your shell's `PATH`:
+before you open Moomux.app.
+
+If `moomux` came from Homebrew (`brew install erickgnclvs/moomux/moomux` — the cask above pulls it
+in automatically), the formula ships a launchd service definition:
+
+```sh
+brew services start moomux
+```
+
+That runs `moomux serve` at login with no `-socket` flag, so it serves the same default
+(`~/.local/share/moomux/moomux.sock`) the app connects to when you don't pass `--socket` either.
+`brew services stop moomux` to stop it, `brew services list` to check.
+
+If `moomux` came from `go install` instead, there's no formula to hook into — write your own
+LaunchAgent. Find the full path to your `moomux` binary first (`which moomux`), since launchd does
+not use your shell's `PATH`:
 
 ```sh
 cat > ~/Library/LaunchAgents/com.erickgnclvs.moomux.plist <<EOF
@@ -71,9 +84,7 @@ EOF
 launchctl load ~/Library/LaunchAgents/com.erickgnclvs.moomux.plist
 ```
 
-No `-socket` flag, so it serves the same default (`~/.local/share/moomux/moomux.sock`) the app
-connects to when you don't pass `--socket` either. `launchctl unload` the same path to stop it, or
-delete the plist to remove it for good.
+`launchctl unload` the same path to stop it, or delete the plist to remove it for good.
 
 ## Compatibility
 
