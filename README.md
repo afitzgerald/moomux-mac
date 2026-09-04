@@ -1,8 +1,20 @@
 # Moomux.app
 
+**Early alpha.** Built for one person's own daily use, not yet hardened for anyone else's — expect
+rough edges, missing features (see `CLAUDE.md`'s "Deliberately not done"), and breaking changes
+between releases without notice.
+
 A native macOS front end for [moomux](https://github.com/erickgnclvs/moomux) — a TUI for managing
 Claude Code / codex / opencode sessions across git worktrees. SwiftUI, SwiftPM executable, one
 dependency (SwiftTerm), driving the moomux core over its `moomux serve` unix socket.
+
+## Installing
+
+```sh
+brew install --cask afitzgerald/moomux-mac/moomux-mac
+```
+
+Signed with a Developer ID and notarized, but still an alpha release — see above.
 
 This repo was split out of moomux's `macos/` directory (history preserved via `git subtree split`).
 `docs/native-macos-rewrite.md` is the design doc that led to this shape; `CLAUDE.md` has the
