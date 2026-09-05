@@ -36,7 +36,7 @@ struct RootView: View {
             } else if let session = app.session(id: app.selectedSessionID) {
                 SessionDetail(session: session)
             } else {
-                ContentUnavailableView("No session selected", systemImage: "square.split.2x1")
+                NoSessionSelectedView()
             }
         }
         .toolbar {
@@ -385,6 +385,21 @@ private struct TextFieldSheet: View {
         }
         .padding(20)
         .frame(width: 360)
+    }
+}
+
+private struct NoSessionSelectedView: View {
+    var body: some View {
+        if let url = Bundle.main.url(forResource: "PeekabooPlate", withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            VStack(spacing: 20) {
+                Image(nsImage: image).resizable().scaledToFit().frame(width: 220, height: 220)
+                Text("No session selected").font(.title2).bold().foregroundStyle(.secondary)
+                Spacer().frame(height: 40)
+            }
+        } else {
+            ContentUnavailableView("No session selected", systemImage: "square.split.2x1")
+        }
     }
 }
 

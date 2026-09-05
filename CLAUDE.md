@@ -562,8 +562,6 @@ Decisions, not oversights. Don't "fix" these without being asked.
   A refusal still lands in the "Couldn't do that" alert. `StartFirstPrompt` failing is folded into
   the *hint* rather than the error, because by then the worktree and the tmux session already exist
   — reporting it as a failed creation invites a retry that answers "session already exists".
-- **No app icon**, so the bundle shows the generic one. `~/tmp/mergeright/Scripts/make-icon.swift`
-  draws one from code when it's wanted.
 - **No `dist`/`notarize`, no Sparkle, no signing identity.** Ad-hoc signing is fine until something
   depends on a stable designated requirement — launch-at-login, which is still unproven.
   **Notification authorization is not one of those things**: measured with a throwaway bundle of
