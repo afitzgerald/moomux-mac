@@ -151,6 +151,7 @@ private struct PaneView: NSViewRepresentable {
             options: TerminalOptions(scrollback: TmuxControlClient.historyLines))
         view.onFocused = { [weak client] in client?.selectPane(paneID) }
         view.terminalDelegate = context.coordinator
+        view.registerForDraggedTypes([.fileURL])
         client.register(view, for: paneID)
         return view
     }
@@ -225,6 +226,19 @@ private final class PaneTerminalView: NoScrollerTerminalView {
     override func mouseDown(with event: NSEvent) {
         onFocused()
         super.mouseDown(with: event)
+    }
+
+    /// Clicking to focus a pane before dropping is easy to skip, so a drop
+    /// also selects the pane it lands on — matching what a click there does.
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.moomux_hasFilePaths ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let text = sender.moomux_filePathsForDrop else { return false }
+        onFocused()
+        insertText(text, replacementRange: NSRange(location: 0, length: 0))
+        return true
     }
 
     /// The first pane to appear takes the keyboard, so attaching and typing

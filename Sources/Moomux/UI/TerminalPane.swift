@@ -54,10 +54,21 @@ struct TerminalPane: NSViewRepresentable {
                 window.makeFirstResponder(self)
             }
         }
+
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            sender.moomux_hasFilePaths ? .copy : []
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            guard let text = sender.moomux_filePathsForDrop else { return false }
+            insertText(text, replacementRange: NSRange(location: 0, length: 0))
+            return true
+        }
     }
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         let view = AttachedTerminalView(frame: .init(x: 0, y: 0, width: 640, height: 400))
+        view.registerForDraggedTypes([.fileURL])
         view.processDelegate = context.coordinator
         // `-u` forces UTF-8: the client's environment here is SwiftTerm's
         // minimal one, so tmux cannot infer it from LANG the way a login shell
@@ -92,6 +103,23 @@ struct TerminalPane: NSViewRepresentable {
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    }
+}
+
+/// Dropping Finder files onto a terminal types their (shell-quoted) paths, the
+/// same convention iTerm and Terminal.app use. Shared by the plain-attach view
+/// here and the control-mode panes in `ControlModeView.swift`.
+extension NSDraggingInfo {
+    var moomux_hasFilePaths: Bool {
+        draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: nil)
+    }
+
+    var moomux_filePathsForDrop: String? {
+        guard let urls = draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil)
+                as? [URL], !urls.isEmpty else { return nil }
+        return urls.map { url in
+            "'\(url.path.replacingOccurrences(of: "'", with: "'\\''"))'"
+        }.joined(separator: " ")
     }
 }
 
