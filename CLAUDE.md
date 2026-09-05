@@ -84,7 +84,12 @@ photographed at all.
 Two traps when checking by screenshot:
 
 - A **crash on launch is silent** through `open`. Confirm the process is still alive a few seconds
-  later: `make dev && sleep 6 && pgrep -x Moomux`.
+  later — and match *this worktree's* build, not any Moomux, since the installed app and other
+  worktrees' builds are now routinely running alongside it and would satisfy a bare `pgrep -x`:
+  `make dev && sleep 6 && pgrep -f "$PWD/.build/Moomux.app/Contents/MacOS/[M]oomux"`.
+  `Scripts/shot.sh` and `Scripts/ui.swift` both scope themselves the same way — `ui.swift` refuses
+  to drive anything but this worktree's build, because its synthetic clicks land at coordinates
+  where the real app's buttons kill, archive and delete live sessions.
 - Against a **locked screen**, `screencapture` photographs the lock screen and `osascript ... get
   count of windows` returns 0 for a perfectly healthy app. Neither is evidence of a problem.
 - Other apps' menu-bar popovers float above ours and land in the shot. Retake rather than debug a
@@ -370,6 +375,15 @@ to fix in Go, not a reason to link the core.
 - **`open` against an app that is still terminating does nothing at all**, which reads exactly like
   a crash on launch. `make run`/`make dev` wait out the old process for this reason — do not
   "simplify" that loop away.
+- **`make dev`/`make run` build `app.moomux.Moomux.dev`, not `app.moomux.Moomux`.** They used to
+  share the installed app's identifier, which meant `open .build/Moomux.app` could reactivate
+  `/Applications/Moomux.app` instead of the build you just made — and the `pkill -x Moomux` that
+  worked around it killed *every* Moomux on the machine: the installed app and every other
+  worktree's. With several sessions on this project at once that is an app vanishing every few
+  minutes, and because it is SIGTERM there is no crash report to find, so it reads exactly like a
+  crash. Both targets now kill only `$(CURDIR)/.build/Moomux.app`'s own process. The cost is that
+  the dev bundle earns its **own** notification grant — authorization is keyed by bundle
+  identifier, so a debug build prompts once and does not inherit the installed app's answer.
 - **Notification authorization needs a bundle LaunchServices has registered, and that means `open`
   from a real location.** Exec'ing the binary inside the bundle
   (`./Moomux.app/Contents/MacOS/Moomux`) fails instantly with `UNErrorDomain Code=1 "Notifications

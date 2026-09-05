@@ -1,6 +1,28 @@
 CONFIG ?= release
-BUNDLE_ID := app.moomux.Moomux
+BUNDLE_ID = app.moomux.Moomux
+# `run`/`dev` build a *different app* as far as LaunchServices is concerned.
+# Sharing one identifier with the installed copy meant `open .build/Moomux.app`
+# could reactivate /Applications/Moomux.app instead of the build you just made
+# — which is why both targets used to `pkill -x Moomux`, and that killed every
+# Moomux on the machine: the installed app, and every other worktree's.
+# Four of those in twenty-five minutes read exactly like the app crashing (they
+# are SIGTERM, so there is no crash report to find). Own identifier, own
+# process, kill only our own.
+#
+# One identifier for every worktree's dev build, not one each: a per-worktree
+# identifier would make every worktree a new app to macOS, each prompting for
+# its own notification authorization. The cost is that two worktrees' dev builds
+# share an identifier and plain `open` would reactivate whichever is already
+# running, so `run`/`dev` pass `open -n`.
+DEV_BUNDLE_ID := app.moomux.Moomux.dev
 APP := .build/Moomux.app
+# The one process `run`/`dev` may kill: the one they launched, from this
+# worktree. Other worktrees have another $(CURDIR); the installed app has
+# another path entirely. `[M]` is not decoration: `pgrep -f` matches the whole
+# command line of every process, including the `sh -c while pgrep -f ...` that
+# runs the wait loop — a plain path matches that shell and the loop never ends.
+# The bracket makes the pattern match the executable and not its own spelling.
+DEV_PAT = $(CURDIR)/$(APP)/Contents/MacOS/[M]oomux
 # Distribution signs with a Developer ID instead of the ad-hoc identity `app`
 # uses — that's the only cert that can be notarized. Falls back to "-" (ad-hoc)
 # when no Developer ID cert is installed, so `dist` still produces something,
@@ -49,6 +71,7 @@ app: build
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp $(BIN) $(APP)/Contents/MacOS/Moomux
 	cp Resources/Info.plist $(APP)/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP)
 
 # ARGS is passed through to the app, e.g. `make dev ARGS="--socket /tmp/mmx.sock"`
@@ -57,28 +80,35 @@ ARGS ?=
 
 # Waiting out the old process is not politeness: `open` against an app that is
 # still terminating silently does nothing, which reads as a crash on launch.
+run: BUNDLE_ID = $(DEV_BUNDLE_ID)
 run: app
-	pkill -x Moomux || true
-	@while pgrep -x Moomux >/dev/null; do sleep 0.2; done
-	open $(APP) --args $(ARGS)
+	pkill -f "$(DEV_PAT)" || true
+	@while pgrep -f "$(DEV_PAT)" >/dev/null; do sleep 0.2; done
+	open -n $(APP) --args $(ARGS)
 
 # A debug bundle for the edit-look-edit loop: seconds instead of the release
-# build's minute. Same bundle identifier, so nothing else changes.
+# build's minute.
 dev: CONFIG = debug
+dev: BUNDLE_ID = $(DEV_BUNDLE_ID)
 dev: app
-	pkill -x Moomux || true
-	@while pgrep -x Moomux >/dev/null; do sleep 0.2; done
-	open $(APP) --args $(ARGS)
+	pkill -f "$(DEV_PAT)" || true
+	@while pgrep -f "$(DEV_PAT)" >/dev/null; do sleep 0.2; done
+	open -n $(APP) --args $(ARGS)
 
 # Quitting first is the same trap `run` has: a still-running Moomux keeps
 # serving the old code, and relaunching just reactivates that process rather
 # than starting the copy you installed — which reads as "install did nothing".
-# Note that .build/Moomux.app and /Applications/Moomux.app share a bundle
-# identifier, so LaunchServices can pick either one; `make clean` after
-# installing if you want to be certain which is running.
-install: app
-	pkill -x Moomux || true
-	@while pgrep -x Moomux >/dev/null; do sleep 0.2; done
+# Only the installed one, though: a `dev` build is a different bundle
+# identifier and a different process, and there is no reason to take it down.
+# `$(MAKE) app` rather than a prerequisite: `app` is phony, so in a single
+# `make dev install` it would be built once — under `dev`'s CONFIG and
+# BUNDLE_ID — and this would then copy a debug bundle carrying the *dev*
+# identifier into /Applications, where it would silently lose the release app's
+# notification grant. A sub-make gets its own variables.
+install:
+	$(MAKE) app CONFIG=release BUNDLE_ID=app.moomux.Moomux
+	pkill -f "/Applications/Moomux.app/Contents/MacOS/[M]oomux" || true
+	@while pgrep -f "/Applications/Moomux.app/Contents/MacOS/[M]oomux" >/dev/null; do sleep 0.2; done
 	rm -rf /Applications/Moomux.app
 	cp -R $(APP) /Applications/Moomux.app
 	@echo "installed $$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist) to /Applications/Moomux.app"
@@ -94,7 +124,10 @@ shot:
 #
 # Re-signs first: `app` used the ad-hoc identity, which no other Mac will trust.
 # Nothing nested to sign separately — this bundle has no dylib.
-dist: app
+# Same reason as `install` above: never package whatever `app` another goal
+# in the same invocation happened to leave in .build.
+dist:
+	$(MAKE) app CONFIG=release BUNDLE_ID=app.moomux.Moomux
 	@if [ "$(DIST_IDENTITY)" = "-" ]; then \
 		echo "WARNING: no Developer ID cert — packaging the ad-hoc build as-is."; \
 		echo "Gatekeeper will block it on any other Mac."; \

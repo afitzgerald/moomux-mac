@@ -17,7 +17,16 @@ import ApplicationServices
 import AppKit
 import Foundation
 
+// This drives the app with synthetic clicks and keystrokes, so *which* Moomux it
+// finds is a safety question, not a convenience one. `make dev` no longer kills
+// every Moomux on the machine (see the Makefile), so the installed app and other
+// worktrees' builds are routinely running alongside ours — and picking one of
+// those by name would post clicks at our coordinates into a window whose buttons
+// at those coordinates kill, archive and delete the user's live sessions.
+// So: this worktree's own build, by executable path, or nothing.
 let appName = "Moomux"
+let devExecutable = FileManager.default.currentDirectoryPath
+    + "/.build/Moomux.app/Contents/MacOS/Moomux"
 
 func attr(_ e: AXUIElement, _ key: String) -> CFTypeRef? {
     var v: CFTypeRef?
@@ -62,8 +71,9 @@ func role(_ e: AXUIElement) -> String {
 }
 
 guard let app = NSWorkspace.shared.runningApplications
-        .first(where: { $0.localizedName == appName }) else {
-    FileHandle.standardError.write(Data("\(appName) is not running\n".utf8))
+        .first(where: { $0.executableURL?.path == devExecutable }) else {
+    FileHandle.standardError.write(
+        Data("no \(appName) running from \(devExecutable) — try 'make dev'\n".utf8))
     exit(1)
 }
 let axApp = AXUIElementCreateApplication(app.processIdentifier)
