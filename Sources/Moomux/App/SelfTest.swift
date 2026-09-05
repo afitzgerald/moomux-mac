@@ -17,13 +17,10 @@ enum SelfTest {
         Wire.demo()
         MoomuxClient.demo()
         ToolPath.demo()
-        TmuxProtocolChecks.demo()
-        TmuxWindowLayout.demo()
         AppState.demo()
         NewSessionForm.demo()
         ProjectForm.demo()
         Notifier.demo()
-        TmuxControlClient.demo()
         TmuxSnapshot.demo()
 
         print("selftest: ok")

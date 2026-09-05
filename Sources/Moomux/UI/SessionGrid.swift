@@ -169,3 +169,72 @@ private struct SnapshotTerminal: NSViewRepresentable {
         }
     }
 }
+
+/// Hides SwiftTerm's scroller, which is not cosmetic.
+///
+/// In SwiftTerm 1.20.0 `reservedScrollerWidth` is `scroller?.isHidden == true ? 0
+/// : scrollerWidth` — it ignores `scrollerStyle` entirely, and nothing in the
+/// library ever hides the scroller. So **every** view silently reserves ~17pt,
+/// which is a whole column at tile size.
+///
+/// Note the version: an earlier reading of this same property came from
+/// SwiftTerm's `main`, where it also checks `scrollerStyle == .legacy` and
+/// setting `.overlay` would have been enough. Read `.build/checkouts`, not a
+/// fresh clone.
+class NoScrollerTerminalView: TerminalView {
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        if subview is NSScroller { subview.isHidden = true }
+    }
+}
+
+/// `TerminalViewDelegate` has a dozen members. SwiftTerm supplies defaults for
+/// most of them, but not all — `rangeChanged` in particular — so this collects
+/// the no-ops in one place and each coordinator overrides only what it needs.
+class TerminalDelegateBase: NSObject, TerminalViewDelegate {
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
+    func setTerminalTitle(source: TerminalView, title: String) {}
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {}
+    func scrolled(source: TerminalView, position: Double) {}
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+}
+
+/// A one-shot `capture-pane` of a session, framed as bytes a terminal can draw.
+///
+/// Nothing here attaches a client, which is the entire reason the session grid
+/// is snapshots: every tmux client on a session sets the shared window size, so
+/// a grid of live clients would letterbox that many real sessions down to tile
+/// size until it was closed.
+enum TmuxSnapshot {
+
+    /// Rows **truncated** to `columns`, framed with home+clear so a repaint
+    /// replaces the screen rather than appending, CRLF-joined because a bare LF
+    /// only moves down a row.
+    ///
+    /// Truncating rather than letting the terminal wrap is the whole legibility
+    /// of a tile: a real agent pane is 150-210 columns and a tile is nearer 50,
+    /// so wrapped rows would show the bottom quarter of the last few lines as
+    /// mush. `capture-pane` without `-J` hands back one entry per screen row,
+    /// so a row here really is a row there.
+    static func screen(from lines: [String], columns: Int) -> String {
+        let width = max(0, columns)
+        var rows = lines.map { $0.count > width ? String($0.prefix(width)) : $0 }
+        // capture-pane returns the pane's full height, blank rows below the
+        // cursor included. Feeding those into a short tile scrolls the content
+        // away and leaves the tile showing the blanks.
+        while let last = rows.last, last.allSatisfy(\.isWhitespace) { rows.removeLast() }
+        return "\u{1b}[H\u{1b}[2J" + rows.joined(separator: "\r\n")
+    }
+
+    static func demo() {
+        let s = screen(from: ["abcdef", "gh"], columns: 4)
+        assert(s.hasPrefix("\u{1b}[H\u{1b}[2J"), s.debugDescription)
+        assert(s.hasSuffix("abcd\r\ngh"), "rows are cut, never wrapped: \(s.debugDescription)")
+        assert(screen(from: [], columns: 4).hasSuffix("[2J"))
+        assert(screen(from: ["a", "   ", ""], columns: 9).hasSuffix("[2Ja"),
+               "the blank rows below a pane's cursor would scroll the tile empty")
+        // A tile whose terminal has not been sized yet must not trap.
+        assert(screen(from: ["ab"], columns: -1).hasSuffix("[2J"))
+    }
+}

@@ -7,10 +7,9 @@ import SwiftUI
 /// process, so sessions survive quitting the app, and the very same session is
 /// still `tmux attach`-able from a phone. The app is a viewport, not an owner.
 ///
-/// ponytail: a plain `tmux attach`, not control mode (`tmux -CC`). tmux draws
-/// its own splits and status line inside this one view and the app cannot see
-/// the layout — so no native tabs, no native splits, no per-pane titles. That
-/// buys nothing until there is UI to put a layout into.
+/// tmux draws its own splits and status line inside this one view and the
+/// app cannot see the layout — so no native tabs, no native splits, no
+/// per-pane titles. That buys nothing until there is UI to put a layout into.
 ///
 /// The ceiling that does bite: **every client on a session shares one window
 /// size**, so while this pane is attached, the user's iTerm window and phone
@@ -19,11 +18,6 @@ import SwiftUI
 /// shares the windows themselves, and the size does not spring back when the
 /// larger client is used again. It only recovers on detach. That is why
 /// attaching is an explicit action rather than a consequence of selecting a row.
-///
-/// Control mode does **not** fix this either, contrary to what the plan doc
-/// assumed: a `-CC` client sets its size with `refresh-client -C` and the
-/// window follows it exactly the same way. Measured both ways — see
-/// `TmuxControlClient`.
 ///
 /// The terminal widget is deliberately reached only through this file, so
 /// swapping SwiftTerm for libghostty later is one file, as the plan assumes.
@@ -134,8 +128,7 @@ extension TerminalView {
 }
 
 /// Dropping Finder files onto a terminal types their (shell-quoted) paths, the
-/// same convention iTerm and Terminal.app use. Shared by the plain-attach view
-/// here and the control-mode panes in `ControlModeView.swift`.
+/// same convention iTerm and Terminal.app use.
 extension NSDraggingInfo {
     var moomux_hasFilePaths: Bool {
         draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: nil)
