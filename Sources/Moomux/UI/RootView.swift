@@ -169,15 +169,10 @@ struct RootView: View {
 /// The full new-session form — the same questions the TUI's dialog asks, now
 /// that the core serves the agent/model/thinking table (`AgentOptions`) that
 /// the pickers are built from. Nothing here hardcodes a list.
-///
-/// The three fields that matter most are up top and the rest is behind a
-/// disclosure, because a session in a well-configured project needs none of
-/// them: the project's own settings already answer every one.
 private struct NewSessionSheet: View {
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
     @State private var form = NewSessionForm()
-    @State private var showMore = false
 
     private var projects: [String] { app.config?.orderedProjectNames ?? app.projects }
     private var project: Project? { app.config?.projects[form.project] }
@@ -192,11 +187,24 @@ private struct NewSessionSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("New session").font(.headline)
             Form {
+                // ponytail: no `.focused()` here — a menu-style Picker
+                // (NSPopUpButton) silently ignores FocusState on macOS.
+                // Forcing it needs a custom NSViewRepresentable; not worth it
+                // for focus-on-open alone.
                 Picker("Project", selection: $form.project) {
+                    Text("choose one").tag("")
                     ForEach(projects, id: \.self) { Text($0).tag($0) }
                 }
                 TextField("Name", text: $form.name)
                     .help("Names the branch, the worktree and the tmux session")
+                // A short placeholder on purpose: a long one pushes the
+                // field onto its own line in a grouped Form and the row
+                // stops looking like the ones above it.
+                TextField("Existing branch", text: $form.existingBranch,
+                          prompt: Text("resume, don't cut"))
+                TextField("Base branch", text: $form.baseBranch,
+                          prompt: Text(project?.baseBranch ?? "the project's default"))
+                    .disabled(project?.isPlain == true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("First prompt")
                     TextEditor(text: $form.prompt)
@@ -204,56 +212,45 @@ private struct NewSessionSheet: View {
                         .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 160)
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
                 }
+                TextField("Ticket", text: $form.ticket)
+                TextField("PR", text: $form.pr)
+
+                Picker("Agent", selection: $form.agent) {
+                    // Only for a `prompt_agent` project, which starts with
+                    // no agent chosen and must not silently pick one.
+                    if form.agent.isEmpty { Text("choose one").tag("") }
+                    ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
+                }
+                if hasModelList {
+                    Picker("Model", selection: $form.model) {
+                        ForEach(models, id: \.self) { Text($0).tag($0) }
+                    }
+                } else {
+                    TextField("Model", text: $form.modelText, prompt: Text("default"))
+                        .help("\(form.agent) has no fixed model list — type one or leave it empty")
+                }
+                if !thinking.isEmpty {
+                    Picker("Thinking", selection: $form.thinking) {
+                        ForEach(thinking, id: \.self) { Text($0).tag($0) }
+                    }
+                    .help(form.agent == "codex"
+                          ? "codex takes this as a real reasoning-effort flag"
+                          : "Prepended to the first prompt — there is no CLI flag for it")
+                }
+                Toggle("Skip permission prompts", isOn: $form.dangerous)
+                    .help(form.agent == "opencode"
+                          ? "opencode has no permission-skipping flag — this does nothing for it"
+                          : "claude: --dangerously-skip-permissions, codex: --yolo")
                 Toggle("Send it (press Enter)", isOn: $form.autoSubmit)
                     .help("Off leaves the prompt typed but unsent, so you can look before it runs")
-
-                DisclosureGroup("Agent, model, branch", isExpanded: $showMore) {
-                    Picker("Agent", selection: $form.agent) {
-                        // Only for a `prompt_agent` project, which starts with
-                        // no agent chosen and must not silently pick one.
-                        if form.agent.isEmpty { Text("choose one").tag("") }
-                        ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
-                    }
-                    Toggle("Skip permission prompts", isOn: $form.dangerous)
-                        .help(form.agent == "opencode"
-                              ? "opencode has no permission-skipping flag — this does nothing for it"
-                              : "claude: --dangerously-skip-permissions, codex: --yolo")
-                    if hasModelList {
-                        Picker("Model", selection: $form.model) {
-                            ForEach(models, id: \.self) { Text($0).tag($0) }
-                        }
-                    } else {
-                        TextField("Model", text: $form.modelText, prompt: Text("default"))
-                            .help("\(form.agent) has no fixed model list — type one or leave it empty")
-                    }
-                    if !thinking.isEmpty {
-                        Picker("Thinking", selection: $form.thinking) {
-                            ForEach(thinking, id: \.self) { Text($0).tag($0) }
-                        }
-                        .help(form.agent == "codex"
-                              ? "codex takes this as a real reasoning-effort flag"
-                              : "Prepended to the first prompt — there is no CLI flag for it")
-                    }
-                    // A short placeholder on purpose: a long one pushes the
-                    // field onto its own line in a grouped Form and the row
-                    // stops looking like the ones above it.
-                    TextField("Existing branch", text: $form.existingBranch,
-                              prompt: Text("resume, don't cut"))
-                    TextField("Base branch", text: $form.baseBranch,
-                              prompt: Text(project?.baseBranch ?? "the project's default"))
-                        .disabled(project?.isPlain == true)
-                    TextField("Ticket", text: $form.ticket)
-                    TextField("PR", text: $form.pr)
-                }
             }
             .formStyle(.grouped)
             // An empty `TextField` in a grouped Form draws no box at all, so a
             // blank field reads as a static label — the multi-line prompt field
             // as a large blank void. A border is the whole fix.
             .textFieldStyle(.roundedBorder)
-            if form.agent.isEmpty {
-                Text("This project asks for an agent every time — pick one under "
-                     + "“Agent, model, branch”.")
+            if !form.project.isEmpty && project?.promptAgent == true && form.agent.isEmpty {
+                Text("This project asks for an agent every time — pick one above.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -283,13 +280,9 @@ private struct NewSessionSheet: View {
         // Seeded from the row being looked at — a second session in the same
         // project is the common case.
         .onAppear {
-            form.project = app.session(id: app.selectedSessionID)?.project
-                ?? projects.first ?? ""
+            form.project = ""
             form.autoSubmit = app.config?.autoSubmitDefault ?? false
             applyProject()
-            // A project that insists on an explicit agent has nothing selected,
-            // and a collapsed section would hide the only control that can fix it.
-            showMore = form.agent.isEmpty
         }
         // The agent, and with it every list below it, belongs to the project.
         .onChange(of: form.project) { _, _ in applyProject() }
