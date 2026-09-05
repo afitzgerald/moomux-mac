@@ -280,7 +280,7 @@ private struct NewSessionSheet: View {
         // Seeded from the row being looked at — a second session in the same
         // project is the common case.
         .onAppear {
-            form.project = ""
+            form.project = app.session(id: app.selectedSessionID)?.project ?? ""
             form.autoSubmit = app.config?.autoSubmitDefault ?? false
             applyProject()
         }
