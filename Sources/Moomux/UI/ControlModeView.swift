@@ -44,13 +44,10 @@ struct ControlModeView: View {
             panesArea
         }
         .onDisappear {
-            // Deliberately does not stop the client: the view going away here
-            // just means the sidebar selection moved elsewhere, and the
-            // pooled client in `AppState.controlClients` is meant to keep
-            // running — tmux keeps feeding it layout/window updates in the
-            // background, so coming back shows the current state immediately
-            // instead of a fresh attach. Only clear the "currently visible"
-            // pointer the Pane menu drives, and only if it was ours.
+            // Does not stop the client — it stays pooled in
+            // `AppState.controlClients` and keeps getting fed by tmux in the
+            // background. Only clear the Pane menu's "currently visible"
+            // pointer, and only if it was ours.
             if app.controlClient === client { app.controlClient = nil }
         }
     }
@@ -121,11 +118,8 @@ struct ControlModeView: View {
 
     private func attach(cols: Int, rows: Int) {
         guard client == nil else { return }
-        // Reuse a client already running in the background for this session
-        // rather than starting a fresh `tmux -CC attach` — see
-        // `AppState.controlClients`. Its layout/windows/active pane are
-        // current even after a while away: tmux keeps sending it events the
-        // whole time, attached or not.
+        // Reuse a client already running in the background — see
+        // `AppState.controlClients` — rather than a fresh `tmux -CC attach`.
         if let existing = app.controlClients[session.id] {
             wire(existing)
             layout = existing.layout

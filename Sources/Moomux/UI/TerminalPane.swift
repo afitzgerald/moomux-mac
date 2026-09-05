@@ -70,16 +70,12 @@ struct TerminalPane: NSViewRepresentable {
 
     /// Reuses a pooled view for this session if one is already running,
     /// rather than starting a fresh `tmux attach` — see `AppState.plainPanes`.
-    /// Switching the sidebar selection away and back must not pay for a new
-    /// process and an empty screen when the old one is still alive.
     ///
-    /// `processDelegate` is declared `weak` in SwiftTerm, so `context.coordinator`
-    /// — owned by SwiftUI only for as long as this representable stays
-    /// mounted — cannot be the delegate: it would deallocate the moment the
-    /// sidebar selection moves elsewhere, and a client that exits in the
-    /// background afterwards would have nobody to tell. `AppState.plainDelegates`
-    /// keeps one delegate alive per session for exactly as long as the pooled
-    /// process is, so a background exit still reaches `AppState.detach(_:)`.
+    /// `processDelegate` is `weak` in SwiftTerm, so `context.coordinator` —
+    /// only owned by SwiftUI for as long as this representable stays mounted
+    /// — can't be the delegate: it would deallocate on the next sidebar
+    /// switch, and a background exit would have nobody to tell.
+    /// `AppState.plainDelegates` keeps one alive per session instead.
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         if let existing = pool.plainPanes[sessionID] {
             existing.processDelegate = pool.plainDelegates[sessionID]
@@ -102,13 +98,9 @@ struct TerminalPane: NSViewRepresentable {
         pool.plainDelegates[sessionID]?.onExit = onExit
     }
 
-    /// Deliberately does **not** terminate the process, and does not touch
-    /// `onExit` either: the view going away here just means the sidebar
-    /// selection moved to another session, and both the pooled client in
-    /// `AppState.plainPanes` and its delegate in `AppState.plainDelegates` are
-    /// meant to keep working the whole time it is backgrounded.
-    /// `AppState.detach(_:)` is the only thing that actually tears either
-    /// down — a real detach, not a navigation away.
+    /// Does nothing: the process and its delegate both keep working in the
+    /// background — see `makeNSView`. Only `AppState.detach(_:)` tears them
+    /// down.
     static func dismantleNSView(_ view: LocalProcessTerminalView, coordinator: Coordinator) {}
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {

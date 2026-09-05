@@ -564,16 +564,9 @@ private struct SessionDetail: View {
 
     var body: some View {
         let state = app.state(for: session)
-        // Persisted on `app`, not local `@State`: switching the sidebar
-        // selection away and back must show an already-attached session
-        // immediately, not ask to reattach. See `AppState.attach(_:)`.
-        //
-        // The flavor comes from `attachedSessions` itself — decided once, at
-        // attach time — rather than from the live `app.useControlMode`
-        // toggle: this session may have been attached before the user last
-        // flipped "Native panes", and re-reading the toggle here would swap
-        // its view out from under its own running client, orphaning
-        // whichever pool entry the swap leaves behind.
+        // Read off `attachedSessions`, not view-local `@State`, so switching
+        // the sidebar selection away and back shows an already-attached
+        // session immediately — see `AppState.attach(_:)`.
         let controlMode = app.attachedSessions[session.id]
         Group {
             if let controlMode, controlMode, let tmux = ToolPath.find("tmux") {
@@ -581,15 +574,10 @@ private struct SessionDetail: View {
                     app.detach(session)
                     if let reason, !reason.isEmpty { app.hint = reason }
                 }
-                // Forces a remount, not just a prop update, when the session
-                // changes under an unchanged "attached" branch — now that
-                // attaching persists across selection changes (see
-                // `AppState.attachedSessions`), two different sessions can
-                // both be attached in control mode at once, and without this
-                // SwiftUI would reuse this view's @State (its `client`, in
-                // particular) across the swap instead of remounting it for
-                // the new session. `SessionTerminal` needs the same `.id` for
-                // the same reason and already has it.
+                // Two sessions can both be attached in control mode at once
+                // now, so this forces a remount rather than reusing this
+                // view's @State across the swap — `SessionTerminal` needs the
+                // same `.id` for the same reason.
                 .id(session.id)
             } else if controlMode != nil {
                 SessionTerminal(session: session, onDetach: { app.detach(session) })
@@ -599,11 +587,6 @@ private struct SessionDetail: View {
         }
         .navigationTitle(session.name)
         .navigationSubtitle(state.label)
-        // Keyed on the session, not on whether it's attached: two different
-        // sessions can now both already be attached (see above), so
-        // `controlMode` alone would not change across a switch between them
-        // and this would never fire — leaving the inspector open over a
-        // session that never asked for it.
         .onChange(of: session.id) { _, _ in showInfo = false }
         .inspector(isPresented: $showInfo) {
             SessionInfo(session: session, onAttach: nil)
