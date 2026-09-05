@@ -17,7 +17,7 @@ struct SettingsSheet: View {
     /// only surface that opens it.
     @State private var editingProject: ProjectTarget?
 
-    enum Tab: Hashable { case projects, preferences }
+    enum Tab: Hashable { case projects, preferences, terminal }
 
     /// nil `name` is "add"; a name is "edit that one". A wrapper because
     /// `.sheet(item:)` wants something `Identifiable` and `String?` isn't.
@@ -31,24 +31,26 @@ struct SettingsSheet: View {
             Picker("", selection: $tab) {
                 Text("Projects").tag(Tab.projects)
                 Text("Preferences").tag(Tab.preferences)
+                Text("Terminal").tag(Tab.terminal)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            if app.config == nil {
-                // Every control on both tabs writes to the core. Rendering them
-                // against a config we never got would show defaults that are
-                // not the user's and write them back on the first click.
+            // Terminal is client-local (UserDefaults, not the core's
+            // config.toml) and renders with no core connection at all; the
+            // other two tabs write to the core and need one.
+            if tab == .terminal {
+                TerminalPreferencesPane()
+            } else if app.config == nil {
                 ContentUnavailableView {
                     Label("Not connected", systemImage: "bolt.horizontal.circle")
                 } description: {
                     Text("Settings and projects come from the core — start `moomux serve`.")
                 }
+            } else if tab == .projects {
+                ProjectsPane(editing: $editingProject)
             } else {
-                switch tab {
-                case .projects: ProjectsPane(editing: $editingProject)
-                case .preferences: PreferencesPane()
-                }
+                PreferencesPane()
             }
 
             // Inline, not an alert. `RootView`'s "Couldn't do that" alert is
@@ -361,6 +363,58 @@ private struct PreferencesPane: View {
         .formStyle(.grouped)
         Text("The last two are the terminal UI's own palette — this app follows the system "
              + "appearance and is unaffected by either.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Terminal
+
+/// The terminal panes' font — client-local (`AppState.terminalFont*`, backed
+/// by `UserDefaults`), not part of the core's shared config. Applies live:
+/// `TerminalPane` reads `app.terminalFont` in `updateNSView`, so a change here
+/// reaches an already-open pane the next time SwiftUI re-renders it rather
+/// than only on the next attach.
+private struct TerminalPreferencesPane: View {
+    @Environment(AppState.self) private var app
+
+    /// The stored family, plus itself even if it isn't installed — a font
+    /// this machine doesn't have would otherwise vanish from the picker and
+    /// silently switch to whatever sorts first.
+    private var fontChoices: [String] {
+        let installed = AppState.installedMonospaceFonts
+        return installed.contains(app.terminalFontName) ? installed : installed + [app.terminalFontName]
+    }
+
+    var body: some View {
+        Form {
+            Picker("Font", selection: Binding(
+                get: { app.terminalFontName },
+                set: { app.terminalFontName = $0 })) {
+                ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
+            }
+            Stepper(value: Binding(
+                get: { app.terminalFontSize },
+                set: { app.terminalFontSize = $0 }), in: 8...24, step: 1) {
+                Text("Size: \(Int(app.terminalFontSize))pt")
+            }
+            Picker("Theme", selection: Binding(
+                get: { app.terminalTheme },
+                set: { app.terminalThemeName = $0.rawValue })) {
+                ForEach(TerminalColorTheme.allCases) { Text($0.displayName).tag($0) }
+            }
+            Text("AaBbCc 0123456789  \u{e0b0} \u{f489} \u{f015}")
+                .font(.custom(app.terminalFontName, size: app.terminalFontSize))
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(nsColor: app.terminalTheme.background))
+                .foregroundStyle(Color(nsColor: app.terminalTheme.foreground))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .formStyle(.grouped)
+        Text("Only Nerd Fonts carry the icons prompts and statuslines use — Font Book's own "
+             + "monospace fonts won't show them.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

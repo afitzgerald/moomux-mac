@@ -61,6 +61,47 @@ public final class AppState {
     public private(set) var focusSearchToken = 0
 
     public func focusSearch() { focusSearchToken += 1 }
+    /// The terminal panes' font, client-local — SwiftTerm's rendering choice,
+    /// not a project setting. Defaults to a Nerd Font so powerline/devicon
+    /// glyphs in prompts and statuslines render as icons rather than tofu,
+    /// but falls back to the system monospace font if that family isn't
+    /// installed.
+    public var terminalFontName = UserDefaults.standard.string(forKey: "terminalFontName")
+        ?? "Hack Nerd Font Mono" {
+        didSet { UserDefaults.standard.set(terminalFontName, forKey: "terminalFontName") }
+    }
+    public var terminalFontSize = UserDefaults.standard.object(forKey: "terminalFontSize") as? Double ?? 12 {
+        didSet { UserDefaults.standard.set(terminalFontSize, forKey: "terminalFontSize") }
+    }
+    public var terminalFont: NSFont {
+        NSFont(name: terminalFontName, size: terminalFontSize)
+            ?? .monospacedSystemFont(ofSize: terminalFontSize, weight: .regular)
+    }
+    /// The terminal panes' background/foreground/ANSI-palette theme. Client-local
+    /// for the same reason as the font.
+    public var terminalThemeName = UserDefaults.standard.string(forKey: "terminalThemeName")
+        ?? TerminalColorTheme.vibrant.rawValue {
+        didSet { UserDefaults.standard.set(terminalThemeName, forKey: "terminalThemeName") }
+    }
+    public var terminalTheme: TerminalColorTheme {
+        TerminalColorTheme(rawValue: terminalThemeName) ?? .vibrant
+    }
+    /// Installed monospace font families, for the settings picker. Family
+    /// names, not PostScript names — `terminalFont` resolves a stored family
+    /// name via `NSFont(name:)`, so a family only qualifies here if *that*
+    /// lookup (not just some member's PostScript name) actually succeeds —
+    /// "SF Mono" is a real installed font that fails exactly this check.
+    public static var installedMonospaceFonts: [String] {
+        let fm = NSFontManager.shared
+        return fm.availableFontFamilies.filter { family in
+            guard NSFont(name: family, size: 12) != nil,
+                  let members = fm.availableMembers(ofFontFamily: family) else { return false }
+            return members.contains { member in
+                guard let psName = member[0] as? String else { return false }
+                return NSFont(name: psName, size: 12)?.isFixedPitch == true
+            }
+        }.sorted()
+    }
     /// Replace the detail column with a read-only snapshot of every live
     /// session. Snapshots and not clients: an attached client sizes the shared
     /// tmux window for everyone, so a grid of six would letterbox six real
