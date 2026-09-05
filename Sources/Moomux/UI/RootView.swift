@@ -197,8 +197,13 @@ private struct NewSessionSheet: View {
                 }
                 TextField("Name", text: $form.name)
                     .help("Names the branch, the worktree and the tmux session")
-                TextField("First prompt", text: $form.prompt, axis: .vertical)
-                    .lineLimit(3...6)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("First prompt")
+                    TextEditor(text: $form.prompt)
+                        .font(.body)
+                        .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 160)
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
+                }
                 Toggle("Send it (press Enter)", isOn: $form.autoSubmit)
                     .help("Off leaves the prompt typed but unsent, so you can look before it runs")
 
