@@ -14,7 +14,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 out="${1:-/tmp/moomux-macos.png}"
 
-pgrep -x Moomux >/dev/null || { echo "Moomux is not running — try 'make dev'"; exit 1; }
+# This worktree's own build, not any Moomux: the installed app and other
+# worktrees' builds run alongside it, and matching one of those would photograph
+# the wrong window while a dev build that died on launch looked healthy — the
+# silent-crash-on-launch trap CLAUDE.md warns about. `[M]` keeps the pattern from
+# matching this script's own command line.
+pgrep -f "$PWD/.build/Moomux.app/Contents/MacOS/[M]oomux" >/dev/null \
+  || { echo "no Moomux running from $PWD/.build — try 'make dev'"; exit 1; }
 
 frame="$(swift Scripts/ui.swift frame)"
 [ -n "$frame" ] || { echo "could not read the window frame"; exit 1; }
