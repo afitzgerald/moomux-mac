@@ -73,6 +73,7 @@ app: build
 	cp Resources/Info.plist $(APP)/Contents/Info.plist
 	cp Resources/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	cp Resources/PeekabooPlate.png $(APP)/Contents/Resources/PeekabooPlate.png
+	cp Resources/icons/moomux-terminal-nose.svg $(APP)/Contents/Resources/moomux-terminal-nose.svg
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP)
 

@@ -388,12 +388,47 @@ private struct TextFieldSheet: View {
     }
 }
 
-private struct NoSessionSelectedView: View {
+/// The empty-state artwork alone, with no caption — also stood in while a
+/// selected session is deciding whether to auto-attach, where "No session
+/// selected" would be wrong.
+private struct PlateImage: View {
     var body: some View {
         if let url = Bundle.main.url(forResource: "PeekabooPlate", withExtension: "png"),
            let image = NSImage(contentsOf: url) {
+            Image(nsImage: image).resizable().scaledToFit().frame(width: 220, height: 220)
+        }
+    }
+}
+
+/// The plain cow-terminal mark, spinning, for the moment between selecting a
+/// session and knowing whether it auto-attaches. `NSImage(contentsOf:)` loads
+/// SVG directly (measured on this toolchain) — no PNG export step.
+private struct AttachingSpinner: View {
+    @State private var rotating = false
+
+    var body: some View {
+        ZStack {
+            if let url = Bundle.main.url(forResource: "moomux-terminal-nose", withExtension: "svg"),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable().scaledToFit().frame(width: 96, height: 96)
+                    .rotationEffect(.degrees(rotating ? 360 : 0))
+                    .animation(.linear(duration: 1.1).repeatForever(autoreverses: false),
+                               value: rotating)
+                    .onAppear { rotating = true }
+            } else {
+                PlateImage()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct NoSessionSelectedView: View {
+    var body: some View {
+        if Bundle.main.url(forResource: "PeekabooPlate", withExtension: "png") != nil {
             VStack(spacing: 20) {
-                Image(nsImage: image).resizable().scaledToFit().frame(width: 220, height: 220)
+                PlateImage()
                 Text("No session selected").font(.title2).bold().foregroundStyle(.secondary)
                 Spacer().frame(height: 40)
             }
@@ -576,6 +611,12 @@ private struct SessionDetail: View {
     let session: Session
 
     @State private var showInfo = false
+    // Deciding whether to auto-attach takes a round trip (`loadStatus`), and
+    // the landing page (`SessionInfo`) flashing up for that moment reads as
+    // the old behavior coming back. Show just the empty-state artwork
+    // instead — the same thing an unselected pane shows — until the decision
+    // is made one way or the other.
+    @State private var checkingAttach = true
 
     var body: some View {
         let state = app.state(for: session)
@@ -586,13 +627,15 @@ private struct SessionDetail: View {
         Group {
             if attached {
                 SessionTerminal(session: session, onDetach: { app.detach(session) })
+            } else if checkingAttach {
+                AttachingSpinner()
             } else {
                 SessionInfo(session: session, onAttach: { app.attach(session) })
             }
         }
         .navigationTitle(session.name)
         .navigationSubtitle(state.label)
-        .onChange(of: session.id) { _, _ in showInfo = false }
+        .onChange(of: session.id) { _, _ in showInfo = false; checkingAttach = true }
         .inspector(isPresented: $showInfo) {
             SessionInfo(session: session, onAttach: nil)
                 .inspectorColumnWidth(min: 280, ideal: 340, max: 520)
@@ -618,7 +661,18 @@ private struct SessionDetail: View {
                 }
             }
         }
-        .task(id: session.id) { await app.loadStatus(for: session.id) }
+        // Attach is the point of selecting a session — the landing page with a
+        // manual Attach button only matters when there's nothing to attach to
+        // (no live tmux, or no tmux binary), and `SessionInfo` still covers
+        // that case. `attach` no-ops if already attached, so re-running this
+        // on `session.id` changes (not on detach) is safe.
+        .task(id: session.id) {
+            await app.loadStatus(for: session.id)
+            if app.isAlive(session) && ToolPath.find("tmux") != nil {
+                app.attach(session)
+            }
+            checkingAttach = false
+        }
     }
 }
 
