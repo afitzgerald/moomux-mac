@@ -68,6 +68,7 @@ struct TerminalPane: NSViewRepresentable {
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         let view = AttachedTerminalView(frame: .init(x: 0, y: 0, width: 640, height: 400))
+        view.installVibrantTheme()
         view.registerForDraggedTypes([.fileURL])
         view.processDelegate = context.coordinator
         // `-u` forces UTF-8: the client's environment here is SwiftTerm's
@@ -103,6 +104,18 @@ struct TerminalPane: NSViewRepresentable {
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    }
+}
+
+/// A fixed dark theme with vivid ANSI colors, independent of system appearance.
+/// `nativeBackgroundColor` defaults to `NSColor.textBackgroundColor`, which is
+/// white in light mode — that's why panes never looked like this before.
+extension TerminalView {
+    func installVibrantTheme() {
+        nativeBackgroundColor = NSColor(red: 0.102, green: 0.106, blue: 0.149, alpha: 1)
+        nativeForegroundColor = NSColor(red: 0.753, green: 0.792, blue: 0.957, alpha: 1)
+        caretColor = NSColor(red: 0.753, green: 0.792, blue: 0.957, alpha: 1)
+        terminal.installPalette(colors: SwiftTerm.Color.vgaColors)
     }
 }
 
