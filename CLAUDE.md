@@ -449,7 +449,10 @@ Decisions, not oversights. Don't "fix" these without being asked.
   goes through the `NSScroller`.
 - **No mouse reporting or drag-to-resize panes in control mode.** Clicking selects a pane; that is
   all. Resizing goes through tmux's own keys.
-- **No terminal settings** — font, size, colours and cursor are all SwiftTerm's defaults.
+- **No terminal font/size settings** — those are SwiftTerm's defaults. Colors are not: every
+  `TerminalView` gets `installVibrantTheme()` (`TerminalPane.swift`) — a fixed dark background,
+  bright foreground and vga ANSI palette, independent of system light/dark mode. No user-facing
+  customization of it; add that if it's ever asked for.
 - **The sidebar's ⌃⌘S is ours, not SwiftUI's.** `NavigationSplitView` ships a toolbar button and
   **no** View-menu item, and on macOS a shortcut needs a menu item — so ⌃⌘S, which every other Mac
   app spells this way, did nothing at all here. Measured before and after. The fix is a

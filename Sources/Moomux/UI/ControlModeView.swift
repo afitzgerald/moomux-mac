@@ -149,6 +149,7 @@ private struct PaneView: NSViewRepresentable {
             frame: .init(x: 0, y: 0, width: 400, height: 300),
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
             options: TerminalOptions(scrollback: TmuxControlClient.historyLines))
+        view.installVibrantTheme()
         view.onFocused = { [weak client] in client?.selectPane(paneID) }
         view.terminalDelegate = context.coordinator
         view.registerForDraggedTypes([.fileURL])
