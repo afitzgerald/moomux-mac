@@ -6,9 +6,7 @@ and not a rewrite. This file is for working on it; the Go side's `AGENTS.md` sti
 everything outside `macos/`.
 
 Today it lists sessions, streams their live agent state, shows detail, banners and dock-badges the
-ones that start waiting on you, attaches a session's tmux inside the app — by default over tmux
-**control mode**, with each pane in its own native view and the session's windows as tabs, and
-optionally as one plain `tmux attach`
+ones that start waiting on you, attaches a session's tmux inside the app as one plain `tmux attach`
 — shows every live session at once as read-only snapshots, hands a session to the user's terminal,
 opens its diff for review in a tmux window of its own, and
 creates, renames, retags, re-agents, archives, reorders, kills and deletes them. Creating one asks
@@ -239,9 +237,6 @@ Core/UnixSocket.swift    AF_UNIX plumbing; blocking, closed to cancel
 Core/Models.swift        the wire types + JSON coding + Wire.demo()
 Core/MoomuxClient.swift  the Swift half of internal/ipc
 Core/ToolPath.swift      finding tmux without a shell's PATH
-Tmux/ControlProtocol.swift  the `tmux -CC` line protocol, pure
-Tmux/TmuxLayout.swift    the layout string -> pane rectangles, pure
-Tmux/ControlClient.swift the control-mode transport: forkpty, commands, events
 App/Forms.swift          the two multi-field forms' state and defaulting rules, pure
 App/AppState.swift       the single root store, poll loop, watch loop
 App/Notifier.swift       the only file allowed to touch UNUserNotificationCenter
@@ -249,16 +244,14 @@ App/MoomuxApp.swift      scenes: main window + MenuBarExtra
 App/SelfTest.swift       --selftest
 UI/RootView.swift        split view, rows, detail, inspector, menu-bar content
 UI/TerminalPane.swift    SwiftTerm hosting a plain `tmux attach`
-UI/ControlModeView.swift native panes over control mode
 UI/SettingsView.swift    project CRUD and the shared config flags, on two tabs
 UI/SessionGrid.swift     every live session at once, as capture-pane snapshots
 ```
 
-Both `Tmux/` parsers are pure and checked by `demo()` against output captured from a real
-`tmux -CC attach` — paste new captures in rather than inventing plausible-looking lines.
-
-SwiftTerm is reached **only** through `UI/TerminalPane.swift`, so swapping it for libghostty later
-is one file — which is the arrangement the plan doc assumes.
+SwiftTerm is reached **only** through `UI/TerminalPane.swift` for the live attached session, so
+swapping it for libghostty later is mostly one file — which is the arrangement the plan doc assumes.
+`UI/SessionGrid.swift` also draws directly into a `TerminalView`, as a read-only renderer for
+`capture-pane` snapshots.
 
 `internal/ipc/client.go` is the reference implementation of `MoomuxClient`. Keep the two honest
 against each other — anything the Swift side cannot do over the socket is a hole in the boundary
@@ -319,31 +312,13 @@ to fix in Go, not a reason to link the core.
 - **Every tmux client on a session shares one window size.** While the app is attached, the user's
   iTerm and phone are letterboxed down to the app's dimensions, and it only springs back on detach —
   not when the bigger client is used again. Grouped sessions (`new-session -t`) do **not** fix this;
-  a group shares the windows themselves. Control mode does not fix it either: a `-CC` client sets
-  its size with `refresh-client -C` and the window follows exactly the same way. All three measured.
-  This is why attaching is an explicit action and not a consequence of selecting a row.
-- **A control-mode client does not take its size from the pty.** `list-clients` reports it as `80x`
-  no matter what winsize the forkpty was given; `refresh-client -C WxH` is the only lever, and until
-  it lands the panes are laid out against the wrong grid.
-- **tmux emits one unsolicited `%begin`/`%end` block right after attaching**, before
-  `%session-changed`. Command replies are matched to commands by order, so that block has to be
-  dropped — which it is, by not sending anything until `%session-changed` arrives and ignoring a
-  reply that nothing is waiting for.
-- **A new `NSView` has a zero frame, and a terminal soft-resets when it is later given a real
-  grid.** Anything painted before that is wiped. A pane producing output repaints itself and hides
-  the bug; an idle shell pane just stays black, which is how it was found. Paint on the first
-  `sizeChanged`, never at registration.
-- **`getOptimalFrameSize()` reports the terminal's *current* cols, which lag a resize**, so
-  deriving a cell size from it inside `sizeChanged` is short by a column's worth. The container
-  divided by tmux's own grid is the self-consistent measure, and its rounding error can only make a
-  pane a hair *wide*, which is harmless.
+  a group shares the windows themselves. All measured. This is why attaching is an explicit action
+  and not a consequence of selecting a row.
 - **Every SwiftTerm view silently reserves ~17pt of its width for a scroller.** In 1.20.0
   `reservedScrollerWidth` is `scroller?.isHidden == true ? 0 : scrollerWidth` — it ignores
-  `scrollerStyle`, and nothing in the library ever hides the scroller. `getEffectiveWidth` takes it
-  off before dividing by the cell width, so it is noise in a wide ruler (156 columns either way)
-  and a **whole column** in a half-width pane. That is what "lines wrap when they shouldn't" looks
-  like. `NoScrollerTerminalView` hides it; every terminal view here must inherit from it, or the
-  ruler and the panes disagree about how many cells fit.
+  `scrollerStyle`, and nothing in the library ever hides the scroller. That is noise in a wide
+  ruler and a whole column in the session-grid's small tiles. `NoScrollerTerminalView`
+  (`SessionGrid.swift`) hides it for that view.
 - **Read the dependency's source from `.build/checkouts/`, not a fresh clone.** The scroller bug
   above cost an extra round because the property was read from SwiftTerm's `main`, where it *does*
   check `scrollerStyle` and setting `.overlay` would have been enough. The pinned version behaves
@@ -352,20 +327,13 @@ to fix in Go, not a reason to link the core.
 - **SwiftTerm marks most overrides `public`, not `open`** — `keyDown` cannot be overridden from
   this module, `mouseDown` and `viewDidMoveToWindow` can.
 - **`capture-pane -p` returns screen rows, not logical lines** — already wrapped to the pane's
-  width. `-J` is the flag that joins them back into logical lines, and the repaint does not pass it.
-  Measured on tmux 3.7c in a 40-column pane: a 50-character line comes back as a 40-char row plus a
-  10-char row plain, and as one 50-char line under `-J`. So a wrap in a repainted pane is usually
-  tmux's own rather than a layout bug — count the characters against the pane width before believing
-  it is ours. (An hour went into talking myself out of a wrap that was fine.)
-  It also returns the pane's **full height**, blank rows below the cursor included — never trimmed —
-  which is what makes `paintSequence`'s "H history lines + R screen rows into an R-row terminal"
-  arithmetic exact.
-- **Copy-mode is invisible to a control-mode client.** Entering it and scrolling emits
-  `%pane-mode-changed` and `%window-renamed` and **zero** `%output` bytes: tmux renders copy-mode
-  client-side for a normal client and sends a `-CC` client nothing to draw. Measured against a
-  scratch session (`#{pane_in_mode}` was 1 throughout, so tmux really was in the mode). That is why
-  scrollback is a `capture-pane` problem and not a scroll-gesture-proxying one — proxying would
-  still need the capture, plus a mode to get stuck in and the user's own copy-mode fighting ours.
+  width. `-J` is the flag that joins them back into logical lines. Measured on tmux 3.7c in a
+  40-column pane: a 50-character line comes back as a 40-char row plus a 10-char row plain, and as
+  one 50-char line under `-J`. So a wrap in captured output is usually tmux's own rather than a bug
+  in whatever reads it — count the characters against the pane width before believing it is ours.
+  (An hour went into talking myself out of a wrap that was fine.) It also returns the pane's **full
+  height**, blank rows below the cursor included — never trimmed — which is what `TmuxSnapshot.screen`
+  has to drop before feeding a tile.
 - **SwiftTerm marks its overrides `public`, not `open`.** `keyDown` and friends cannot be overridden
   from this module — the compiler says "overriding non-open instance method outside of its defining
   module". `viewDidMoveToWindow` is fine because it comes from `NSView`.
@@ -391,16 +359,6 @@ to fix in Go, not a reason to link the core.
   does a bundle sitting under `/tmp` — no prompt, same error, both measured. `.build/Moomux.app`
   opened by `make dev` is fine, and so is `~/Applications`. That error is very easy to misread as
   "ad-hoc signing doesn't work" (it isn't — see the signing bullet below).
-- **Clicking a window tab moves the session, not just our view.** `select-window` sets the
-  *session's* current window, and every client attached to it follows — the user's iTerm and phone
-  jump to whatever tab was clicked here. Same class as the shared-size trap above and just as
-  unfixable client-side: a control-mode client has no private notion of "which window I am looking
-  at". It is the price of the tab bar, not a bug in it.
-- **`%window-renamed` fires far more often than a window is renamed.** With tmux's automatic-rename
-  on (the default), it arrives every time a window's foreground command changes — once per shell
-  command. So the handler patches the name in the `windows` array in place, guarded on the name
-  actually differing, rather than re-running `list-windows`: unguarded it is a round trip and a full
-  view re-render per command typed in any window of the session.
 - **The Dock badge is not free of authorization.** `NSDockTile.badgeLabel` looks like a plain
   property and reads like the fallback for when notifications are denied, but macOS silently drops
   it unless the app holds the **badge** permission — System Settings → Notifications has to say
@@ -432,37 +390,8 @@ to fix in Go, not a reason to link the core.
 
 Decisions, not oversights. Don't "fix" these without being asked.
 
-- **tmux's prefix key does not work in control mode, and cannot.** Keystrokes reach a pane through
-  `send-keys -t %id`, which writes straight to that pane's pty, so tmux never sees `C-b` and every
-  prefix binding is dead — `C-b o` types a literal `o`. Verified. iTerm2's tmux integration has the
-  same property. The replacement is the **Pane menu** (⌘] / ⌘[ / ⌘D / ⌘⇧D / ⌘⇧↵), which issues
-  `select-pane`, `split-window` and `resize-pane -Z` as commands. Anything else tmux can do is a
-  one-line method on `TmuxControlClient` away; the plain attach is the fallback for muscle memory.
-- **Control mode is the default; the plain attach is the escape hatch.** The "Native panes" toggle
-  switches between them and is not persisted between runs. Keep the plain path working — it is one
-  `if` in `SessionDetail`, it costs nothing, and it is the fallback for anything control mode
-  renders badly.
-- **The window tab bar switches windows and nothing else.** No new/close/rename affordance and no
-  ⌘1–⌘9: tmux windows in a moomux session are made by the user's own workflow, and the bar exists to
-  see and reach them. It is hidden entirely at one window, and it does not scroll or overflow — a
-  segmented picker squeezes, and a session with enough windows to need scrolling is not a session
-  this app is the right front end for. Pane views are also not cached per window: leaving a window
-  dismantles its `PaneView`s and returning repaints them from `capture-pane`, which is the same
-  first-paint path an attach uses and costs one round trip.
-- **Scrollback is restored once, on a pane's first paint, and never refreshed.** `capture-pane -S
-  -1000` feeds history plus the visible screen into SwiftTerm's own scroll buffer; later repaints
-  (every `sizeChanged`, i.e. every frame of a window drag) are visible-only, because re-streaming
-  ~110KB per pane per frame is the cost and tmux's rewrapped history would have to be diffed
-  against ours anyway. So after a resize the restored history keeps its **pre-resize wrapping**.
-  There is no lazy paging past 1000 lines — the pane is a monitor, not an archive, and both the
-  plain attach and the user's own terminal have full copy-mode. A pane on the alternate screen
-  (vim, less) gets no history, because neither tmux nor SwiftTerm keeps any for it.
-- **No visible scrollbar in control-mode panes**, and there cannot be one: `NoScrollerTerminalView`
-  has to keep the scroller hidden for the column-width reason above. Wheel and trackpad scrolling
-  are unaffected — `MacTerminalView.scrollWheel` calls `scrollUp`/`scrollDown` directly and never
-  goes through the `NSScroller`.
-- **No mouse reporting or drag-to-resize panes in control mode.** Clicking selects a pane; that is
-  all. Resizing goes through tmux's own keys.
+- **No visible scrollbar in the session-grid tiles**, and there cannot be one:
+  `NoScrollerTerminalView` has to keep the scroller hidden for the column-width reason above.
 - **No terminal font/size settings** — those are SwiftTerm's defaults. Colors are not: every
   `TerminalView` gets `installVibrantTheme()` (`TerminalPane.swift`) — a fixed dark background,
   bright foreground and vga ANSI palette, independent of system light/dark mode. No user-facing
@@ -581,7 +510,8 @@ Decisions, not oversights. Don't "fix" these without being asked.
   `App.Diff`, a `Patch` field on `ipc.Result`, a `Server` hook, a `main.go` line and a two-pane
   SwiftUI sheet — to end up a *worse* pager than the shell pane this app already renders natively,
   with no colour config, no word diff and no `delta`. Going through tmux costs one `Process` call,
-  and the tab bar is what makes it readable. The tradeoffs it keeps: no diff without a live tmux
+  and tmux's own window switching (the prefix key works fine over a plain attach) is what makes it
+  reachable. The tradeoffs it keeps: no diff without a live tmux
   session (`canReview`), the base branch comes from the *project*, not the session, so a session
   created with an explicit `-base` diffs against the project default, and untracked files show as a
   `git status` listing rather than as patches — `git add -N` would get them into the diff and is not
@@ -590,8 +520,8 @@ Decisions, not oversights. Don't "fix" these without being asked.
   column for a tile per live session, each one a `tmux capture-pane` fed into a read-only
   `NoScrollerTerminalView` every five seconds. A grid of *attached* clients — the obvious reading of
   "several sessions at once" — would be **destructive**: every tmux client on a session sets the
-  shared window size (see the bullet above; measured for plain attach, `-CC` and grouped sessions
-  alike), so six live tiles would letterbox six real sessions someone else is working in until the
+  shared window size (see the bullet above; measured for plain attach and grouped sessions alike),
+  so six live tiles would letterbox six real sessions someone else is working in until the
   grid closed. `capture-pane` attaches nothing. What that costs is one short-lived tmux process per
   visible tile per tick, which is why the interval is 5s rather than the store's 2s and why the task
   belongs to the tile, so closing the grid stops it; the upgrade if it ever bites is one invocation

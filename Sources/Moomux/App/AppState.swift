@@ -61,21 +61,6 @@ public final class AppState {
     public private(set) var focusSearchToken = 0
 
     public func focusSearch() { focusSearchToken += 1 }
-    /// Attach with tmux control mode (native panes) rather than a plain
-    /// `tmux attach`. Off by default: plain attach keeps tmux's own prefix
-    /// keys, resize, copy-mode and scrollback, which control mode cannot
-    /// offer (see the control-mode caveats in CLAUDE.md) — a real cost for
-    /// anyone who already knows tmux, against click-to-select and a GUI pane
-    /// menu that mostly help someone who doesn't.
-    ///
-    /// Control mode stays reachable by turning this on — it is the native
-    /// per-pane path for anything the plain attach renders badly, and the
-    /// two are one `if` apart in `SessionDetail`. Persisted in `UserDefaults`
-    /// (client-local, not the core's `config.toml` — this is a front-end
-    /// rendering choice, not a project setting).
-    public var useControlMode = UserDefaults.standard.object(forKey: "useControlMode") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(useControlMode, forKey: "useControlMode") }
-    }
     /// Replace the detail column with a read-only snapshot of every live
     /// session. Snapshots and not clients: an attached client sizes the shared
     /// tmux window for everyone, so a grid of six would letterbox six real
@@ -157,19 +142,11 @@ public final class AppState {
         public var id: String { name }
     }
     public var pendingProjectInit: PendingProject?
-    /// The live control-mode client, while one is attached. Menu commands need
-    /// to reach it, and the menu is the only way to drive tmux's pane
-    /// navigation — the prefix key cannot reach tmux in control mode. Weak so
-    /// a detach that forgets to clear this cannot keep a tmux client alive.
-    public weak var controlClient: TmuxControlClient?
 
-    /// Attached sessions and which flavor (control mode or plain) each used,
-    /// pinned at `attach(_:)` time rather than read live off `useControlMode`
-    /// so flipping that toggle elsewhere can't swap a running session's view
-    /// out from under its own client. Persisted here rather than as view-local
-    /// `@State` so switching the sidebar selection away and back shows the
-    /// terminal again immediately — see `attach(_:)`/`detach(_:)`.
-    public private(set) var attachedSessions: [Session.ID: Bool] = [:]
+    /// Sessions the app has attached to, pinned at `attach(_:)` time rather
+    /// than view-local `@State` so switching the sidebar selection away and
+    /// back shows the terminal again immediately — see `attach(_:)`/`detach(_:)`.
+    public private(set) var attachedSessions: Set<Session.ID> = []
 
     /// The actual tmux clients kept running in the background for attached
     /// sessions that aren't the one on screen, so switching back to one is
@@ -179,7 +156,6 @@ public final class AppState {
     /// has nobody to tell.
     @ObservationIgnored var plainPanes: [Session.ID: LocalProcessTerminalView] = [:]
     @ObservationIgnored var plainDelegates: [Session.ID: TerminalPane.Coordinator] = [:]
-    @ObservationIgnored var controlClients: [Session.ID: TmuxControlClient] = [:]
 
     public let client: MoomuxClient
 
@@ -384,7 +360,7 @@ public final class AppState {
             // A session can disappear without going through this app's own
             // kill/delete (the TUI, another front end, the CLI), which would
             // otherwise leak its pooled tmux client forever.
-            for id in attachedSessions.keys where !live.contains(id) { detach(id: id) }
+            for id in attachedSessions where !live.contains(id) { detach(id: id) }
             updateDockBadge()  // needsInputCount filters visibleSessions
         } catch {
             // Deliberately leaves the last-good lists in place. A failed call
@@ -748,10 +724,9 @@ public final class AppState {
     /// "Deliberately not done" note for why there is no patch viewer here.
     ///
     /// Not through `mutate`: this never touches the socket. `tmux new-window`
-    /// from a second client is also the one path that works whether or not the
-    /// app is attached, so there is no branch on `controlClient`. Attached, the
-    /// window arrives as a tab; detached, it is waiting in the user's own
-    /// terminal, which is what the hint says.
+    /// from a second client also works whether or not the app is attached —
+    /// attached, the window switch shows up in the terminal pane; detached,
+    /// the hint set below is the only signal.
     public func review(_ session: Session) {
         guard let tmux = ToolPath.find("tmux") else {
             actionError = "Review failed: can't find a tmux binary."
@@ -928,20 +903,16 @@ public final class AppState {
     /// other client on that session, so auto-attaching would silently squash
     /// the user's iTerm and phone windows as they browsed the list. See
     /// `TerminalPane` for why this is inherent to a plain attach.
-    public func attach(_ session: Session) { attachedSessions[session.id] = useControlMode }
+    public func attach(_ session: Session) { attachedSessions.insert(session.id) }
 
     /// Unlike merely navigating away in the sidebar, this actually kills
     /// whatever tmux client was kept running for the session.
     public func detach(_ session: Session) { detach(id: session.id) }
 
     private func detach(id: Session.ID) {
-        attachedSessions.removeValue(forKey: id)
+        attachedSessions.remove(id)
         plainPanes.removeValue(forKey: id)?.terminate()
         plainDelegates.removeValue(forKey: id)
-        if let control = controlClients.removeValue(forKey: id) {
-            if controlClient === control { controlClient = nil }
-            control.stop()
-        }
     }
 
     public func killTmux(_ session: Session) {

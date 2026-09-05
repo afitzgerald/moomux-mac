@@ -582,19 +582,9 @@ private struct SessionDetail: View {
         // Read off `attachedSessions`, not view-local `@State`, so switching
         // the sidebar selection away and back shows an already-attached
         // session immediately — see `AppState.attach(_:)`.
-        let controlMode = app.attachedSessions[session.id]
+        let attached = app.attachedSessions.contains(session.id)
         Group {
-            if let controlMode, controlMode, let tmux = ToolPath.find("tmux") {
-                ControlModeView(session: session, tmuxPath: tmux) { reason in
-                    app.detach(session)
-                    if let reason, !reason.isEmpty { app.hint = reason }
-                }
-                // Two sessions can both be attached in control mode at once
-                // now, so this forces a remount rather than reusing this
-                // view's @State across the swap — `SessionTerminal` needs the
-                // same `.id` for the same reason.
-                .id(session.id)
-            } else if controlMode != nil {
+            if attached {
                 SessionTerminal(session: session, onDetach: { app.detach(session) })
             } else {
                 SessionInfo(session: session, onAttach: { app.attach(session) })
@@ -608,7 +598,7 @@ private struct SessionDetail: View {
                 .inspectorColumnWidth(min: 280, ideal: 340, max: 520)
         }
         .toolbar {
-            if controlMode != nil {
+            if attached {
                 ToolbarItem {
                     Button {
                         app.detach(session)
@@ -685,10 +675,6 @@ private struct SessionInfo: View {
                         .disabled(!app.canReview(session))
                         .help("Open this worktree's diff in a new tmux window (⌘G)")
                     }
-                    Toggle("Native panes", isOn: Binding(
-                        get: { app.useControlMode },
-                        set: { app.useControlMode = $0 }))
-                        .help("tmux control mode: each pane in its own native view. Turn off to attach the whole session as one terminal.")
                     if !app.isAlive(session) {
                         Text("No live tmux session — open it to start one.")
                             .foregroundStyle(.secondary)

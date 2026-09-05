@@ -29,7 +29,6 @@ struct MoomuxApp: App {
         }
         .defaultSize(width: 900, height: 620)
         .commands {
-            PaneCommands(app: app)
             SessionCommands(app: app)
         }
 
@@ -42,53 +41,6 @@ struct MoomuxApp: App {
             if app.needsInputCount > 0 { Text("\(app.needsInputCount)") }
         }
         .menuBarExtraStyle(.window)
-    }
-}
-
-/// Pane navigation as real menu commands.
-///
-/// Not a nicety: in control mode tmux's prefix key **cannot** reach tmux.
-/// Keystrokes go to a pane through `send-keys`, so tmux never sees `C-b` and
-/// every `prefix`-based binding is dead — `C-b o` types a literal `o`. These
-/// commands are the replacement, and they are also the only reason a menu
-/// exists. iTerm2's tmux integration made the same trade.
-///
-/// Shortcuts follow iTerm2's, since that is the other app people drive tmux
-/// panes with. Every one of them is a no-op with nothing attached, so every one
-/// is disabled there — individually, because `Commands` has no `.disabled` and
-/// applying one to a `CommandMenu` does not compile. Same shape as
-/// `SessionCommands` below.
-struct PaneCommands: Commands {
-    let app: AppState
-
-    @MainActor private var detached: Bool { app.controlClient == nil }
-
-    var body: some Commands {
-        CommandMenu("Pane") {
-            Button("Next Pane") { app.controlClient?.nextPane() }
-                .keyboardShortcut("]", modifiers: .command)
-                .disabled(detached)
-            Button("Previous Pane") { app.controlClient?.previousPane() }
-                .keyboardShortcut("[", modifiers: .command)
-                .disabled(detached)
-            Divider()
-            Button("Split Right") { app.controlClient?.splitRight() }
-                .keyboardShortcut("d", modifiers: .command)
-                .disabled(detached)
-            Button("Split Down") { app.controlClient?.splitDown() }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-                .disabled(detached)
-            Button("Zoom Pane") { app.controlClient?.toggleZoom() }
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled(detached)
-            Divider()
-            Button("Next Window") { app.controlClient?.nextWindow() }
-                .keyboardShortcut("]", modifiers: [.command, .shift])
-                .disabled(detached)
-            Button("Previous Window") { app.controlClient?.previousWindow() }
-                .keyboardShortcut("[", modifiers: [.command, .shift])
-                .disabled(detached)
-        }
     }
 }
 
