@@ -30,8 +30,10 @@ import SwiftUI
 struct TerminalPane: NSViewRepresentable {
 
     let executable: String
+    let sessionID: Session.ID
     /// The tmux session name to attach to, e.g. `moomux-macos-1a2b`.
     let tmuxSession: String
+    let pool: AppState
     /// Called when the tmux client exits — detached, or the session went away.
     var onExit: (Int32?) -> Void = { _ in }
 
@@ -66,28 +68,48 @@ struct TerminalPane: NSViewRepresentable {
         }
     }
 
+    /// Reuses a pooled view for this session if one is already running,
+    /// rather than starting a fresh `tmux attach` — see `AppState.plainPanes`.
+    /// Switching the sidebar selection away and back must not pay for a new
+    /// process and an empty screen when the old one is still alive.
+    ///
+    /// `processDelegate` is declared `weak` in SwiftTerm, so `context.coordinator`
+    /// — owned by SwiftUI only for as long as this representable stays
+    /// mounted — cannot be the delegate: it would deallocate the moment the
+    /// sidebar selection moves elsewhere, and a client that exits in the
+    /// background afterwards would have nobody to tell. `AppState.plainDelegates`
+    /// keeps one delegate alive per session for exactly as long as the pooled
+    /// process is, so a background exit still reaches `AppState.detach(_:)`.
     func makeNSView(context: Context) -> LocalProcessTerminalView {
+        if let existing = pool.plainPanes[sessionID] {
+            existing.processDelegate = pool.plainDelegates[sessionID]
+            return existing
+        }
         let view = AttachedTerminalView(frame: .init(x: 0, y: 0, width: 640, height: 400))
         view.registerForDraggedTypes([.fileURL])
-        view.processDelegate = context.coordinator
+        let delegate = context.coordinator
+        view.processDelegate = delegate
+        pool.plainDelegates[sessionID] = delegate
         // `-u` forces UTF-8: the client's environment here is SwiftTerm's
         // minimal one, so tmux cannot infer it from LANG the way a login shell
         // would. Without it, box drawing and any non-ASCII output corrupt.
         view.startProcess(executable: executable, args: ["-u", "attach", "-t", tmuxSession])
+        pool.plainPanes[sessionID] = view
         return view
     }
 
     func updateNSView(_ view: LocalProcessTerminalView, context: Context) {
-        context.coordinator.onExit = onExit
+        pool.plainDelegates[sessionID]?.onExit = onExit
     }
 
-    /// Terminating kills the *client*, which is what detaching is. The tmux
-    /// session, its panes and whatever the agent is doing all survive — that is
-    /// the entire reason this app attaches instead of owning a PTY itself.
-    static func dismantleNSView(_ view: LocalProcessTerminalView, coordinator: Coordinator) {
-        coordinator.onExit = { _ in } // the view is going away; nothing to tell
-        view.terminate()
-    }
+    /// Deliberately does **not** terminate the process, and does not touch
+    /// `onExit` either: the view going away here just means the sidebar
+    /// selection moved to another session, and both the pooled client in
+    /// `AppState.plainPanes` and its delegate in `AppState.plainDelegates` are
+    /// meant to keep working the whole time it is backgrounded.
+    /// `AppState.detach(_:)` is the only thing that actually tears either
+    /// down — a real detach, not a navigation away.
+    static func dismantleNSView(_ view: LocalProcessTerminalView, coordinator: Coordinator) {}
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         var onExit: (Int32?) -> Void
@@ -126,6 +148,7 @@ extension NSDraggingInfo {
 /// The terminal for one session. Only reached once the user has deliberately
 /// attached, so the "nothing to attach to" cases live on the button instead.
 struct SessionTerminal: View {
+    @Environment(AppState.self) private var app
     let session: Session
     /// The tmux client went away — the user pressed the prefix key and `d`, or
     /// the session ended under them.
@@ -133,13 +156,14 @@ struct SessionTerminal: View {
 
     var body: some View {
         if let tmux = ToolPath.find("tmux") {
-            TerminalPane(executable: tmux, tmuxSession: session.tmuxSession) { _ in
+            TerminalPane(executable: tmux, sessionID: session.id,
+                        tmuxSession: session.tmuxSession, pool: app) { _ in
                 // SwiftTerm reports termination off the main thread.
                 Task { @MainActor in onDetach() }
             }
-            // Rebuild — so detach and re-attach — if the session changes under
-            // us. Without this SwiftUI reuses the view and leaves you looking at
-            // the previous session's terminal.
+            // Identifies the view per session so SwiftUI does not confuse one
+            // session's representable for another's — the actual process
+            // reuse is `AppState.plainPanes`, keyed the same way.
             .id(session.id)
         } else {
             ContentUnavailableView {

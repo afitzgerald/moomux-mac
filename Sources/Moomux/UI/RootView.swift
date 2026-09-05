@@ -560,40 +560,60 @@ private struct SessionDetail: View {
     @Environment(AppState.self) private var app
     let session: Session
 
-    /// Attaching is deliberate, never a side effect of selecting a row: a tmux
-    /// client sizes the shared window down to its own dimensions for *every*
-    /// other client on that session, so auto-attaching would silently squash
-    /// the user's iTerm and phone windows as they browsed the list. See
-    /// `TerminalPane` for why this is inherent to a plain attach.
-    @State private var attached = false
     @State private var showInfo = false
 
     var body: some View {
         let state = app.state(for: session)
+        // Persisted on `app`, not local `@State`: switching the sidebar
+        // selection away and back must show an already-attached session
+        // immediately, not ask to reattach. See `AppState.attach(_:)`.
+        //
+        // The flavor comes from `attachedSessions` itself — decided once, at
+        // attach time — rather than from the live `app.useControlMode`
+        // toggle: this session may have been attached before the user last
+        // flipped "Native panes", and re-reading the toggle here would swap
+        // its view out from under its own running client, orphaning
+        // whichever pool entry the swap leaves behind.
+        let controlMode = app.attachedSessions[session.id]
         Group {
-            if attached, app.useControlMode, let tmux = ToolPath.find("tmux") {
+            if let controlMode, controlMode, let tmux = ToolPath.find("tmux") {
                 ControlModeView(session: session, tmuxPath: tmux) { reason in
-                    attached = false
+                    app.detach(session)
                     if let reason, !reason.isEmpty { app.hint = reason }
                 }
-            } else if attached {
-                SessionTerminal(session: session, onDetach: { attached = false })
+                // Forces a remount, not just a prop update, when the session
+                // changes under an unchanged "attached" branch — now that
+                // attaching persists across selection changes (see
+                // `AppState.attachedSessions`), two different sessions can
+                // both be attached in control mode at once, and without this
+                // SwiftUI would reuse this view's @State (its `client`, in
+                // particular) across the swap instead of remounting it for
+                // the new session. `SessionTerminal` needs the same `.id` for
+                // the same reason and already has it.
+                .id(session.id)
+            } else if controlMode != nil {
+                SessionTerminal(session: session, onDetach: { app.detach(session) })
             } else {
-                SessionInfo(session: session, onAttach: { attached = true })
+                SessionInfo(session: session, onAttach: { app.attach(session) })
             }
         }
         .navigationTitle(session.name)
         .navigationSubtitle(state.label)
-        .onChange(of: attached) { _, isAttached in if !isAttached { showInfo = false } }
+        // Keyed on the session, not on whether it's attached: two different
+        // sessions can now both already be attached (see above), so
+        // `controlMode` alone would not change across a switch between them
+        // and this would never fire — leaving the inspector open over a
+        // session that never asked for it.
+        .onChange(of: session.id) { _, _ in showInfo = false }
         .inspector(isPresented: $showInfo) {
             SessionInfo(session: session, onAttach: nil)
                 .inspectorColumnWidth(min: 280, ideal: 340, max: 520)
         }
         .toolbar {
-            if attached {
+            if controlMode != nil {
                 ToolbarItem {
                     Button {
-                        attached = false
+                        app.detach(session)
                     } label: {
                         Label("Detach", systemImage: "rectangle.portrait.and.arrow.right")
                     }
@@ -610,8 +630,6 @@ private struct SessionDetail: View {
                 }
             }
         }
-        // Selecting another session must not carry the attachment with it.
-        .onChange(of: session.id) { _, _ in attached = false }
         .task(id: session.id) { await app.loadStatus(for: session.id) }
     }
 }

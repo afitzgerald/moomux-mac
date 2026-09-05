@@ -44,9 +44,14 @@ struct ControlModeView: View {
             panesArea
         }
         .onDisappear {
-            client?.stop()
-            client = nil
-            app.controlClient = nil
+            // Deliberately does not stop the client: the view going away here
+            // just means the sidebar selection moved elsewhere, and the
+            // pooled client in `AppState.controlClients` is meant to keep
+            // running — tmux keeps feeding it layout/window updates in the
+            // background, so coming back shows the current state immediately
+            // instead of a fresh attach. Only clear the "currently visible"
+            // pointer the Pane menu drives, and only if it was ours.
+            if app.controlClient === client { app.controlClient = nil }
         }
     }
 
@@ -116,8 +121,34 @@ struct ControlModeView: View {
 
     private func attach(cols: Int, rows: Int) {
         guard client == nil else { return }
+        // Reuse a client already running in the background for this session
+        // rather than starting a fresh `tmux -CC attach` — see
+        // `AppState.controlClients`. Its layout/windows/active pane are
+        // current even after a while away: tmux keeps sending it events the
+        // whole time, attached or not.
+        if let existing = app.controlClients[session.id] {
+            wire(existing)
+            layout = existing.layout
+            activePane = existing.activePane
+            windows = existing.windows
+            client = existing
+            existing.setSize(cols: cols, rows: rows)
+            app.controlClient = existing
+            return
+        }
         let client = TmuxControlClient(tmuxPath: tmuxPath, session: session.tmuxSession,
                                        size: (cols, rows))
+        wire(client)
+        client.start()
+        self.client = client
+        app.controlClients[session.id] = client
+        app.controlClient = client
+    }
+
+    /// Points the client's callbacks at *this* view's state. Done for both a
+    /// freshly created client and one borrowed back from the pool, since the
+    /// previous view that owned these callbacks may no longer exist.
+    private func wire(_ client: TmuxControlClient) {
         client.onLayoutChange = { [weak client] in
             layout = client?.layout
             activePane = client?.activePane
@@ -129,9 +160,6 @@ struct ControlModeView: View {
                 onExit(reason)
             }
         }
-        client.start()
-        self.client = client
-        app.controlClient = client
     }
 }
 

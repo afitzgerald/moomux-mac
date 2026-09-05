@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftTerm
 
 /// One-way flow, no exceptions:
 ///
@@ -149,11 +150,38 @@ public final class AppState {
         public var id: String { name }
     }
     public var pendingProjectInit: PendingProject?
-    /// The live control-mode client, while one is attached. Menu commands need
-    /// to reach it, and the menu is the only way to drive tmux's pane
-    /// navigation — the prefix key cannot reach tmux in control mode. Weak so
-    /// a detach that forgets to clear this cannot keep a tmux client alive.
+    /// The control-mode client for whichever session is currently on screen.
+    /// Menu commands need to reach it, and the menu is the only way to drive
+    /// tmux's pane navigation — the prefix key cannot reach tmux in control
+    /// mode. Weak so a detach that forgets to clear this cannot keep a tmux
+    /// client alive.
     public weak var controlClient: TmuxControlClient?
+
+    /// Sessions currently shown attached in the detail pane, and which
+    /// attach flavor each was attached with (control mode or plain) —
+    /// recorded once, at `attach(_:)` time, rather than read live off
+    /// `useControlMode`: flipping the "Native panes" toggle must not swap a
+    /// live session's view out from under its own running client, orphaning
+    /// it in the pool. Persisted here, not as view-local `@State`, so
+    /// switching the sidebar selection away and back shows the terminal
+    /// again immediately instead of asking the user to re-attach — see
+    /// `attach(_:)` and `detach(_:)`.
+    public private(set) var attachedSessions: [Session.ID: Bool] = [:]
+
+    /// Live tmux clients kept running in the background for sessions that
+    /// are attached but not the one currently shown. Not part of derived UI
+    /// state: nothing renders from these directly, `ControlModeView` and
+    /// `TerminalPane` just borrow an existing entry instead of starting a
+    /// fresh forkpty (and, for control mode, re-streaming a thousand lines of
+    /// scrollback per pane) every time the sidebar selection moves away and
+    /// back. Keyed by session id; torn down only by `detach(_:)`.
+    @ObservationIgnored var plainPanes: [Session.ID: LocalProcessTerminalView] = [:]
+    /// `LocalProcessTerminalView.processDelegate` is `weak`, so something
+    /// else has to keep each session's delegate alive for as long as its
+    /// pooled process runs — otherwise a client that exits while backgrounded
+    /// has nobody to report to, and `detach(_:)` never runs for it.
+    @ObservationIgnored var plainDelegates: [Session.ID: TerminalPane.Coordinator] = [:]
+    @ObservationIgnored var controlClients: [Session.ID: TmuxControlClient] = [:]
 
     public let client: MoomuxClient
 
@@ -355,6 +383,12 @@ public final class AppState {
             // forever or answer for a recreated id.
             let live = Set(snapshot.sessions.map(\.id))
             statuses = statuses.filter { live.contains($0.key) }
+            // A session can disappear without ever going through this app's
+            // own kill/delete (deleted from the TUI, from another moomux
+            // front end, from the CLI) — `detach(_:)` would never run, and a
+            // pooled tmux client would otherwise keep its forkpty running
+            // forever, keyed by an id nothing refers to any more.
+            for id in attachedSessions.keys where !live.contains(id) { detach(id: id) }
             updateDockBadge()  // needsInputCount filters visibleSessions
         } catch {
             // Deliberately leaves the last-good lists in place. A failed call
@@ -893,6 +927,36 @@ public final class AppState {
         mutate("Save theme") { try $0.setTheme(theme, appearance: appearance); return nil }
     }
 
+    /// Attaching is deliberate, never a side effect of selecting a row: a tmux
+    /// client sizes the shared window down to its own dimensions for *every*
+    /// other client on that session, so auto-attaching would silently squash
+    /// the user's iTerm and phone windows as they browsed the list. See
+    /// `TerminalPane` for why this is inherent to a plain attach.
+    ///
+    /// Once attached, though, switching the sidebar selection away and back
+    /// must not ask again: `attachedSessions` is what decides what
+    /// `SessionDetail` shows, and the actual tmux client
+    /// (`plainPanes`/`controlClients`) keeps running in the background the
+    /// whole time a session stays in it, so coming back is instant. Only
+    /// `detach(_:)` — the toolbar button, tmux ending the client on its own,
+    /// or the session being killed or deleted — ever tears the client down.
+    public func attach(_ session: Session) { attachedSessions[session.id] = useControlMode }
+
+    /// The real end of an attachment, as opposed to merely navigating away in
+    /// the sidebar: kills whatever tmux client was kept running for this
+    /// session and drops it from the pool.
+    public func detach(_ session: Session) { detach(id: session.id) }
+
+    private func detach(id: Session.ID) {
+        attachedSessions.removeValue(forKey: id)
+        plainPanes.removeValue(forKey: id)?.terminate()
+        plainDelegates.removeValue(forKey: id)
+        if let control = controlClients.removeValue(forKey: id) {
+            if controlClient === control { controlClient = nil }
+            control.stop()
+        }
+    }
+
     public func killTmux(_ session: Session) {
         detachIfShowing(session)
         mutate("Kill tmux") { try $0.killTmux(id: session.id); return nil }
@@ -945,11 +1009,14 @@ public final class AppState {
         mutate("Delete") { try $0.deleteSession(id: session.id) }
     }
 
-    /// Killing or deleting the session the detail pane is attached to would
-    /// leave a control-mode client talking to a tmux session that is about to
-    /// stop existing. Clearing the selection unmounts `SessionDetail`, which
-    /// tears the client down — the same path selecting another row takes.
+    /// Killing or deleting a session must not leave its tmux client running
+    /// in the background pool talking to a session that is about to stop
+    /// existing — regardless of whether it happens to be the one showing in
+    /// the detail pane right now. Clearing the selection, when it was the one
+    /// showing, avoids pointing the detail pane at a session that is about to
+    /// disappear from the list.
     private func detachIfShowing(_ session: Session) {
+        detach(session)
         if selectedSessionID == session.id { selectedSessionID = nil }
     }
 }
