@@ -45,8 +45,9 @@ struct MoomuxApp: App {
 }
 
 /// The menu bar glyph: the same cow-terminal face as `AppIcon.icns`, reduced
-/// to a template silhouette (eyes and mouth are transparent holes cut with an
-/// evenodd fill) so AppKit tints it for light/dark menu bars automatically.
+/// to a template silhouette (eyes and the ">_" prompt nose are transparent
+/// holes cut with an evenodd fill) so AppKit tints it for light/dark menu
+/// bars automatically.
 private enum MenuBarIcon {
     static let image: Image = {
         guard let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "svg"),

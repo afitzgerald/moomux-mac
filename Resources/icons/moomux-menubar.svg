@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title">
   <title id="title">moomux menu bar glyph</title>
-  <!-- Template image: single fill, eyes/nose are evenodd holes so AppKit's
-       tinting (light/dark menu bar) shows through as transparency. -->
+  <!-- Template image: single fill, eyes and the ">_" terminal-prompt nose
+       are evenodd holes so AppKit's tinting (light/dark menu bar) shows
+       through as transparency. -->
   <path fill="#000000" fill-rule="evenodd" d="
     M158 151C121 138 113 101 130 62C139 95 159 107 190 111Z
     M354 151C391 138 399 101 382 62C373 95 353 107 322 111Z
@@ -10,6 +11,8 @@
     M178 116H334A66 66 0 0 1 400 182V358A66 66 0 0 1 334 424H178A66 66 0 0 1 112 358V182A66 66 0 0 1 178 116Z
     M205 254A13 13 0 1 1 179 254A13 13 0 1 1 205 254Z
     M333 254A13 13 0 1 1 307 254A13 13 0 1 1 333 254Z
-    M241 371H271V389H241Z
+    M211 353L234 370L226 382L203 365Z
+    M226 372L234 384L211 401L203 389Z
+    M269 390H305V404H269Z
   "/>
 </svg>
