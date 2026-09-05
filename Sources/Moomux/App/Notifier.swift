@@ -35,8 +35,13 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     public func report(previous: [String: AgentState], current: [String: AgentState]) {
         guard let center, let app else { return }
         let change = Notifier.transitions(from: previous, to: current)
-        center.removeDeliveredNotifications(
-            withIdentifiers: change.ended.compactMap { app.session(atPath: $0)?.id })
+        // Guarded, not because an empty removal does anything, but because it
+        // is an XPC round trip per watcher tick — tens a second, and every one
+        // of them logged. Nothing to remove is the overwhelmingly common case.
+        if !change.ended.isEmpty {
+            center.removeDeliveredNotifications(
+                withIdentifiers: change.ended.compactMap { app.session(atPath: $0)?.id })
+        }
         for path in change.started {
             guard let session = app.session(atPath: path), !session.archived else { continue }
             // A banner for the window you are already looking at is noise.
