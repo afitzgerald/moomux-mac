@@ -368,6 +368,13 @@ public final class AppState {
     /// Mirrors `ipc.Client.Run`, backoff included.
     private func watchLoop() async {
         var backoff = Duration.milliseconds(200)
+        // A watcher tick that races an agent's half-written status file
+        // reports Err for that one tick and clears on the next (see the Go
+        // watcher's parseFile) — surfacing it immediately just flashes the
+        // banner in step with normal agent activity. Requiring it twice in a
+        // row tells a real problem (unreadable dir, persistent parse
+        // failure) from that self-clearing race.
+        var pendingWatcherError: String?
         while !Task.isCancelled {
             do {
                 for try await snapshot in client.watch() {
@@ -382,11 +389,17 @@ public final class AppState {
                         live: Set(sessions.map(\.worktreePath)))
                     notifier?.report(previous: previous, current: states)
                     updateDockBadge()
-                    set(statusError: snapshot.err)
+                    if let err = snapshot.err, err == pendingWatcherError {
+                        set(statusError: err)
+                    } else {
+                        set(statusError: nil)
+                    }
+                    pendingWatcherError = snapshot.err
                 }
                 throw MoomuxClient.Failure.disconnected
             } catch {
                 guard !Task.isCancelled else { return }
+                pendingWatcherError = nil
                 set(statusError: "status stream lost (\(error.localizedDescription)); reconnecting")
             }
             try? await Task.sleep(for: backoff)
