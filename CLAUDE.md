@@ -15,7 +15,9 @@ creates, renames, retags, re-agents, archives, reorders, kills and deletes them.
 the same questions the TUI's dialog does — agent, model, thinking level, branch and base branch
 included — because the core serves the table those pickers are built from (`AgentOptions`). ⌘,
 manages projects (add, edit, remove, reorder, and the "that path isn't a git repo" choice) and the
-config flags both front ends share. ⌘F searches the sidebar by session name, ⌃⌘S hides it.
+config flags both front ends share. ⌘F searches the sidebar by session name, ⌃⌘S hides it, and
+⌘↓/⌘↑ step the selection through it — the keyboard equivalent of the sidebar `List`'s own
+arrow-key navigation, which a terminal's first responder always outranks.
 
 ## The environment decides more than you'd think
 
