@@ -61,13 +61,20 @@ public final class AppState {
 
     public func focusSearch() { focusSearchToken += 1 }
     /// Attach with tmux control mode (native panes) rather than a plain
-    /// `tmux attach`. The default, because it is the whole reason for a native
-    /// app: real per-pane selection and copy, and a layout the app can see.
+    /// `tmux attach`. Off by default: plain attach keeps tmux's own prefix
+    /// keys, resize, copy-mode and scrollback, which control mode cannot
+    /// offer (see the control-mode caveats in CLAUDE.md) — a real cost for
+    /// anyone who already knows tmux, against click-to-select and a GUI pane
+    /// menu that mostly help someone who doesn't.
     ///
-    /// The plain attach stays reachable by turning this off — it is the escape
-    /// hatch for anything control mode renders badly, and the two are one
-    /// `if` apart in `SessionDetail`. Not persisted between runs yet.
-    public var useControlMode = true
+    /// Control mode stays reachable by turning this on — it is the native
+    /// per-pane path for anything the plain attach renders badly, and the
+    /// two are one `if` apart in `SessionDetail`. Persisted in `UserDefaults`
+    /// (client-local, not the core's `config.toml` — this is a front-end
+    /// rendering choice, not a project setting).
+    public var useControlMode = UserDefaults.standard.object(forKey: "useControlMode") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(useControlMode, forKey: "useControlMode") }
+    }
     /// Replace the detail column with a read-only snapshot of every live
     /// session. Snapshots and not clients: an attached client sizes the shared
     /// tmux window for everyone, so a grid of six would letterbox six real
