@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">moomux</title>
+  <desc id="desc">A cow-shaped terminal with a command prompt as its nose, on a mint squircle plate.</desc>
+  <rect x="0" y="0" width="512" height="512" rx="115" ry="115" fill="#8EF0B5"/>
+  <g transform="translate(256 256) scale(1.0) translate(-256 -243)">
+    <g stroke="#182522" stroke-width="16" stroke-linejoin="round">
+      <path d="M158 151C121 138 113 101 130 62C139 95 159 107 190 111Z" fill="#F5F3E9"/>
+      <path d="M354 151C391 138 399 101 382 62C373 95 353 107 322 111Z" fill="#F5F3E9"/>
+      <path d="M133 176C105 145 61 149 30 170C47 216 84 237 130 211Z" fill="#F5F3E9"/>
+      <path d="M379 176C407 145 451 149 482 170C465 216 428 237 382 211Z" fill="#F5F3E9"/>
+      <rect x="112" y="116" width="288" height="308" rx="66" fill="#182522"/>
+    </g>
+    <path d="M176 132H227C224 164 208 183 185 187C160 192 151 208 128 212V182C128 154 148 132 176 132Z" fill="#F5F3E9"/>
+    <g fill="#F5F3E9"><circle cx="192" cy="254" r="13"/><circle cx="320" cy="254" r="13"/></g>
+    <rect x="140" y="325" width="232" height="104" rx="48" fill="#F5F3E9" stroke="#182522" stroke-width="16"/>
+    <path d="M207 357L233 377L207 397M269 397H305" fill="none" stroke="#182522" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

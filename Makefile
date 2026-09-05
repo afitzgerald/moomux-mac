@@ -71,6 +71,8 @@ app: build
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp $(BIN) $(APP)/Contents/MacOS/Moomux
 	cp Resources/Info.plist $(APP)/Contents/Info.plist
+	cp Resources/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
+	cp Resources/PeekabooPlate.png $(APP)/Contents/Resources/PeekabooPlate.png
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP)
 

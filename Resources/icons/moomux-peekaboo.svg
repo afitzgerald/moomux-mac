@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title desc"><title id="title">moomux — 02-peekaboo</title><desc id="desc">A spotted cow peers over a terminal window, with two hooves resting on its top edge.</desc>
+<g stroke="#182522" stroke-width="14" stroke-linejoin="round">
+<path d="M185 110Q143 95 155 46L207 102M327 110Q369 95 357 46L305 102" fill="#8EF0B5"/>
+<path d="M172 128Q111 97 101 138Q118 174 169 169M340 128Q401 97 411 138Q394 174 343 169" fill="#F5F3E9"/>
+<rect x="165" y="86" width="182" height="166" rx="59" fill="#F5F3E9"/>
+</g>
+<path d="M284 94H294Q340 98 340 145V178Q289 183 275 151Q267 129 284 94" fill="#182522"/>
+<circle cx="215" cy="153" r="10" fill="#182522"/><circle cx="300" cy="153" r="10" fill="#F5F3E9"/>
+<rect x="199" y="181" width="114" height="61" rx="28" fill="#8EF0B5" stroke="#182522" stroke-width="12"/>
+<path d="M233 208V213M279 208V213" stroke="#182522" stroke-width="12" stroke-linecap="round"/>
+<rect x="58" y="232" width="396" height="216" rx="29" fill="#182522"/>
+<path d="M81 277H431" stroke="#F5F3E9" stroke-opacity=".25" stroke-width="6"/>
+<g fill="#8EF0B5"><circle cx="90" cy="256" r="5"/><circle cx="109" cy="256" r="5"/><circle cx="128" cy="256" r="5"/></g>
+<path d="M113 319L150 350L113 381M185 381H237" stroke="#8EF0B5" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+<g fill="#F5F3E9" stroke="#182522" stroke-width="12"><rect x="149" y="217" width="53" height="53" rx="19"/><rect x="310" y="217" width="53" height="53" rx="19"/></g>
+</svg>
