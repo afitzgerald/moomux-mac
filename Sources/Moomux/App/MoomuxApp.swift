@@ -86,6 +86,17 @@ struct SessionCommands: Commands {
             .keyboardShortcut("s", modifiers: [.control, .command])
         }
         CommandMenu("Session") {
+            // The sidebar List's own up/down-arrow navigation stops working
+            // the moment a terminal pane has focus (it always takes first
+            // responder on attach, so typing works without a click first) —
+            // these are the equivalent of `PaneCommands` for the sidebar.
+            Button("Next Session") { app.selectAdjacentSession(by: 1) }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+                .disabled(app.sessionsByProject.isEmpty)
+            Button("Previous Session") { app.selectAdjacentSession(by: -1) }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .disabled(app.sessionsByProject.isEmpty)
+            Divider()
             // ⌘F is the find shortcut everywhere, and `f` is the TUI's. The
             // search field lives in the sidebar; this puts the caret in it.
             // Hidden below macOS 15, where `.searchFocused` does not exist and

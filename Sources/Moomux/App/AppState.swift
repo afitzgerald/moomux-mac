@@ -247,6 +247,21 @@ public final class AppState {
         config?.projects[project]?.emoji
     }
 
+    /// Moves the selection to the next/previous row in sidebar order,
+    /// wrapping. The Session menu's replacement for the sidebar `List`'s own
+    /// arrow-key navigation, which stops reaching the list the instant a
+    /// terminal pane takes first responder — which it does deliberately, so
+    /// typing works without clicking first (`PaneTerminalView.viewDidMoveToWindow`).
+    public func selectAdjacentSession(by delta: Int) {
+        let ids = sessionsByProject.flatMap { $0.sessions.map(\.id) }
+        guard !ids.isEmpty else { return }
+        guard let current = selectedSessionID, let index = ids.firstIndex(of: current) else {
+            selectedSessionID = ids[0]
+            return
+        }
+        selectedSessionID = ids[(index + delta + ids.count) % ids.count]
+    }
+
     /// Manual reordering is meaningless while the core sorts by last-opened —
     /// the next open would undo it. The TUI disables shift+↑↓ for the same
     /// reason rather than letting a move silently do nothing.
