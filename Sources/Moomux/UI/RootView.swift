@@ -1,5 +1,26 @@
 import SwiftUI
 
+/// Loaded once and shared by every view that draws the cow mark — reading
+/// and decoding the SVG from disk on every render (as each caller used to do
+/// independently) is needless work for an image that never changes.
+private let cowNoseImage: NSImage? = Bundle.main
+    .url(forResource: "moomux-terminal-nose", withExtension: "svg")
+    .flatMap(NSImage.init(contentsOf:))
+
+/// A ToolbarContent modifier is unavailable pre-macOS 26 (no such capsule to
+/// hide), so both branches must build the same `some ToolbarContent` type —
+/// this factors that out instead of duplicating the toolbar item itself.
+extension ToolbarContent {
+    @ToolbarContentBuilder
+    fileprivate func hidingSharedBackground() -> some ToolbarContent {
+        if #available(macOS 26, *) {
+            self.sharedBackgroundVisibility(.hidden)
+        } else {
+            self
+        }
+    }
+}
+
 /// Semantic colors only — literal hex breaks dark mode.
 enum Theme {
     static func color(_ state: AgentState) -> Color {
@@ -39,7 +60,30 @@ struct RootView: View {
                 NoSessionSelectedView()
             }
         }
+        // Blank rather than omitted: an unset title falls back to the
+        // Window's own "moomux", which would duplicate RootTitle below.
+        // `.toolbar(removing: .title)` looked like the fix for keeping
+        // NSWindow.title accurate (Window menu, Mission Control) instead of
+        // blank, but removing the default title item also frees the space
+        // it reserved — every trailing toolbar button shifted left to fill
+        // it. Not worth it for a menu few people open.
+        .navigationTitle("")
         .toolbar {
+            // The plain name/state/"moomux" title, replaced by the cow
+            // "saying" the session's quip once one is selected and picked.
+            // Declared once here — not per detail view — so every detail
+            // state (grid, a session, none selected) builds the same toolbar
+            // shape; splitting it across views was what caused the title to
+            // flash into a mismatched, boxed-looking style switching between
+            // them. `.navigation` puts it where the title used to read,
+            // right after the sidebar toggle.
+            //
+            // macOS 26's Liquid Glass toolbar draws its own capsule around
+            // every item's content by default — a ring around CowQuip's own
+            // speech-bubble fill. `hidingSharedBackground` opts the item out
+            // on that OS; older macOS never drew that ring to begin with.
+            ToolbarItem(placement: .navigation) { RootTitle() }
+                .hidingSharedBackground()
             ToolbarItem(placement: .status) { ConnectionBadge() }
             ToolbarItem {
                 Button {
@@ -401,15 +445,13 @@ private struct PlateImage: View {
 }
 
 /// The plain cow-terminal mark, spinning, for the moment between selecting a
-/// session and knowing whether it auto-attaches. `NSImage(contentsOf:)` loads
-/// SVG directly (measured on this toolchain) — no PNG export step.
+/// session and knowing whether it auto-attaches.
 private struct AttachingSpinner: View {
     @State private var rotating = false
 
     var body: some View {
         ZStack {
-            if let url = Bundle.main.url(forResource: "moomux-terminal-nose", withExtension: "svg"),
-               let image = NSImage(contentsOf: url) {
+            if let image = cowNoseImage {
                 Image(nsImage: image)
                     .resizable().scaledToFit().frame(width: 96, height: 96)
                     .rotationEffect(.degrees(rotating ? 360 : 0))
@@ -421,6 +463,82 @@ private struct AttachingSpinner: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// A rounded rect with a small triangular tail on its leading edge, pointing
+/// at whatever is "speaking" — here, the cow icon beside it.
+private struct SpeechBubble: Shape {
+    var tailSize: CGFloat = 6
+
+    func path(in rect: CGRect) -> Path {
+        let bubble = CGRect(x: rect.minX + tailSize, y: rect.minY,
+                             width: rect.width - tailSize, height: rect.height)
+        var p = Path(roundedRect: bubble, cornerRadius: rect.height / 2)
+        let midY = rect.midY
+        p.move(to: CGPoint(x: bubble.minX + 1, y: midY - tailSize))
+        p.addLine(to: CGPoint(x: rect.minX, y: midY))
+        p.addLine(to: CGPoint(x: bubble.minX + 1, y: midY + tailSize))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// The plain cow-terminal mark, unadorned — the constant part of the toolbar
+/// title, whatever it's saying.
+private struct CowIcon: View {
+    var body: some View {
+        if let image = cowNoseImage {
+            Image(nsImage: image).resizable().scaledToFit().frame(width: 28, height: 28)
+        }
+    }
+}
+
+/// The cow mark plus its picked quip in a speech bubble, standing in for the
+/// plain session name/state title. Fill only, no stroke — a border here reads
+/// as another toolbar button rather than a bubble.
+private struct CowQuip: View {
+    let quip: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            CowIcon()
+            Text(quip)
+                .font(.callout)
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 6 + 8)
+                .padding(.trailing, 10)
+                .padding(.vertical, 4)
+                .background(SpeechBubble().fill(Color.secondary.opacity(0.15)))
+        }
+    }
+}
+
+/// The toolbar's one title slot: the selected session's cow-and-quip, its
+/// plain name/state without a quip (an older core, or a state not yet
+/// reported), or the app name with nothing selected. The cow mark is always
+/// there — only what it's "saying" changes.
+private struct RootTitle: View {
+    @Environment(AppState.self) private var app
+
+    var body: some View {
+        let session = app.session(id: app.selectedSessionID)
+        if let session, let quip = app.quip(for: session), !quip.isEmpty {
+            CowQuip(quip: quip)
+        } else {
+            HStack(spacing: 8) {
+                CowIcon()
+                if let session {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(session.name).font(.headline)
+                        Text(app.state(for: session).label).font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("moomux").font(.headline)
+                }
+            }
+        }
     }
 }
 
@@ -619,7 +737,6 @@ private struct SessionDetail: View {
     @State private var checkingAttach = true
 
     var body: some View {
-        let state = app.state(for: session)
         // Read off `attachedSessions`, not view-local `@State`, so switching
         // the sidebar selection away and back shows an already-attached
         // session immediately — see `AppState.attach(_:)`.
@@ -633,8 +750,6 @@ private struct SessionDetail: View {
                 SessionInfo(session: session, onAttach: { app.attach(session) })
             }
         }
-        .navigationTitle(session.name)
-        .navigationSubtitle(state.label)
         .onChange(of: session.id) { _, _ in showInfo = false; checkingAttach = true }
         .inspector(isPresented: $showInfo) {
             SessionInfo(session: session, onAttach: nil)

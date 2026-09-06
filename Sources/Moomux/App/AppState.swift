@@ -30,6 +30,9 @@ public final class AppState {
     /// Worktree path → agent state. Keyed by path because that is what the
     /// watcher observes; `state(for:)` does the join.
     public private(set) var states: [String: AgentState] = [:]
+    /// Worktree path → flavor-text quip, same join as `states` and merged the
+    /// same way. See `quip(for:)`.
+    public private(set) var quips: [String: String] = [:]
     public private(set) var config: Config?
     /// Which agents the core can launch, and what to offer in a model or
     /// thinking-level picker for each. Fetched once — it is a static table in
@@ -212,6 +215,10 @@ public final class AppState {
 
     public func state(for session: Session) -> AgentState {
         states[session.worktreePath] ?? .unknown
+    }
+
+    public func quip(for session: Session) -> String? {
+        quips[session.worktreePath]
     }
 
     public func isAlive(_ session: Session) -> Bool {
@@ -446,9 +453,9 @@ public final class AppState {
                     // merged maps is what makes a partial tick a no-op for
                     // everybody else.
                     let previous = states
-                    states = AppState.merge(
-                        states, snapshot.states,
-                        live: Set(sessions.map(\.worktreePath)))
+                    let live = Set(sessions.map(\.worktreePath))
+                    states = AppState.merge(states, snapshot.states, live: live)
+                    quips = AppState.merge(quips, snapshot.quips, live: live)
                     notifier?.report(previous: previous, current: states)
                     updateDockBadge()
                     if let err = snapshot.err, err == pendingWatcherError {
@@ -494,11 +501,11 @@ public final class AppState {
     /// growing forever; the watcher reports on directories that were never
     /// sessions ("/", the home directory) and on sessions since deleted.
     /// `internal/tui/update.go`'s StatusTickMsg does exactly this.
-    nonisolated static func merge(
-        _ known: [String: AgentState],
-        _ snapshot: [String: AgentState],
+    nonisolated static func merge<Value>(
+        _ known: [String: Value],
+        _ snapshot: [String: Value],
         live: Set<String>
-    ) -> [String: AgentState] {
+    ) -> [String: Value] {
         known.merging(snapshot) { _, fresh in fresh }.filter { live.contains($0.key) }
     }
 
