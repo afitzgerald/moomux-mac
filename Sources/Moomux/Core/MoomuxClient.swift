@@ -200,6 +200,19 @@ public final class MoomuxClient: Sendable {
         try call("TmuxAliveAll").alive ?? [:]
     }
 
+    /// Just the worktree half of `status(id:)`: one round trip and one
+    /// `git status` on the Go side, with no `git log` and no `gh` call over the
+    /// network. Cheap enough to poll for every session, which is what the
+    /// sidebar's dirty dot does; the full `status(id:)` is not.
+    public func worktreeStatus(id: String) throws -> SessionStatus {
+        var status = SessionStatus()
+        let worktree = try call("WorktreeStatus", Args(id: id))
+        status.known = worktree.ok ?? false
+        status.dirty = worktree.dirty ?? false
+        status.unpushed = worktree.unpushed ?? false
+        return status
+    }
+
     /// Worktree and PR state for one session.
     ///
     /// Three round trips, and every one of them shells out on the Go side —
@@ -207,11 +220,7 @@ public final class MoomuxClient: Sendable {
     /// why this is fetched for the selected session on demand rather than for
     /// every session in the poll loop.
     public func status(id: String) throws -> SessionStatus {
-        var status = SessionStatus()
-        let worktree = try call("WorktreeStatus", Args(id: id))
-        status.known = worktree.ok ?? false
-        status.dirty = worktree.dirty ?? false
-        status.unpushed = worktree.unpushed ?? false
+        var status = try worktreeStatus(id: id)
 
         let changes = try call("ChangeSummary", Args(id: id))
         if changes.ok == true {
