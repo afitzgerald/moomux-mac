@@ -323,16 +323,6 @@ private struct PreferencesPane: View {
 
     private var cfg: Config? { app.config }
 
-    /// The known themes, plus whatever is stored if it isn't one of them. A
-    /// `Picker` whose selection matches no tag renders blank *and* writes
-    /// nothing — so a theme this app has not heard of would look like a bug and
-    /// then be silently replaced by the first click on any other row here.
-    private var themeChoices: [String] {
-        let stored = cfg?.theme?.nilIfEmpty
-        guard let stored, !SettingsSheet.themes.contains(stored) else { return SettingsSheet.themes }
-        return SettingsSheet.themes + [stored]
-    }
-
     var body: some View {
         Form {
             Toggle("Sort sessions by last opened", isOn: Binding(
@@ -347,11 +337,18 @@ private struct PreferencesPane: View {
                 get: { cfg?.autoTmux ?? false },
                 set: { app.setAutoTmux($0) }))
                 .help("`moomux` in a terminal puts itself in a dedicated tmux session on startup")
-            Picker("TUI theme", selection: Binding(
-                get: { cfg?.theme?.nilIfEmpty ?? SettingsSheet.themes[0] },
+            // `app.themeNames` is the served list, so this app and the TUI
+            // offer the same palettes and now render the same colors from
+            // them. It also keeps an unrecognized stored theme as a choice: a
+            // Picker whose selection matches no tag renders blank *and*
+            // writes nothing, so it would look like a bug and then be
+            // silently replaced by the first click on any other row here.
+            Picker("Theme", selection: Binding(
+                get: { cfg?.theme?.nilIfEmpty ?? "default" },
                 set: { app.setTheme($0, appearance: cfg?.appearance ?? "") })) {
-                ForEach(themeChoices, id: \.self) { Text($0).tag($0) }
+                ForEach(app.themeNames, id: \.self) { Text($0).tag($0) }
             }
+            .help("Shared with the TUI — the session state colors here follow it too")
             Picker("TUI appearance", selection: Binding(
                 get: { cfg?.appearance?.nilIfEmpty ?? "auto" },
                 set: { app.setTheme(cfg?.theme ?? "", appearance: $0 == "auto" ? "" : $0) })) {
@@ -361,8 +358,9 @@ private struct PreferencesPane: View {
             }
         }
         .formStyle(.grouped)
-        Text("The last two are the terminal UI's own palette — this app follows the system "
-             + "appearance and is unaffected by either.")
+        Text("Theme is shared: the core serves the palette both front ends draw from, so a "
+             + "session's state color is the same here and in the terminal UI. Appearance is the "
+             + "terminal UI's alone — this app follows the system.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -421,11 +419,3 @@ private struct TerminalPreferencesPane: View {
     }
 }
 
-extension SettingsSheet {
-    /// The TUI's palettes. A hardcoded list, unlike the agent table, because
-    /// there is no IPC method serving it and these are strings `applyTheme`
-    /// falls back to "default" on — a stale entry costs a wrong preview in
-    /// another program, not a broken session. Serve it from the core if it
-    /// ever grows a fifth.
-    static let themes = ["default", "terminal", "gruvbox", "catppuccin"]
-}

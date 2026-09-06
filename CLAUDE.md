@@ -456,10 +456,17 @@ Decisions, not oversights. Don't "fix" these without being asked.
   so a copy here would drift — the exact rule below. A free-text field plus macOS's own ⌃⌘Space
   gets there. The cost is that an empty emoji shows nothing in this app's sidebar while the TUI
   computes a deterministic glyph; the field's help text says so rather than pretending otherwise.
-  The **theme list is the one hardcoded table** (`SettingsSheet.themes`), because `Config.Theme` is
-  free text on the wire and a stale entry costs a wrong palette in another program, not a broken
-  session. The picker unions whatever is stored, so a theme this app has not heard of is neither
-  rendered blank nor silently overwritten. Serve it from the core if Go gains a fifth.
+  There is **no hardcoded table left**: `Themes` serves `internal/config`'s palettes, so the picker
+  offers the served names (`AppState.themeNames`) and `Theme` in `RootView.swift` draws the state
+  icons from the served colors, which is what makes the two front ends' dots agree at last. The
+  picker still unions whatever is stored, so a theme *this* core has not heard of (an older core, a
+  newer config.toml) is neither rendered blank nor silently overwritten.
+  Three things the wire format encodes and this app honours: a color's `system` name ("accent",
+  "green", "orange", "secondary") wins over its hex, so the dots follow the user's live system
+  accent rather than a frozen `#007aff`; the `ansi` flag marks the "terminal" theme's halves as
+  palette *indices*, which nothing here can resolve, so `ThemePalette.resolved` hands back
+  "default" for it; and `warn` — the ± / ↑ git badges — is amber in every theme, split out of
+  `done` precisely because `done` is now green everywhere.
 - **The New Session sheet asks three questions up front and hides the other nine.** Project, name
   and first prompt are the fast path; agent, the dangerous flag, model, thinking level, existing
   branch, base branch, ticket and PR live under a `DisclosureGroup`, which opens by itself only for

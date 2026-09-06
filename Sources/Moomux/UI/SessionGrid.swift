@@ -52,7 +52,7 @@ private struct SessionTile: View {
         let state = app.state(for: session)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Image(systemName: state.symbol).foregroundStyle(Theme.color(state))
+                Image(systemName: state.symbol).foregroundStyle(Theme.color(state, app.palette))
                 Text(session.name).lineLimit(1)
                 Spacer()
                 Text(session.project).foregroundStyle(.secondary).lineLimit(1)
