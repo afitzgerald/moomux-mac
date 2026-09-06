@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Loaded once and shared by every view that draws the cow mark — reading
@@ -967,6 +968,9 @@ struct MenuBarContent: View {
             ForEach(app.visibleSessions.filter { app.state(for: $0) != .parked }) { session in
                 Button {
                     app.open(session)
+                    app.selectedSessionID = session.id
+                    NSApp.activate()
+                    NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
                 } label: {
                     let state = app.state(for: session)
                     HStack {
