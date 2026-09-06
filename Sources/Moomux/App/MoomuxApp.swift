@@ -37,11 +37,27 @@ struct MoomuxApp: App {
         } label: {
             // The count is the payload: it is what makes this worth having
             // over the TUI, which cannot be seen from another app.
-            Image(systemName: "cup.and.saucer")
+            MenuBarIcon.image
             if app.needsInputCount > 0 { Text("\(app.needsInputCount)") }
         }
         .menuBarExtraStyle(.window)
     }
+}
+
+/// The menu bar glyph: the same cow-terminal face as `AppIcon.icns`, reduced
+/// to a template silhouette (eyes and the ">_" prompt nose are transparent
+/// holes cut with an evenodd fill) so AppKit tints it for light/dark menu
+/// bars automatically.
+private enum MenuBarIcon {
+    static let image: Image = {
+        guard let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "svg"),
+              let nsImage = NSImage(contentsOf: url) else {
+            return Image(systemName: "cup.and.saucer")
+        }
+        nsImage.isTemplate = true
+        nsImage.size = NSSize(width: 18, height: 18)
+        return Image(nsImage: nsImage)
+    }()
 }
 
 /// The row-level writes, so every one of them has a keyboard shortcut and is
