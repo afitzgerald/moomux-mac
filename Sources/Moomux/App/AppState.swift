@@ -224,8 +224,12 @@ public final class AppState {
 
     // MARK: Derived
 
+    /// `internal/tui`'s `effectiveState`: with tmux dead the agent's status
+    /// file is stale, so the last watcher tick before a kill would otherwise
+    /// leave the row spinning on "working" forever.
     public func state(for session: Session) -> AgentState {
-        states[session.worktreePath] ?? .unknown
+        guard isAlive(session) else { return .parked }
+        return states[session.worktreePath] ?? .unknown
     }
 
     public func quip(for session: Session) -> String? {
@@ -648,6 +652,19 @@ public final class AppState {
         assert(matchSessions(rows, query: "zzz").isEmpty)
         // The branch is not searched, though it is the most tempting extra.
         assert(matchSessions(rows, query: "feature").isEmpty)
+
+        // A dead tmux session reads as parked whatever the last watcher tick
+        // said — `internal/tui`'s effectiveState. Without it, killing a working
+        // session leaves its row spinning forever.
+        MainActor.assumeIsolated {
+            let app = AppState()
+            let s = sample("Alpha")
+            app.states = [s.worktreePath: .working]
+            app.alive = [s.id: true]
+            assert(app.state(for: s) == .working)
+            app.alive = [s.id: false]
+            assert(app.state(for: s) == .parked, "\(app.state(for: s))")
+        }
 
         // The agent table's fallbacks, which decide what every picker in the
         // new-session form contains. Same rules as `internal/tui`'s
