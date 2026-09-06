@@ -246,6 +246,7 @@ App/MoomuxApp.swift      scenes: main window + MenuBarExtra
 App/SelfTest.swift       --selftest
 UI/RootView.swift        split view, rows, detail, inspector, menu-bar content
 UI/TerminalPane.swift    SwiftTerm hosting a plain `tmux attach`
+UI/TerminalLinks.swift   what a ⌘-clicked link in a pane is allowed to open
 UI/SettingsView.swift    project CRUD and the shared config flags, on two tabs
 UI/SessionGrid.swift     every live session at once, as capture-pane snapshots
 ```
