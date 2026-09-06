@@ -750,13 +750,6 @@ private struct SessionRow: View {
                     .foregroundStyle(.tertiary)
                     .help("archived")
             }
-            // A dead tmux session still has a worktree and still shows here —
-            // the dot is the difference between "parked" and "gone".
-            if !app.isAlive(session) {
-                Image(systemName: "powersleep")
-                    .foregroundStyle(.tertiary)
-                    .help("no live tmux session")
-            }
         }
         .padding(.vertical, 2)
         // Closes over `session`, never over the selection: right-clicking an
@@ -845,7 +838,12 @@ private struct SessionDetail: View {
         Group {
             if attached {
                 SessionTerminal(session: session, onDetach: { app.detach(session) })
-            } else if checkingAttach {
+            } else if checkingAttach && app.state(for: session) != .parked {
+                // Only a live session has anything to wait for. A parked one
+                // cannot attach whatever `loadStatus` comes back with, so
+                // spinning at it just hides the landing page — and if that
+                // round trip never returns, forever. Keyed off the same
+                // derived state the row's icon draws, not off `alive` again.
                 AttachingSpinner()
             } else {
                 SessionInfo(session: session, onAttach: { app.attach(session) })
