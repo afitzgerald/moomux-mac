@@ -198,6 +198,11 @@ class TerminalDelegateBase: NSObject, TerminalViewDelegate {
     func send(source: TerminalView, data: ArraySlice<UInt8>) {}
     func scrolled(source: TerminalView, position: Double) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+    /// Snapshot tiles detect links too, so they need the same allowlist as the
+    /// attached pane — the default implementation opens any scheme.
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        TerminalLink.open(link)
+    }
 }
 
 /// A one-shot `capture-pane` of a session, framed as bytes a terminal can draw.

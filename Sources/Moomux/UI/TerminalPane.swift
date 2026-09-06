@@ -55,6 +55,12 @@ struct TerminalPane: NSViewRepresentable {
             }
         }
 
+        /// SwiftTerm's own handler opens any scheme it can parse; `TerminalLink`
+        /// is the allowlist. ⌘-hover underlines the match, ⌘-click lands here.
+        override func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+            TerminalLink.open(link)
+        }
+
         override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
             sender.moomux_hasFilePaths ? .copy : []
         }
