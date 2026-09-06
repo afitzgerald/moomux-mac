@@ -42,6 +42,17 @@ enum Theme {
         }
     }
 
+    /// The sidebar's ± and ↑ badges. `internal/tui/list.go` draws both in
+    /// `warnStyle`, which is built from the palette's *done* entry — so this is
+    /// that same join, and re-theming `done` moves the badges with it.
+    ///
+    /// It does **not** currently render the TUI's color: `done` is amber there
+    /// (`#e0af68` default, `#fabd2f` gruvbox, ANSI 11 terminal) and green here,
+    /// so the badges come out green. Kept as the join rather than hardcoding
+    /// amber on purpose — the mapping is the thing shared with the TUI, and
+    /// fixing `color(.done)` fixes these too.
+    static let gitWarn = color(.done)
+
     static let mono = Font.system(size: 12, design: .monospaced)
 }
 
@@ -650,6 +661,25 @@ private struct SessionRow: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 4)
+            // `internal/tui/list.go`'s two git icons, in its order: ± for a
+            // dirty worktree, ↑ for commits that are not on the remote. Both
+            // can show at once — they are different work in different places,
+            // and collapsing them would hide one. SF Symbols rather than the
+            // literal glyphs so they weigh and align like the row's other
+            // icons; they draw the same ± and ↑. Counts stay in the detail
+            // panel's Changes row.
+            if let git = app.worktrees[session.id] {
+                if git.dirty {
+                    Image(systemName: "plusminus")
+                        .foregroundStyle(Theme.gitWarn)
+                        .help("uncommitted changes")
+                }
+                if git.unpushed {
+                    Image(systemName: "arrow.up")
+                        .foregroundStyle(Theme.gitWarn)
+                        .help("unpushed commits")
+                }
+            }
             // Archived rows are only on screen because the Archived toggle is
             // on, and without this they are indistinguishable from live ones —
             // the toggle changes the list and nothing says which rows it added.

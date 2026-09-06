@@ -45,6 +45,17 @@ public final class AppState {
     /// this for every session every two seconds would hammer the machine and
     /// GitHub both. Fetched when a session is selected, and on refresh.
     public private(set) var statuses: [Session.ID: MoomuxClient.SessionStatus] = [:]
+    /// Uncommitted changes and unpushed commits, by session id — the sidebar's
+    /// two badges, and nothing else. Only `known`/`dirty`/`unpushed` are
+    /// filled: this comes from `worktreeStatus` alone (one `git status`, no
+    /// `git log`, no `gh`), which is what makes polling it for every row
+    /// affordable at all. Absent means "not a git worktree, or we could not
+    /// ask" — the sweep only records answers it got.
+    ///
+    /// Kept apart from `statuses` rather than folded in, because sharing one
+    /// map would either clobber the selected session's file counts and PR or
+    /// need the loop to skip that one row.
+    public private(set) var worktrees: [Session.ID: MoomuxClient.SessionStatus] = [:]
 
     public private(set) var connection: Connection = .connecting
     /// Set when the status stream drops. Without it the last states keep
@@ -355,6 +366,7 @@ public final class AppState {
         tasks = [
             Task { [weak self] in await self?.pollLoop() },
             Task { [weak self] in await self?.watchLoop() },
+            Task { [weak self] in await self?.worktreeLoop() },
             Task { [weak self] in await self?.loadAgentOptions() },
         ]
     }
@@ -389,6 +401,52 @@ public final class AppState {
         }
     }
 
+    /// Refreshes the sidebar's worktree badges.
+    ///
+    /// Its own loop rather than a limb of `refresh()`: this is one blocking
+    /// `git status` per listed session, so it runs at a fifth of the poll's
+    /// rate. A worktree does not go dirty faster than a person can notice, and
+    /// the session-grid's tiles already set the precedent for a slower
+    /// secondary cadence.
+    private func worktreeLoop() async {
+        while !Task.isCancelled {
+            await refreshWorktrees()
+            try? await Task.sleep(for: .seconds(10))
+        }
+    }
+
+    private func refreshWorktrees() async {
+        // Archived rows are not listed unless asked for, and each one costs a
+        // shell-out like any other.
+        let ids = visibleSessions.map(\.id)
+        guard !ids.isEmpty else {
+            set(worktrees: [:])
+            return
+        }
+        guard let fresh = try? await withoutBlockingTheUI({ [client] in
+            // Sequential on purpose: a badge is not worth N concurrent git
+            // processes, and the loop is already off the main actor.
+            ids.reduce(into: [Session.ID: MoomuxClient.SessionStatus]()) { out, id in
+                if let status = try? client.worktreeStatus(id: id), status.known {
+                    out[id] = status
+                }
+            }
+        }) else {
+            // A failed sweep leaves the last badges up. `connection` is what
+            // says the core is unreachable; blanking them would read as
+            // "everything just got committed and pushed".
+            return
+        }
+        set(worktrees: fresh)
+    }
+
+    /// `@Observable` fires on any assignment, equal or not — and this one lands
+    /// every ten seconds on a map that rarely changes, re-rendering every row.
+    private func set(worktrees fresh: [Session.ID: MoomuxClient.SessionStatus]) {
+        guard fresh != worktrees else { return }
+        worktrees = fresh
+    }
+
     /// Loads (or reloads) worktree and PR state for one session.
     public func loadStatus(for id: Session.ID, force: Bool = false) async {
         guard force || statuses[id] == nil else { return }
@@ -397,6 +455,17 @@ public final class AppState {
                 try client.status(id: id)
             }
             statuses[id] = status
+            // Keep the row's dot honest with the detail panel it sits next to,
+            // rather than letting it wait out the ten-second sweep.
+            if status.known {
+                var fresh = worktrees
+                // The three cheap fields only, not the whole thing: an entry
+                // carrying file counts and a PR would never compare equal to
+                // what the sweep writes, so every sweep would look like a
+                // change and re-render the list.
+                fresh[id] = .init(known: true, dirty: status.dirty, unpushed: status.unpushed)
+                set(worktrees: fresh)
+            }
         } catch {
             // Leave whatever was there; `connection` already carries the
             // failure, and a missing status row is not worth a second alarm.
@@ -420,6 +489,7 @@ public final class AppState {
             // forever or answer for a recreated id.
             let live = Set(snapshot.sessions.map(\.id))
             statuses = statuses.filter { live.contains($0.key) }
+            set(worktrees: worktrees.filter { live.contains($0.key) })
             // A session can disappear without going through this app's own
             // kill/delete (the TUI, another front end, the CLI), which would
             // otherwise leak its pooled tmux client forever.
@@ -606,6 +676,37 @@ public final class AppState {
 
             // Manual reordering is off while the core sorts by last-opened.
             assert(app.canReorder, "no config yet must not disable reordering")
+        }
+
+        // The sidebar's dirty dots. The bit that matters is that a *failed*
+        // sweep and a deleted session are told apart: one leaves the dots
+        // alone, the other takes them down with the row.
+        MainActor.assumeIsolated {
+            let app = AppState()
+            app.set(worktrees: [
+                "p:a": .init(known: true, dirty: true),
+                "p:b": .init(known: true, unpushed: true),
+                "p:c": .init(known: true, dirty: true, unpushed: true),
+            ])
+            // The two bits are independent — ± and ↑ are different work in
+            // different places, and a row can want both icons at once.
+            assert(app.worktrees["p:a"]?.dirty == true)
+            assert(app.worktrees["p:a"]?.unpushed == false)
+            assert(app.worktrees["p:b"]?.dirty == false)
+            assert(app.worktrees["p:b"]?.unpushed == true)
+            assert(app.worktrees["p:c"]?.dirty == true && app.worktrees["p:c"]?.unpushed == true)
+
+            // A session that is gone loses its badges, one that is still here
+            // keeps them — this is the prune `refresh()` runs.
+            app.set(worktrees: app.worktrees.filter { ["p:a"].contains($0.key) })
+            assert(app.worktrees.keys.sorted() == ["p:a"], "\(app.worktrees.keys.sorted())")
+
+            // Committing and pushing everything clears the icons but keeps the
+            // row known — absent and clean are different answers, and only
+            // absent means "we never got one".
+            app.set(worktrees: ["p:a": .init(known: true)])
+            assert(app.worktrees["p:a"]?.dirty == false)
+            assert(app.worktrees["p:a"] != nil, "clean is an answer, not a missing one")
         }
 
         // Which delete dialog opens. The safety-critical one: only a worktree
