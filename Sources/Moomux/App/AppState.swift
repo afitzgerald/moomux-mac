@@ -39,6 +39,11 @@ public final class AppState {
     /// `internal/app`, served over the socket precisely so a front end never
     /// keeps its own copy to drift.
     public private(set) var agentOptions: [AgentOption] = []
+    /// The core's color palettes, fetched once for the same reason. Empty
+    /// until `Themes` answers — `palette` is nil then, and the views fall
+    /// back to SwiftUI's own semantic colors, which is what "default"
+    /// encodes anyway.
+    public private(set) var themes: [ThemePalette] = []
     /// Worktree and PR state, by session id, for sessions that have been
     /// looked at. Deliberately **not** part of the poll loop: each entry costs
     /// a `git status`, a `git log` and a `gh` call over the network, so filling
@@ -359,6 +364,26 @@ public final class AppState {
             ?? []
     }
 
+    /// The palette to draw with: the config's theme, resolved against the
+    /// served list. `config.ThemeByName`'s fallbacks, plus the ANSI one.
+    public var palette: ThemePalette? {
+        ThemePalette.resolved(config?.theme ?? "", in: themes)
+    }
+
+    /// What the theme picker offers, plus whatever is stored if the core has
+    /// not heard of it — an older core against a newer config.toml, which is
+    /// rarer than it was when this list was hardcoded but still possible.
+    ///
+    /// Never empty: a core too old to answer `Themes` would otherwise leave
+    /// the picker with no rows at all, which is the same "renders blank and
+    /// writes nothing" trap as an unmatched tag — and permanent, since
+    /// `loadThemes` would retry that core forever.
+    public var themeNames: [String] {
+        let known = themes.isEmpty ? ["default"] : themes.map(\.name)
+        guard let stored = config?.theme, !stored.isEmpty, !known.contains(stored) else { return known }
+        return known + [stored]
+    }
+
     // MARK: Lifecycle
 
     public func start() {
@@ -372,6 +397,7 @@ public final class AppState {
             Task { [weak self] in await self?.watchLoop() },
             Task { [weak self] in await self?.worktreeLoop() },
             Task { [weak self] in await self?.loadAgentOptions() },
+            Task { [weak self] in await self?.loadThemes() },
         ]
     }
 
@@ -385,6 +411,21 @@ public final class AppState {
                 try client.agentOptions()
             }), !options.isEmpty {
                 agentOptions = options
+                return
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    /// Same retry-until-answered loop as `loadAgentOptions`, and for the same
+    /// reason: a static table in the core's binary, and without it every state
+    /// icon renders in the fallback colors.
+    private func loadThemes() async {
+        while !Task.isCancelled, themes.isEmpty {
+            if let served = try? await withoutBlockingTheUI({ [client] in
+                try client.themes()
+            }), !served.isEmpty {
+                themes = served
                 return
             }
             try? await Task.sleep(for: .seconds(2))

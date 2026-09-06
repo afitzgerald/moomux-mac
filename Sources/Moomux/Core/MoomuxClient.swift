@@ -115,6 +115,7 @@ public final class MoomuxClient: Sendable {
         var alive: [String: Bool]?
         var cfg: Config?
         var agents: [AgentOption]?
+        var themes: [ThemePalette]?
         var hint: String?
         var ok: Bool?
         var dirty: Bool?
@@ -185,6 +186,13 @@ public final class MoomuxClient: Sendable {
     /// Go side, and re-polling it every two seconds would buy nothing.
     public func agentOptions() throws -> [AgentOption] {
         try call("AgentOptions").agents ?? []
+    }
+
+    /// The core's color palettes — the agent-state colors this app renders
+    /// with, and the list the theme picker offers. Fetched once, like
+    /// `agentOptions`: a static table in `internal/config`.
+    public func themes() throws -> [ThemePalette] {
+        try call("Themes").themes ?? []
     }
 
     public func sessions() throws -> [Session] {

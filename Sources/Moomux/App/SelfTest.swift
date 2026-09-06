@@ -23,6 +23,7 @@ enum SelfTest {
         Notifier.demo()
         TmuxSnapshot.demo()
         TerminalColorTheme.demo()
+        Theme.demo()
 
         print("selftest: ok")
         exit(0)

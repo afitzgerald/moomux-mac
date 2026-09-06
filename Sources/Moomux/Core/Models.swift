@@ -208,6 +208,93 @@ public struct AgentOption: Decodable, Hashable, Sendable {
     }
 }
 
+/// `config.Color` — one entry in a palette: a light/dark pair, plus the
+/// optional name of a platform semantic color to prefer over it.
+public struct ThemeColor: Decodable, Hashable, Sendable {
+    /// "#rrggbb", except on an `ansi` palette where these are terminal
+    /// indices ("11") — see `ThemePalette.ansi`.
+    public var light: String
+    public var dark: String
+    /// "accent", "green", "orange", "secondary" — a real system color this
+    /// app should follow instead of the frozen hex, so the state dots track
+    /// the user's live accent. Set only on the "default" theme; the other
+    /// palettes are designer sets that must render as themselves.
+    public var system: String
+
+    enum CodingKeys: String, CodingKey { case light, dark, system }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        light = try c.decodeIfPresent(String.self, forKey: .light) ?? ""
+        dark = try c.decodeIfPresent(String.self, forKey: .dark) ?? ""
+        system = try c.decodeIfPresent(String.self, forKey: .system) ?? ""
+    }
+
+    public init(light: String, dark: String, system: String = "") {
+        self.light = light
+        self.dark = dark
+        self.system = system
+    }
+}
+
+/// `config.Theme` — the full palette a front end renders moomux with, served
+/// by `Themes` for the same reason `AgentOptions` is: neither side keeps its
+/// own copy. This app used to hold two hardcoded tables; the core owns them.
+public struct ThemePalette: Decodable, Hashable, Sendable {
+    public var name: String
+    /// The "terminal" theme's light/dark halves are ANSI indices, not hex,
+    /// and there is no terminal colorscheme here to resolve them against —
+    /// so `resolved(_:in:)` hands back "default" for it rather than parsing.
+    public var ansi: Bool
+
+    public var working: ThemeColor
+    public var done: ThemeColor
+    public var needsInput: ThemeColor
+    public var parked: ThemeColor
+    /// Non-fatal warnings — the sidebar's ± / ↑ badges. Amber in every
+    /// theme, unlike `done`, which is green everywhere now.
+    public var warn: ThemeColor
+
+    // fg/mute/accent/danger/border/sel_bg are served too. Nothing here draws
+    // with them (SwiftUI's own semantic colors do that job), so they are not
+    // decoded — add them the day a view needs one.
+    enum CodingKeys: String, CodingKey {
+        case name, ansi, working, done, parked, warn
+        case needsInput = "needs_input"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let color = { try c.decodeIfPresent(ThemeColor.self, forKey: $0) ?? ThemeColor(light: "", dark: "") }
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        ansi = try c.decodeIfPresent(Bool.self, forKey: .ansi) ?? false
+        working = try color(.working)
+        done = try color(.done)
+        needsInput = try color(.needsInput)
+        parked = try color(.parked)
+        warn = try color(.warn)
+    }
+
+    public func color(for state: AgentState) -> ThemeColor {
+        switch state {
+        case .working: return working
+        case .done: return done
+        case .needsInput: return needsInput
+        case .parked, .unknown: return parked
+        }
+    }
+
+    /// The palette to render `name` with — `config.ThemeByName`, plus this
+    /// app's ANSI fallback. An empty or unrecognized name is "default", the
+    /// same as the Go side; so is the ANSI theme, which nothing here can
+    /// resolve. Nil only before `Themes` has answered.
+    public static func resolved(_ name: String, in themes: [ThemePalette]) -> ThemePalette? {
+        guard let fallback = themes.first else { return nil }
+        let picked = themes.first { $0.name == name } ?? fallback
+        return picked.ansi ? fallback : picked
+    }
+}
+
 public struct Config: Decodable, Sendable {
     public var projects: [String: Project]
     /// The user's manual project order. Names missing from it sort
@@ -471,6 +558,39 @@ public enum Wire {
         assert(agents[0].models == ["default", "sonnet"])
         assert(agents[1].models.isEmpty, "an absent model list must be empty, not a crash")
         assert(agents[1].thinking == ["default"])
+
+        // The served palettes. `needs_input` is snake_case on the wire, the
+        // ANSI theme must resolve to default rather than trying to read "12"
+        // as hex, and an unrecognized name falls back the way ThemeByName
+        // does.
+        let palettes = try! decoder.decode([ThemePalette].self, from: Data("""
+        [{"name":"default","working":{"light":"#007aff","dark":"#007aff","system":"accent"},
+          "done":{"light":"#34c759","dark":"#30d158","system":"green"},
+          "needs_input":{"light":"#ff8d28","dark":"#ff9230","system":"orange"},
+          "parked":{"light":"#808080","dark":"#99999a","system":"secondary"},
+          "warn":{"light":"#946f1a","dark":"#e0af68"}},
+         {"name":"terminal","ansi":true,"working":{"light":"12","dark":"12"},
+          "done":{"light":"10","dark":"10"},"needs_input":{"light":"11","dark":"11"},
+          "parked":{"light":"7","dark":"7"},"warn":{"light":"11","dark":"11"}},
+         {"name":"gruvbox","working":{"light":"#076678","dark":"#83a598"},
+          "done":{"light":"#79740e","dark":"#b8bb26"},
+          "needs_input":{"light":"#af3a03","dark":"#fe8019"},
+          "parked":{"light":"#a89984","dark":"#665c54"},
+          "warn":{"light":"#b57614","dark":"#fabd2f"}}]
+        """.utf8))
+        assert(palettes.count == 3)
+        assert(palettes[0].needsInput.light == "#ff8d28", "needs_input is snake_case on the wire")
+        assert(palettes[0].working.system == "accent", "the live system accent beats the frozen hex")
+        assert(palettes[2].working.system.isEmpty, "only default names system colors")
+        assert(palettes[0].color(for: .unknown) == palettes[0].parked)
+        assert(ThemePalette.resolved("gruvbox", in: palettes)?.name == "gruvbox")
+        assert(ThemePalette.resolved("terminal", in: palettes)?.name == "default",
+               "ANSI indices are not hex — fall back rather than parse them")
+        assert(ThemePalette.resolved("", in: palettes)?.name == "default")
+        assert(ThemePalette.resolved("nope", in: palettes)?.name == "default")
+        assert(ThemePalette.resolved("default", in: []) == nil, "nil only before Themes answered")
+        assert(palettes[0].warn.light != palettes[0].done.light,
+               "warn is amber and done is green; the git badges follow warn")
 
         // prstatus.Info: Go field names, and CI is capitalised.
         let pr = try! decoder.decode(

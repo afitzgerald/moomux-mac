@@ -30,30 +30,92 @@ extension ToolbarContent {
     }
 }
 
-/// Semantic colors only — literal hex breaks dark mode.
+/// The colors this app draws sessions with. Every one of them comes from the
+/// core's `Themes` table now — no hardcoded palette here, and no literal hex
+/// outside `resolve`, which honours both halves of a served light/dark pair.
 enum Theme {
-    static func color(_ state: AgentState) -> Color {
-        switch state {
-        case .needsInput: return .orange
-        case .working: return .accentColor
-        case .done: return .green
-        case .parked: return .secondary
-        case .unknown: return .secondary
-        }
+    /// The agent-state colors, from the palette the core serves for the
+    /// config's current theme. Nil before `Themes` has answered, which falls
+    /// back to SwiftUI's own semantic colors — literally what the "default"
+    /// palette encodes, so the zero state is the right one.
+    static func color(_ state: AgentState, _ palette: ThemePalette?) -> Color {
+        resolve(palette?.color(for: state)) ?? {
+            switch state {
+            case .needsInput: return .orange
+            case .working: return .accentColor
+            case .done: return .green
+            case .parked, .unknown: return .secondary
+            }
+        }()
     }
 
     /// The sidebar's ± and ↑ badges. `internal/tui/list.go` draws both in
-    /// `warnStyle`, which is built from the palette's *done* entry — so this is
-    /// that same join, and re-theming `done` moves the badges with it.
-    ///
-    /// It does **not** currently render the TUI's color: `done` is amber there
-    /// (`#e0af68` default, `#fabd2f` gruvbox, ANSI 11 terminal) and green here,
-    /// so the badges come out green. Kept as the join rather than hardcoding
-    /// amber on purpose — the mapping is the thing shared with the TUI, and
-    /// fixing `color(.done)` fixes these too.
-    static let gitWarn = color(.done)
+    /// `warnStyle`, built from the palette's *warn* entry — so this is that
+    /// same join, and the two front ends now agree. (It used to bind to
+    /// `done`, which came out green here and amber there; the core split
+    /// `warn` out of `done` to end exactly that.)
+    static func gitWarn(_ palette: ThemePalette?) -> Color {
+        resolve(palette?.warn) ?? .orange
+    }
+
+    /// A served color as SwiftUI sees it. `system` wins when the core names
+    /// one — that is how the state dots keep following the user's live
+    /// accent instead of a frozen #007aff. Otherwise the light/dark pair, as
+    /// a dynamic NSColor so AppKit resolves the half at draw time and no
+    /// view has to observe the color scheme.
+    private static func resolve(_ c: ThemeColor?) -> Color? {
+        guard let c else { return nil }
+        switch c.system {
+        case "accent": return .accentColor
+        case "green": return .green
+        case "orange": return .orange
+        case "secondary": return .secondary
+        default: break
+        }
+        guard nsColor(c.light) != nil, nsColor(c.dark) != nil else { return nil }
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return nsColor(dark ? c.dark : c.light) ?? .labelColor
+        })
+    }
+
+    /// "#rrggbb" only — the one format the core sends for a non-ANSI theme.
+    private static func nsColor(_ hex: String) -> NSColor? {
+        var h = Substring(hex)
+        guard h.first == "#" else { return nil }
+        h = h.dropFirst()
+        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+        return NSColor(srgbRed: CGFloat((v >> 16) & 0xff) / 255,
+                       green: CGFloat((v >> 8) & 0xff) / 255,
+                       blue: CGFloat(v & 0xff) / 255,
+                       alpha: 1)
+    }
 
     static let mono = Font.system(size: 12, design: .monospaced)
+
+    /// A regression here is silent by construction — a hex the parser rejects
+    /// falls through to the SwiftUI semantic color and still renders something
+    /// plausible — so the parser gets asserts rather than a screenshot.
+    static func demo() {
+        assert(nsColor("#076678") != nil)
+        assert(nsColor("12") == nil, "an ANSI index is not hex")
+        assert(nsColor("#12345") == nil && nsColor("#1234567") == nil, "six digits or nothing")
+        assert(nsColor("076678") == nil, "the # is required")
+        assert(nsColor("#gggggg") == nil)
+        assert(nsColor("#ffffff")?.usingColorSpace(.sRGB)?.blueComponent == 1)
+        assert(nsColor("#ff0000")?.usingColorSpace(.sRGB)?.blueComponent == 0, "channels in RGB order")
+
+        // system beats hex, and only for the names the core actually sends.
+        assert(resolve(ThemeColor(light: "#ff0000", dark: "#ff0000", system: "accent")) == .accentColor)
+        assert(resolve(ThemeColor(light: "#ff0000", dark: "#ff0000", system: "chartreuse")) != nil,
+               "an unfamiliar system name falls back to the pair, not to nil")
+        assert(resolve(nil) == nil)
+        // The ANSI theme never reaches here (`ThemePalette.resolved` swaps it
+        // for default), but a half it could not parse must read as "no color"
+        // so the caller's semantic fallback wins.
+        assert(resolve(ThemeColor(light: "11", dark: "11")) == nil)
+        assert(resolve(ThemeColor(light: "#83a598", dark: "")) == nil, "both halves or neither")
+    }
 }
 
 // MARK: - Root
@@ -650,7 +712,7 @@ private struct SessionRow: View {
         let state = app.state(for: session)
         HStack(spacing: 8) {
             Image(systemName: state.symbol)
-                .foregroundStyle(Theme.color(state))
+                .foregroundStyle(Theme.color(state, app.palette))
                 .help(state.label)
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.name)
@@ -671,12 +733,12 @@ private struct SessionRow: View {
             if let git = app.worktrees[session.id] {
                 if git.dirty {
                     Image(systemName: "plusminus")
-                        .foregroundStyle(Theme.gitWarn)
+                        .foregroundStyle(Theme.gitWarn(app.palette))
                         .help("uncommitted changes")
                 }
                 if git.unpushed {
                     Image(systemName: "arrow.up")
-                        .foregroundStyle(Theme.gitWarn)
+                        .foregroundStyle(Theme.gitWarn(app.palette))
                         .help("unpushed commits")
                 }
             }
@@ -1004,7 +1066,7 @@ struct MenuBarContent: View {
                 } label: {
                     let state = app.state(for: session)
                     HStack {
-                        Image(systemName: state.symbol).foregroundStyle(Theme.color(state))
+                        Image(systemName: state.symbol).foregroundStyle(Theme.color(state, app.palette))
                         Text("\(session.project) · \(session.name)")
                         Spacer()
                         Text(state.label).foregroundStyle(.secondary)
