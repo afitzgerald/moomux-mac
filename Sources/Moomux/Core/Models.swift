@@ -300,11 +300,16 @@ public struct PRInfo: Decodable, Equatable, Sendable {
 /// One tick of `watcher.Snapshot`: worktree path → state.
 public struct StatusSnapshot: Decodable, Sendable {
     public var states: [String: AgentState]
+    /// Worktree path → the same flavor-text quip the Go TUI's header/detail
+    /// cow shows, picked server-side (`tui.PickQuip`) so both front ends
+    /// render byte-identical text for a session.
+    public var quips: [String: String]
     public var pollTime: Date
     public var err: String?
 
     enum CodingKeys: String, CodingKey {
         case states
+        case quips
         case pollTime = "poll_time"
         case err
     }
@@ -315,6 +320,7 @@ public struct StatusSnapshot: Decodable, Sendable {
         // would throw, and one unknown state must not tear down the stream.
         let raw = try c.decodeIfPresent([String: Int].self, forKey: .states) ?? [:]
         states = raw.mapValues { AgentState(rawValue: $0) ?? .unknown }
+        quips = try c.decodeIfPresent([String: String].self, forKey: .quips) ?? [:]
         pollTime = try c.decodeIfPresent(Date.self, forKey: .pollTime) ?? Date()
         err = try c.decodeIfPresent(String.self, forKey: .err)
     }
@@ -482,12 +488,19 @@ public enum Wire {
 
         // Snapshot states are raw ints, and an unfamiliar one must not throw.
         let snapJSON = """
-        {"states":{"/tmp/a":4,"/tmp/b":3,"/tmp/c":99},"poll_time":"2026-09-02T10:11:12Z"}
+        {"states":{"/tmp/a":4,"/tmp/b":3,"/tmp/c":99},"quips":{"/tmp/a":"moo-mentum building"},"poll_time":"2026-09-02T10:11:12Z"}
         """
         let snap = try! decoder.decode(StatusSnapshot.self, from: Data(snapJSON.utf8))
         assert(snap.states["/tmp/a"] == .needsInput)
         assert(snap.states["/tmp/b"] == .working)
         assert(snap.states["/tmp/c"] == .unknown, "an unknown state int must degrade, not throw")
+        assert(snap.quips["/tmp/a"] == "moo-mentum building")
         assert(snap.err == nil)
+
+        // A snapshot with no quips field (an older core) must decode as empty,
+        // not throw.
+        let noQuips = try! decoder.decode(
+            StatusSnapshot.self, from: Data(#"{"states":{},"poll_time":"2026-09-02T10:11:12Z"}"#.utf8))
+        assert(noQuips.quips.isEmpty)
     }
 }
