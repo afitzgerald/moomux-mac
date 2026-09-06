@@ -7,6 +7,28 @@ private let cowNoseImage: NSImage? = Bundle.main
     .url(forResource: "moomux-terminal-nose", withExtension: "svg")
     .flatMap(NSImage.init(contentsOf:))
 
+/// `sharedBackgroundVisibility` is macOS 26 SDK API — referencing it at all,
+/// even behind `#available`, fails to compile against an older SDK (that's
+/// a *runtime* check; the symbol still has to exist at compile time). CI's
+/// macos-15 runner has no such SDK. `#if compiler(>=6.2)` is a *compile*-time
+/// gate instead: Xcode 26 is the first release whose Swift compiler reports
+/// that version, and it always ships the macOS 26 SDK alongside it — so
+/// whenever this branch is even parsed, the symbol is guaranteed present.
+extension ToolbarContent {
+    @ToolbarContentBuilder
+    fileprivate func hidingSharedBackground() -> some ToolbarContent {
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) {
+            self.sharedBackgroundVisibility(.hidden)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+}
+
 /// Semantic colors only — literal hex breaks dark mode.
 enum Theme {
     static func color(_ state: AgentState) -> Color {
@@ -65,14 +87,11 @@ struct RootView: View {
             // right after the sidebar toggle.
             //
             // macOS 26's Liquid Glass toolbar draws its own capsule around
-            // every item's content by default, which shows as a ring around
-            // CowQuip's own speech-bubble fill on that OS. There's a
-            // per-item opt-out (`sharedBackgroundVisibility`), but it's
-            // macOS-26-only API — referencing it at all fails to compile
-            // against the older SDK CI builds against (Package.swift pins
-            // .macOS(.v14) for exactly this reason), `#available` or not.
-            // Not worth chasing until the CI runner's SDK catches up.
+            // every item's content by default — a ring around CowQuip's own
+            // speech-bubble fill. `hidingSharedBackground` opts the item out
+            // on that OS; older macOS never drew that ring to begin with.
             ToolbarItem(placement: .navigation) { RootTitle() }
+                .hidingSharedBackground()
             ToolbarItem(placement: .status) { ConnectionBadge() }
             ToolbarItem {
                 Button {
