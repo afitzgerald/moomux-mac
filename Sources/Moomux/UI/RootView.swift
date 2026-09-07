@@ -929,6 +929,10 @@ private struct SessionDetail: View {
         // (no live tmux, or no tmux binary), and `SessionInfo` still covers
         // that case. `attach` no-ops if already attached, so re-running this
         // on `session.id` changes (not on detach) is safe.
+        //
+        // The `isAlive` guard is load-bearing now that `attach` revives a
+        // parked session: browsing the sidebar must not relaunch agents.
+        // Starting one back up stays a button press.
         .task(id: session.id) {
             await app.loadStatus(for: session.id)
             if app.isAlive(session) && ToolPath.find("tmux") != nil {
@@ -955,16 +959,18 @@ private struct SessionInfo: View {
                             Label("Attach", systemImage: "terminal")
                         }
                         .keyboardShortcut(.return)
-                        .disabled(!app.isAlive(session) || ToolPath.find("tmux") == nil)
-                        .help("Attach this tmux session inside the app")
+                        .disabled(ToolPath.find("tmux") == nil)
+                        .help("Attach this tmux session inside the app, starting it if it isn't running")
 
                         Button {
                             app.open(session)
                         } label: {
                             Label("Open in terminal", systemImage: "arrow.up.forward.app")
                         }
-                        // The core's own open path: a real terminal window, and
-                        // what revives a session whose tmux is gone.
+                        // A link out and nothing else. Reviving a parked session
+                        // is Attach's job now, so this stays disabled rather
+                        // than quietly starting an agent in another app's window.
+                        .disabled(!app.isAlive(session))
                         .help("Hand this session to your terminal app, as the TUI does")
 
                         // The Ticket/PR rows below already render the result;
@@ -992,11 +998,11 @@ private struct SessionInfo: View {
                         .disabled(!app.canReview(session))
                         .help("Open this worktree's diff in a new tmux window (⌘G)")
                     }
-                    if !app.isAlive(session) {
-                        Text("No live tmux session — open it to start one.")
-                            .foregroundStyle(.secondary)
-                    } else if ToolPath.find("tmux") == nil {
+                    if ToolPath.find("tmux") == nil {
                         Text("Can't find a tmux binary to attach with.")
+                            .foregroundStyle(.secondary)
+                    } else if !app.isAlive(session) {
+                        Text("No live tmux session — Attach starts one.")
                             .foregroundStyle(.secondary)
                     }
                 }
