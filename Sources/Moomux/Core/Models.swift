@@ -2,13 +2,11 @@ import Foundation
 
 // The wire types for `moomux serve`. They mirror the Go core's JSON.
 //
-// `session.Session`, `config.Config` and `config.Project` all carry
-// `json:"..."` tags now and are snake_case throughout. `prstatus.Info` is the
-// one holdout — it has no json tags, so it crosses the wire as Go's
-// capitalized field names (see the note on `PRInfo` below). Every type below
-// still declares explicit `CodingKeys` rather than a shared
-// `keyDecodingStrategy`, so a decode that starts coming back with nil fields
-// has one obvious place to check first.
+// Everything on the wire is snake_case now, `prstatus.Info` included — with
+// one exception, `CreateRequest`, which has no json tags at all and so crosses
+// as Go's own field names (see it below). Every type here still declares
+// explicit `CodingKeys` rather than a shared `keyDecodingStrategy`, so a decode
+// that starts coming back with nil fields has one obvious place to check first.
 //
 // These structs are also deliberately *partial* — they decode the fields this
 // app shows and ignore the rest. That is safe in one direction only: nothing
@@ -18,14 +16,22 @@ import Foundation
 // MARK: - Agent state
 
 /// What a session's agent is doing. Mirrors `watcher.State`, which crosses the
-/// wire as its raw `int` — so the case order is the wire format. Do not
-/// reorder.
-public enum AgentState: Int, Sendable, CaseIterable {
-    case unknown = 0
+/// wire as its *name* — the Go enum is deliberately ranked, so its integers
+/// exist to be reordered and were never a wire format. The names are also the
+/// per-state color keys `Themes` serves, so there is one vocabulary.
+public enum AgentState: String, Decodable, Sendable, CaseIterable {
+    case unknown
     case parked
     case done
     case working
-    case needsInput
+    case needsInput = "needs-input"
+
+    /// A name this build has never heard of must not throw: one unfamiliar
+    /// state would otherwise tear down the whole snapshot.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = AgentState(rawValue: raw) ?? .unknown
+    }
 
     public var label: String {
         switch self {
@@ -342,8 +348,8 @@ public struct Config: Decodable, Sendable {
 
 // MARK: - Pull request
 
-/// `prstatus.Info`. No json tags on the Go side, so it crosses the wire as
-/// Go's capitalized field names — and `CI` is spelled exactly that.
+/// `prstatus.Info`, arriving inside a `SessionView` rather than from a call of
+/// its own — the core caches and jitters the `gh pr view` behind it.
 public struct PRInfo: Decodable, Equatable, Sendable {
     /// OPEN, MERGED, CLOSED
     public var state: String
@@ -352,11 +358,7 @@ public struct PRInfo: Decodable, Equatable, Sendable {
     /// PASSING, FAILING, PENDING, NONE
     public var ci: String
 
-    enum CodingKeys: String, CodingKey {
-        case state = "State"
-        case mergeable = "Mergeable"
-        case ci = "CI"
-    }
+    enum CodingKeys: String, CodingKey { case state, mergeable, ci }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -382,34 +384,151 @@ public struct PRInfo: Decodable, Equatable, Sendable {
     }
 }
 
-// MARK: - Status stream
+// MARK: - The snapshot stream
 
-/// One tick of `watcher.Snapshot`: worktree path → state.
-public struct StatusSnapshot: Decodable, Sendable {
-    public var states: [String: AgentState]
-    /// Worktree path → the same flavor-text quip the Go TUI's header/detail
-    /// cow shows, picked server-side (`tui.PickQuip`) so both front ends
-    /// render byte-identical text for a session.
-    public var quips: [String: String]
-    public var pollTime: Date
-    public var err: String?
+/// `sessionview.View` — everything about a session that isn't stored on the
+/// session record: what it's doing, and what that costs a subprocess to find
+/// out. The core derives all of it once and both front ends render it; nothing
+/// here is recomputed on this side.
+public struct SessionView: Decodable, Equatable, Sendable {
+    public var id: String
+    /// The *effective* state: tmux liveness is already folded in, so a session
+    /// whose tmux window is gone reads `.parked` whatever its agent last wrote.
+    public var state: AgentState
+    public var label: String
+    /// The flavor-text quip the TUI's cow says, picked server-side so both
+    /// front ends show a session byte-identical text.
+    public var quip: String
+    /// The first prompt: the one captured at creation, or one recovered from
+    /// the agent's own logs for a session moomux didn't start.
+    public var prompt: String
+    /// False when the worktree's status couldn't be determined (not a git
+    /// repo, or not checked yet) — `dirty` and `unpushed` mean nothing then.
+    public var gitOK: Bool
+    public var dirty: Bool
+    public var unpushed: Bool
+    public var pr: PRInfo?
 
     enum CodingKeys: String, CodingKey {
-        case states
-        case quips
-        case pollTime = "poll_time"
-        case err
+        case id, state, label, quip, prompt, dirty, unpushed, pr
+        case gitOK = "git_ok"
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        // Decoded as Int, not as AgentState: an int this build doesn't know
-        // would throw, and one unknown state must not tear down the stream.
-        let raw = try c.decodeIfPresent([String: Int].self, forKey: .states) ?? [:]
-        states = raw.mapValues { AgentState(rawValue: $0) ?? .unknown }
-        quips = try c.decodeIfPresent([String: String].self, forKey: .quips) ?? [:]
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        state = try c.decodeIfPresent(AgentState.self, forKey: .state) ?? .unknown
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+        quip = try c.decodeIfPresent(String.self, forKey: .quip) ?? ""
+        prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+        gitOK = try c.decodeIfPresent(Bool.self, forKey: .gitOK) ?? false
+        dirty = try c.decodeIfPresent(Bool.self, forKey: .dirty) ?? false
+        unpushed = try c.decodeIfPresent(Bool.self, forKey: .unpushed) ?? false
+        pr = try c.decodeIfPresent(PRInfo.self, forKey: .pr)
+    }
+}
+
+/// One tick of `sessionview.Snapshot`: the whole session list **in display
+/// order**, plus a view per session id.
+///
+/// Absolute state, never a delta — a client that misses one loses nothing, and
+/// the whole map is replaced rather than merged. (The old path-keyed
+/// `watcher.Snapshot` had to be merged, because each sub-watcher reported only
+/// its own agent's paths. The core does that join now.)
+public struct Snapshot: Decodable, Sendable {
+    /// Already sorted by the core, live-first tiebreak included. A client
+    /// filters this and renders it; it does not sort.
+    public var sessions: [Session]
+    /// Session id → its derived view.
+    public var views: [String: SessionView]
+    public var pollTime: Date
+    public var err: String?
+    /// False when the snapshot carried no `views` key at all: a core older
+    /// than the derived-state protocol, still sending path-keyed `states` and
+    /// `quips`. Its snapshot has no session list either, so decoding one
+    /// yields an *empty* list that is indistinguishable from "every session
+    /// was deleted" unless absence is tracked separately — which is what this
+    /// is. There is no version handshake on this socket; this is the only
+    /// signal there is.
+    public var derived: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case sessions, views, err
+        case pollTime = "poll_time"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessions = try c.decodeIfPresent([Session].self, forKey: .sessions) ?? []
+        views = try c.decodeIfPresent([String: SessionView].self, forKey: .views) ?? [:]
         pollTime = try c.decodeIfPresent(Date.self, forKey: .pollTime) ?? Date()
         err = try c.decodeIfPresent(String.self, forKey: .err)
+        // Present-but-null counts: a core with no sessions at all sends
+        // `"views": null`, and that is an answer.
+        derived = c.contains(.views)
+    }
+}
+
+// MARK: - Creating a session
+
+/// `session.CreateRequest` — the whole "new session" transaction, in one
+/// object. The core cuts the worktree and branch, starts the agent, attaches
+/// the PR tag, composes the first prompt (thinking-level prefix, ticket and PR
+/// lines) and types it into the pane. None of that is this app's to replay.
+///
+/// **It has no `json` tags on the Go side**, so unlike everything else here it
+/// crosses as Go's own field names. `PR` is spelled exactly that.
+public struct CreateRequest: Encodable, Sendable {
+    public var project: String
+    public var name: String
+    /// Empty means the project's default agent.
+    public var agent: String
+    /// An existing branch to check out; empty cuts a new one.
+    public var branch: String
+    public var baseBranch: String
+    public var ticket: String
+    public var pr: String
+    public var model: String
+    public var thinking: String
+    /// The first task for the agent. Empty types nothing into the pane.
+    public var prompt: String
+    public var autoSubmit: Bool
+    /// nil means "use the project's own default" — which is why the Go field
+    /// is a pointer. This app sends an explicit choice, since its form shows
+    /// one; it never opens a terminal tab, so `OpenTerminal` is never sent.
+    public var dangerous: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case project = "Project"
+        case name = "Name"
+        case agent = "Agent"
+        case branch = "Branch"
+        case baseBranch = "BaseBranch"
+        case ticket = "Ticket"
+        case pr = "PR"
+        case model = "Model"
+        case thinking = "Thinking"
+        case prompt = "Prompt"
+        case autoSubmit = "AutoSubmit"
+        case dangerous = "Dangerous"
+    }
+
+    public init(project: String, name: String, agent: String = "", branch: String = "",
+                baseBranch: String = "", ticket: String = "", pr: String = "",
+                model: String = "", thinking: String = "", prompt: String = "",
+                autoSubmit: Bool = false, dangerous: Bool? = nil) {
+        self.project = project
+        self.name = name
+        self.agent = agent
+        self.branch = branch
+        self.baseBranch = baseBranch
+        self.ticket = ticket
+        self.pr = pr
+        self.model = model
+        self.thinking = thinking
+        self.prompt = prompt
+        self.autoSubmit = autoSubmit
+        self.dangerous = dangerous
     }
 }
 
@@ -592,35 +711,80 @@ public enum Wire {
         assert(palettes[0].warn.light != palettes[0].done.light,
                "warn is amber and done is green; the git badges follow warn")
 
-        // prstatus.Info: Go field names, and CI is capitalised.
+        // prstatus.Info: lowercase keys now, like everything else on the wire.
         let pr = try! decoder.decode(
             PRInfo.self,
-            from: Data(#"{"State":"OPEN","Mergeable":"CONFLICTING","CI":"FAILING"}"#.utf8))
+            from: Data(#"{"state":"OPEN","mergeable":"CONFLICTING","ci":"FAILING"}"#.utf8))
         assert(pr.state == "OPEN" && pr.ci == "FAILING" && pr.mergeable == "CONFLICTING")
         assert(pr.summary == "open · checks failing · conflicts", pr.summary)
         let merged = try! decoder.decode(
-            PRInfo.self, from: Data(#"{"State":"MERGED","Mergeable":"UNKNOWN","CI":"NONE"}"#.utf8))
+            PRInfo.self, from: Data(#"{"state":"MERGED","mergeable":"UNKNOWN","ci":"NONE"}"#.utf8))
         assert(merged.summary == "merged", merged.summary)
         // A struct Go could not fill in at all must read as "nothing to show",
         // not as a row full of blanks.
         let empty = try! decoder.decode(PRInfo.self, from: Data("{}".utf8))
         assert(empty.summary.isEmpty)
 
-        // Snapshot states are raw ints, and an unfamiliar one must not throw.
+        // A snapshot as sessionview.Snapshot sends one: the session list in
+        // display order, plus a view per session id. States are *names* — an
+        // int would be the old wire format, and an unfamiliar name must
+        // degrade rather than tear the stream down.
         let snapJSON = """
-        {"states":{"/tmp/a":4,"/tmp/b":3,"/tmp/c":99},"quips":{"/tmp/a":"moo-mentum building"},"poll_time":"2026-09-02T10:11:12Z"}
+        {"sessions":[{"id":"p:a","project":"p","name":"a","worktree_path":"/wt/a"},
+                     {"id":"p:b","project":"p","name":"b","worktree_path":"/wt/b"}],
+         "views":{"p:a":{"id":"p:a","state":"needs-input","label":"mooing for you",
+                         "quip":"moo-ve this along","prompt":"fix the thing",
+                         "git_ok":true,"dirty":true,
+                         "pr":{"state":"OPEN","mergeable":"MERGEABLE","ci":"PASSING"}},
+                  "p:b":{"id":"p:b","state":"parked","label":"in the barn"},
+                  "p:c":{"id":"p:c","state":"grazing"}},
+         "poll_time":"2026-09-02T10:11:12Z"}
         """
-        let snap = try! decoder.decode(StatusSnapshot.self, from: Data(snapJSON.utf8))
-        assert(snap.states["/tmp/a"] == .needsInput)
-        assert(snap.states["/tmp/b"] == .working)
-        assert(snap.states["/tmp/c"] == .unknown, "an unknown state int must degrade, not throw")
-        assert(snap.quips["/tmp/a"] == "moo-mentum building")
+        let snap = try! decoder.decode(Snapshot.self, from: Data(snapJSON.utf8))
+        assert(snap.sessions.map(\.id) == ["p:a", "p:b"], "the order served is the order shown")
+        assert(snap.views["p:a"]?.state == .needsInput, "needs-input is hyphenated on the wire")
+        assert(snap.views["p:a"]?.quip == "moo-ve this along")
+        assert(snap.views["p:a"]?.prompt == "fix the thing")
+        assert(snap.views["p:a"]?.gitOK == true && snap.views["p:a"]?.dirty == true)
+        assert(snap.views["p:a"]?.unpushed == false, "omitempty means absent, not unknown")
+        assert(snap.views["p:a"]?.pr?.ci == "PASSING")
+        assert(snap.views["p:b"]?.state == .parked)
+        assert(snap.views["p:b"]?.gitOK == false, "no git_ok means don't draw a badge")
+        assert(snap.views["p:b"]?.pr == nil, "no PR attached is nil, not a blank row")
+        assert(snap.views["p:c"]?.state == .unknown, "an unknown state name must degrade, not throw")
         assert(snap.err == nil)
+        assert(snap.derived)
 
-        // A snapshot with no quips field (an older core) must decode as empty,
-        // not throw.
-        let noQuips = try! decoder.decode(
-            StatusSnapshot.self, from: Data(#"{"states":{},"poll_time":"2026-09-02T10:11:12Z"}"#.utf8))
-        assert(noQuips.quips.isEmpty)
+        // A core too old to have `internal/sessionview` streams the previous
+        // shape — path-keyed `states`, no session list. It decodes without
+        // throwing (every field is optional), so `derived` is the only thing
+        // between it and a client rendering an empty sidebar over 22 real
+        // sessions. Measured against a live one: keys were `["poll_time",
+        // "states"]` exactly.
+        let old = try! decoder.decode(Snapshot.self, from: Data(#"""
+        {"states":{"/wt/a":3},"quips":{"/wt/a":"moo-mentum building"},
+         "poll_time":"2026-09-02T10:11:12Z"}
+        """#.utf8))
+        assert(!old.derived, "no views key means this core does not speak the new protocol")
+        assert(old.sessions.isEmpty && old.views.isEmpty)
+        // …and an *empty* answer from a core that does speak it is still an
+        // answer, null map included.
+        let none = try! decoder.decode(
+            Snapshot.self, from: Data(#"{"sessions":null,"views":null,"poll_time":"2026-09-02T10:11:12Z"}"#.utf8))
+        assert(none.derived, "present-but-null is an answer, not an older core")
+        assert(none.sessions.isEmpty)
+
+        // A CreateRequest is the one thing this app sends that Go decodes off
+        // its *field names* — CreateRequest carries no json tags. A key that
+        // stops matching is silent on both sides: the session is created with
+        // the field simply unset.
+        let req = String(decoding: try! out.encode(CreateRequest(
+            project: "moomux", name: "macos", agent: "codex", baseBranch: "develop",
+            ticket: "T-1", pr: "http://p/1", model: "gpt", thinking: "high",
+            prompt: "fix it", autoSubmit: true, dangerous: true)), as: UTF8.self)
+        assert(req == #"{"Agent":"codex","AutoSubmit":true,"BaseBranch":"develop","Branch":"","#
+               + #""Dangerous":true,"Model":"gpt","Name":"macos","PR":"http://p/1","#
+               + #""Project":"moomux","Prompt":"fix it","Thinking":"high","Ticket":"T-1"}"#, req)
+        assert(!req.contains("OpenTerminal"), "a new session belongs in this app, not in iTerm")
     }
 }

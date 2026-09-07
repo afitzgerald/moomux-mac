@@ -23,16 +23,16 @@ public final class AppState {
 
     // MARK: Server state
 
+    /// The session list, **in the order the core served it**. Filtered here
+    /// (by project, by archived, by search) and never sorted — the live-first
+    /// tiebreak on top of the manual/recent-first order is the core's, so that
+    /// two front ends cannot list the same project differently.
     public private(set) var sessions: [Session] = []
-    public private(set) var projects: [String] = []
-    /// Session id → tmux session still alive.
-    public private(set) var alive: [String: Bool] = [:]
-    /// Worktree path → agent state. Keyed by path because that is what the
-    /// watcher observes; `state(for:)` does the join.
-    public private(set) var states: [String: AgentState] = [:]
-    /// Worktree path → flavor-text quip, same join as `states` and merged the
-    /// same way. See `quip(for:)`.
-    public private(set) var quips: [String: String] = [:]
+    /// Session id → everything derived about it: effective state (tmux
+    /// liveness already folded in), label, quip, recovered first prompt, git
+    /// and PR status. Replaced wholesale on every snapshot — it is absolute
+    /// state, not a delta, and no longer a per-agent partial to merge.
+    public private(set) var views: [Session.ID: SessionView] = [:]
     public private(set) var config: Config?
     /// Which agents the core can launch, and what to offer in a model or
     /// thinking-level picker for each. Fetched once — it is a static table in
@@ -44,23 +44,13 @@ public final class AppState {
     /// back to SwiftUI's own semantic colors, which is what "default"
     /// encodes anyway.
     public private(set) var themes: [ThemePalette] = []
-    /// Worktree and PR state, by session id, for sessions that have been
-    /// looked at. Deliberately **not** part of the poll loop: each entry costs
-    /// a `git status`, a `git log` and a `gh` call over the network, so filling
-    /// this for every session every two seconds would hammer the machine and
-    /// GitHub both. Fetched when a session is selected, and on refresh.
+    /// Fresh worktree state and change counts, by session id, for sessions
+    /// that have been looked at. The snapshot already carries dirty/unpushed
+    /// for every row — this is the *on-demand* version: the delete dialog's
+    /// guard before removing a worktree, and the file/commit counts the detail
+    /// pane shows. Two shell-outs per entry, so it is fetched on selection
+    /// rather than polled.
     public private(set) var statuses: [Session.ID: MoomuxClient.SessionStatus] = [:]
-    /// Uncommitted changes and unpushed commits, by session id — the sidebar's
-    /// two badges, and nothing else. Only `known`/`dirty`/`unpushed` are
-    /// filled: this comes from `worktreeStatus` alone (one `git status`, no
-    /// `git log`, no `gh`), which is what makes polling it for every row
-    /// affordable at all. Absent means "not a git worktree, or we could not
-    /// ask" — the sweep only records answers it got.
-    ///
-    /// Kept apart from `statuses` rather than folded in, because sharing one
-    /// map would either clobber the selected session's file counts and PR or
-    /// need the loop to skip that one row.
-    public private(set) var worktrees: [Session.ID: MoomuxClient.SessionStatus] = [:]
 
     public private(set) var connection: Connection = .connecting
     /// Set when the status stream drops. Without it the last states keep
@@ -220,6 +210,11 @@ public final class AppState {
     public let client: MoomuxClient
 
     private var tasks: [Task<Void, Never>] = []
+    /// Whether the snapshot stream is currently delivering. It owns the
+    /// session list while it is; the poll loop takes over when it is not (a
+    /// core with no `Source`, or one that is simply down), which is the only
+    /// reason a pull of `Sessions` still happens on a schedule at all.
+    @ObservationIgnored private var streaming = false
     /// No view reads this, and `@Observable` fires on any assignment.
     @ObservationIgnored private var notifier: Notifier?
 
@@ -229,25 +224,56 @@ public final class AppState {
 
     // MARK: Derived
 
-    /// `internal/tui`'s `effectiveState`: with tmux dead the agent's status
-    /// file is stale, so the last watcher tick before a kill would otherwise
-    /// leave the row spinning on "working" forever.
+    /// The core's `sessionview.View.State` — already the *effective* one, with
+    /// tmux liveness folded in. Unknown only before the first snapshot, or for
+    /// a session the core has no view for yet.
     public func state(for session: Session) -> AgentState {
-        guard isAlive(session) else { return .parked }
-        return states[session.worktreePath] ?? .unknown
+        views[session.id]?.state ?? .unknown
     }
 
     public func quip(for session: Session) -> String? {
-        quips[session.worktreePath]
+        views[session.id]?.quip
     }
 
+    /// What to *call* a session's state. The core serves the wording
+    /// (`sessionview.Label`) so both front ends say the same thing about the
+    /// same session; `AgentState.label` is only the fallback for before the
+    /// first snapshot, when there is nothing served to say.
+    public func label(for session: Session) -> String {
+        let served = views[session.id]?.label ?? ""
+        return served.isEmpty ? state(for: session).label : served
+    }
+
+    /// The row's ± / ↑ badges: the snapshot's git status normally, and the
+    /// fresher on-demand answer for a session that has been looked at.
+    ///
+    /// The core caches git status for about a minute (jittered), so without
+    /// this a session whose pane just committed and pushed shows "clean" in
+    /// the detail pane and a dirty badge on its own row for up to another
+    /// minute. nil means nobody could tell — draw nothing, which is not the
+    /// same as clean.
+    public func gitBadges(for session: Session) -> (dirty: Bool, unpushed: Bool)? {
+        if let fresh = statuses[session.id], fresh.known {
+            return (fresh.dirty, fresh.unpushed)
+        }
+        guard let view = views[session.id], view.gitOK else { return nil }
+        return (view.dirty, view.unpushed)
+    }
+
+    /// The first prompt the core recovered (from the agent's own logs, for a
+    /// session moomux did not start), falling back to the stored one — which is
+    /// all there is before the first snapshot.
+    public func prompt(for session: Session) -> String {
+        let recovered = views[session.id]?.prompt ?? ""
+        return recovered.isEmpty ? (session.prompt ?? "") : recovered
+    }
+
+    /// Parked *is* "its tmux session is gone" — the core does that join now,
+    /// so this is a reading of the state rather than a second poll to correlate
+    /// against it.
     public func isAlive(_ session: Session) -> Bool {
-        alive[session.id] ?? false
-    }
-
-    /// The reverse of `state(for:)`: the watcher only knows worktree paths.
-    public func session(atPath path: String) -> Session? {
-        sessions.first { $0.worktreePath == path }
+        guard let state = views[session.id]?.state else { return false }
+        return state != .parked
     }
 
     /// `review(_:)` needs a live tmux session to add a window to, and something
@@ -302,7 +328,7 @@ public final class AppState {
     /// (which is the user's manual ordering), projects in config order.
     public var sessionsByProject: [(project: String, sessions: [Session])] {
         let grouped = Dictionary(grouping: listedSessions, by: \.project)
-        let ordered = config?.orderedProjectNames ?? projects
+        let ordered = config?.orderedProjectNames ?? []
         let known = Set(ordered)
         return (ordered + grouped.keys.filter { !known.contains($0) }.sorted())
             .compactMap { name in
@@ -393,9 +419,12 @@ public final class AppState {
         // all would trap.
         notifier = Notifier(app: self)
         tasks = [
+            // The cold-start pull: the stream is the render path, but the
+            // first snapshot is a beat away and a core too old to stream at
+            // all would otherwise show an empty sidebar forever.
+            Task { [weak self] in await self?.refresh() },
             Task { [weak self] in await self?.pollLoop() },
             Task { [weak self] in await self?.watchLoop() },
-            Task { [weak self] in await self?.worktreeLoop() },
             Task { [weak self] in await self?.loadAgentOptions() },
             Task { [weak self] in await self?.loadThemes() },
         ]
@@ -437,62 +466,59 @@ public final class AppState {
         tasks = []
     }
 
-    /// Sessions, projects and tmux liveness have no push channel — only the
-    /// watcher streams. Two seconds matches what the TUI settled on.
+    /// Config has no push channel; everything else arrives on the stream.
+    /// One small round trip every two seconds, which is what keeps project
+    /// order, emoji and the shared settings fresh with no invalidation logic.
     private func pollLoop() async {
         while !Task.isCancelled {
-            await refresh()
+            await refreshConfig()
+            // Only while nothing is streaming. A core too old to serve `Watch`
+            // (or one whose stream just dropped) would otherwise show the list
+            // as it stood at startup, forever, while `connection` said
+            // "connected" — sessions created or deleted elsewhere never
+            // arriving is not something the user can see is happening.
+            if !streaming { await refreshSessions() }
             try? await Task.sleep(for: .seconds(2))
         }
     }
 
-    /// Refreshes the sidebar's worktree badges.
+    /// ⌘R, and every mutation once it lands: the config now, and a *snapshot*
+    /// now rather than at the core's next tick.
     ///
-    /// Its own loop rather than a limb of `refresh()`: this is one blocking
-    /// `git status` per listed session, so it runs at a fifth of the poll's
-    /// rate. A worktree does not go dirty faster than a person can notice, and
-    /// the session-grid's tiles already set the precedent for a slower
-    /// secondary cadence.
-    private func worktreeLoop() async {
-        while !Task.isCancelled {
-            await refreshWorktrees()
-            try? await Task.sleep(for: .seconds(10))
+    /// It deliberately does not pull `Sessions` while the stream is healthy.
+    /// The pulled list is ordered by `App.Sessions()` alone — the "sessions
+    /// with a live tmux window float to the top" tiebreak is applied by
+    /// `internal/sessionview`, on the stream — so adopting one would re-sort
+    /// the sidebar and let the next snapshot sort it back a beat later. A
+    /// nudge answers with the same list the stream would have sent, in the
+    /// order it would have sent it.
+    public func refresh() async {
+        await refreshConfig()
+        if streaming {
+            client.nudge()
+        } else {
+            await refreshSessions()
         }
     }
 
-    private func refreshWorktrees() async {
-        // Archived rows are not listed unless asked for, and each one costs a
-        // shell-out like any other.
-        let ids = visibleSessions.map(\.id)
-        guard !ids.isEmpty else {
-            set(worktrees: [:])
-            return
+    private func refreshConfig() async {
+        do {
+            config = try await withoutBlockingTheUI { [client] in try client.config() }
+            connection = .connected
+        } catch {
+            // Deliberately leaves the last-good config in place; a failed call
+            // must never read as "every project was removed".
+            connection = .down(error.localizedDescription)
         }
-        guard let fresh = try? await withoutBlockingTheUI({ [client] in
-            // Sequential on purpose: a badge is not worth N concurrent git
-            // processes, and the loop is already off the main actor.
-            ids.reduce(into: [Session.ID: MoomuxClient.SessionStatus]()) { out, id in
-                if let status = try? client.worktreeStatus(id: id), status.known {
-                    out[id] = status
-                }
-            }
-        }) else {
-            // A failed sweep leaves the last badges up. `connection` is what
-            // says the core is unreachable; blanking them would read as
-            // "everything just got committed and pushed".
-            return
-        }
-        set(worktrees: fresh)
     }
 
-    /// `@Observable` fires on any assignment, equal or not — and this one lands
-    /// every ten seconds on a map that rarely changes, re-rendering every row.
-    private func set(worktrees fresh: [Session.ID: MoomuxClient.SessionStatus]) {
-        guard fresh != worktrees else { return }
-        worktrees = fresh
+    private func refreshSessions() async {
+        guard let fresh = try? await withoutBlockingTheUI({ [client] in try client.sessions() })
+        else { return }  // `connection` already carries the failure
+        adopt(sessions: fresh)
     }
 
-    /// Loads (or reloads) worktree and PR state for one session.
+    /// Loads (or reloads) worktree state and change counts for one session.
     public func loadStatus(for id: Session.ID, force: Bool = false) async {
         guard force || statuses[id] == nil else { return }
         do {
@@ -500,56 +526,38 @@ public final class AppState {
                 try client.status(id: id)
             }
             statuses[id] = status
-            // Keep the row's dot honest with the detail panel it sits next to,
-            // rather than letting it wait out the ten-second sweep.
-            if status.known {
-                var fresh = worktrees
-                // The three cheap fields only, not the whole thing: an entry
-                // carrying file counts and a PR would never compare equal to
-                // what the sweep writes, so every sweep would look like a
-                // change and re-render the list.
-                fresh[id] = .init(known: true, dirty: status.dirty, unpushed: status.unpushed)
-                set(worktrees: fresh)
-            }
         } catch {
             // Leave whatever was there; `connection` already carries the
             // failure, and a missing status row is not worth a second alarm.
         }
     }
 
-    public func refresh() async {
-        do {
-            let snapshot = try await withoutBlockingTheUI { [client] in
-                (sessions: try client.sessions(),
-                 projects: try client.projects(),
-                 alive: try client.tmuxAliveAll(),
-                 config: try client.config())
-            }
-            sessions = snapshot.sessions
-            projects = snapshot.projects
-            alive = snapshot.alive
-            config = snapshot.config
-            connection = .connected
-            // Drop status for sessions that are gone, so the cache cannot grow
-            // forever or answer for a recreated id.
-            let live = Set(snapshot.sessions.map(\.id))
-            statuses = statuses.filter { live.contains($0.key) }
-            set(worktrees: worktrees.filter { live.contains($0.key) })
-            // A session can disappear without going through this app's own
-            // kill/delete (the TUI, another front end, the CLI), which would
-            // otherwise leak its pooled tmux client forever.
-            for id in attachedSessions where !live.contains(id) { detach(id: id) }
-            updateDockBadge()  // needsInputCount filters visibleSessions
-        } catch {
-            // Deliberately leaves the last-good lists in place. A failed call
-            // must never read as "everything was deleted" — the Go client
-            // caches for the same reason. `connection` is what says so.
-            connection = .down(error.localizedDescription)
-        }
+    /// Takes a new session list, from either channel, and prunes everything
+    /// keyed by an id that is no longer in it — a session can disappear
+    /// without going through this app (the TUI, the CLI, another front end),
+    /// and a pooled tmux client left behind would leak forever.
+    private func adopt(sessions fresh: [Session]) {
+        // `@Observable` fires on any assignment, equal or not, and this lands
+        // on every raw watcher event — several a second while an agent is
+        // writing its log — so an unguarded write re-renders every row that
+        // often for a list that rarely changes.
+        if fresh != sessions { sessions = fresh }
+        let live = Set(fresh.map(\.id))
+        let pruned = statuses.filter { live.contains($0.key) }
+        if pruned.count != statuses.count { statuses = pruned }
+        for id in attachedSessions where !live.contains(id) { detach(id: id) }
+        updateDockBadge()  // needsInputCount filters visibleSessions
     }
 
-    /// Forwards the server's snapshot stream, reconnecting until stopped.
-    /// Mirrors `ipc.Client.Run`, backoff included.
+    /// The render path: sessions in display order and a view per session, one
+    /// snapshot per tick, reconnecting until stopped. Mirrors `ipc.Client.Run`,
+    /// backoff included.
+    ///
+    /// A snapshot is absolute state, so the whole view map is replaced rather
+    /// than merged. (It used to be merged, because `watcher.MultiWatcher` fans
+    /// out one path-keyed snapshot per agent and each carried only its own
+    /// agent's sessions. `internal/sessionview` does that join now, along with
+    /// the tmux-liveness one that decided "parked".)
     private func watchLoop() async {
         var backoff = Duration.milliseconds(200)
         // A watcher tick that races an agent's half-written status file
@@ -563,16 +571,24 @@ public final class AppState {
             do {
                 for try await snapshot in client.watch() {
                     backoff = .milliseconds(200) // a working connection earns a fast retry
-                    // Diffed after the merge, not against the raw snapshot: a
-                    // snapshot carries only one agent's paths, so comparing
-                    // merged maps is what makes a partial tick a no-op for
-                    // everybody else.
-                    let previous = states
-                    let live = Set(sessions.map(\.worktreePath))
-                    states = AppState.merge(states, snapshot.states, live: live)
-                    quips = AppState.merge(quips, snapshot.quips, live: live)
-                    notifier?.report(previous: previous, current: states)
-                    updateDockBadge()
+                    // A core older than the derived-state protocol streams the
+                    // previous shape, which decodes into an *empty* snapshot
+                    // rather than failing. Adopting it blanks a sidebar the
+                    // pull just filled, and the reconnect flickers it back —
+                    // so hand the list back to the poll loop and say why.
+                    guard snapshot.derived else {
+                        streaming = false
+                        set(statusError: "this moomux core is too old for this app"
+                            + " — update it, or the session list is all you get")
+                        continue
+                    }
+                    streaming = true
+                    if snapshot.views != views {
+                        let previous = views
+                        views = snapshot.views
+                        notifier?.report(previous: previous, current: views)
+                    }
+                    adopt(sessions: snapshot.sessions)
                     if let err = snapshot.err, err == pendingWatcherError {
                         set(statusError: err)
                     } else {
@@ -582,6 +598,7 @@ public final class AppState {
                 }
                 throw MoomuxClient.Failure.disconnected
             } catch {
+                streaming = false
                 guard !Task.isCancelled else { return }
                 pendingWatcherError = nil
                 set(statusError: "status stream lost (\(error.localizedDescription)); reconnecting")
@@ -607,47 +624,7 @@ public final class AppState {
         NSApp.dockTile.badgeLabel = count == 0 ? nil : "\(count)"
     }
 
-    /// Folds one watcher snapshot into the known states.
-    ///
-    /// Merge, never assign: `watcher.MultiWatcher` fans out one snapshot per
-    /// sub-watcher, and each carries only *its own agent's* paths — so
-    /// replacing wholesale would wipe every other agent's sessions on every
-    /// tick. The prune against live worktree paths is what keeps that from
-    /// growing forever; the watcher reports on directories that were never
-    /// sessions ("/", the home directory) and on sessions since deleted.
-    /// `internal/tui/update.go`'s StatusTickMsg does exactly this.
-    nonisolated static func merge<Value>(
-        _ known: [String: Value],
-        _ snapshot: [String: Value],
-        live: Set<String>
-    ) -> [String: Value] {
-        known.merging(snapshot) { _, fresh in fresh }.filter { live.contains($0.key) }
-    }
-
     nonisolated static func demo() {
-        let claude = ["/wt/a": AgentState.working]
-        let codex = ["/wt/b": AgentState.needsInput]
-        let live: Set<String> = ["/wt/a", "/wt/b"]
-
-        // A snapshot from one watcher must not erase the other's sessions.
-        var states = merge([:], claude, live: live)
-        states = merge(states, codex, live: live)
-        assert(states == ["/wt/a": .working, "/wt/b": .needsInput], "\(states)")
-
-        // Fresh values win.
-        states = merge(states, ["/wt/a": .done], live: live)
-        assert(states["/wt/a"] == .done)
-        assert(states["/wt/b"] == .needsInput)
-
-        // Paths that are not live sessions are dropped — the watcher reports
-        // on plenty of directories that never were one.
-        states = merge(states, ["/": .parked, "/Users/someone": .parked], live: live)
-        assert(states.keys.sorted() == ["/wt/a", "/wt/b"], "\(states.keys.sorted())")
-
-        // A deleted session's state goes with it.
-        states = merge(states, [:], live: ["/wt/a"])
-        assert(states.keys.sorted() == ["/wt/a"])
-
         // The review window's command line. Measured against a real worktree:
         // the merge-base form catches committed *and* uncommitted work, the
         // fallbacks fire on exit 128 from an unresolvable ref, and the status
@@ -661,22 +638,6 @@ public final class AppState {
         // command, so it is quoted rather than trusted.
         assert(reviewScript(base: "a'b").contains(#"'origin/a'\''b'"#), reviewScript(base: "a'b"))
 
-        // The thinking level reaches claude and opencode as a prompt phrase,
-        // because neither has a launch-time flag for it. Getting this wrong is
-        // invisible: the session is created either way and simply does not
-        // think as hard as the user asked it to.
-        assert(thinkingPromptPrefix("ultrathink") == "ultrathink: ")
-        assert(thinkingPromptPrefix("default").isEmpty, #""default" means prepend nothing"#)
-        assert(thinkingPromptPrefix("").isEmpty)
-
-        assert(promptExtras(ticket: "T-1", pr: "").isEmpty == false)
-        assert(promptExtras(ticket: "T-1", pr: "http://p/1") == "Ticket: T-1\nPR: http://p/1")
-        assert(promptExtras(ticket: "", pr: "http://p/1") == "PR: http://p/1")
-        assert(promptExtras(ticket: "", pr: "").isEmpty, "no tags adds no lines")
-
-        assert(joinHint("a", "b") == "a\nb")
-        assert(joinHint("", "b") == "b" && joinHint("a", "") == "a")
-
         // Search matches `internal/tui/search.go`: name, case-insensitively,
         // substring — and an all-whitespace query is not a search, or typing a
         // space would empty the sidebar.
@@ -684,6 +645,15 @@ public final class AppState {
         func sample(_ name: String) -> Session {
             try! Wire.decoder.decode(Session.self, from: Data(
                 #"{"id":"p:\#(name)","project":"p","name":"\#(name)","branch":"feature/x"}"#.utf8))
+        }
+        // `SessionView` decodes and is never constructed either.
+        func view(_ id: String, state: String, quip: String = "", prompt: String = "",
+                  label: String = "", gitOK: Bool = false, dirty: Bool = false,
+                  unpushed: Bool = false) -> SessionView {
+            try! Wire.decoder.decode(SessionView.self, from: Data(#"""
+            {"id":"\#(id)","state":"\#(state)","quip":"\#(quip)","prompt":"\#(prompt)",
+             "label":"\#(label)","git_ok":\#(gitOK),"dirty":\#(dirty),"unpushed":\#(unpushed)}
+            """#.utf8))
         }
         let rows = [sample("Alpha"), sample("beta"), sample("gamma-ALPHA")]
         assert(matchSessions(rows, query: "").count == 3)
@@ -694,17 +664,33 @@ public final class AppState {
         // The branch is not searched, though it is the most tempting extra.
         assert(matchSessions(rows, query: "feature").isEmpty)
 
-        // A dead tmux session reads as parked whatever the last watcher tick
-        // said — `internal/tui`'s effectiveState. Without it, killing a working
-        // session leaves its row spinning forever.
+        // The core serves the effective state, and "parked" already means
+        // "its tmux session is gone" — there is no second poll to join against
+        // here any more, so `isAlive` is a reading of that one field.
         MainActor.assumeIsolated {
             let app = AppState()
             let s = sample("Alpha")
-            app.states = [s.worktreePath: .working]
-            app.alive = [s.id: true]
+            assert(app.state(for: s) == .unknown, "no snapshot yet is unknown, not parked")
+            assert(!app.isAlive(s), "and nothing is attachable until one arrives")
+            assert(app.label(for: s) == "unknown", "with nothing served, the local name")
+            app.views = [s.id: view(s.id, state: "working", quip: "moo-mentum building",
+                                    label: "grazing")]
             assert(app.state(for: s) == .working)
-            app.alive = [s.id: false]
-            assert(app.state(for: s) == .parked, "\(app.state(for: s))")
+            assert(app.isAlive(s))
+            assert(app.quip(for: s) == "moo-mentum building")
+            // The served wording wins, so both front ends say the same thing
+            // about the same session.
+            assert(app.label(for: s) == "grazing")
+            app.views = [s.id: view(s.id, state: "parked")]
+            assert(app.state(for: s) == .parked)
+            assert(!app.isAlive(s), "parked is exactly \"tmux is gone\"")
+
+            // The prompt the core recovered wins over the stored one, and the
+            // stored one is all there is before the first snapshot.
+            app.views = [s.id: view(s.id, state: "working", prompt: "recovered")]
+            assert(app.prompt(for: s) == "recovered")
+            app.views = [s.id: view(s.id, state: "working")]
+            assert(app.prompt(for: s).isEmpty)
         }
 
         // The agent table's fallbacks, which decide what every picker in the
@@ -736,35 +722,36 @@ public final class AppState {
             assert(app.canReorder, "no config yet must not disable reordering")
         }
 
-        // The sidebar's dirty dots. The bit that matters is that a *failed*
-        // sweep and a deleted session are told apart: one leaves the dots
-        // alone, the other takes them down with the row.
+        // The sidebar's git badges come off the snapshot now — no per-session
+        // sweep, and no cache to prune. `git_ok` is the bit that matters: a
+        // worktree nobody could stat must draw nothing, not "clean".
         MainActor.assumeIsolated {
             let app = AppState()
-            app.set(worktrees: [
-                "p:a": .init(known: true, dirty: true),
-                "p:b": .init(known: true, unpushed: true),
-                "p:c": .init(known: true, dirty: true, unpushed: true),
-            ])
+            app.views = [
+                "p:a": view("p:a", state: "working", gitOK: true, dirty: true),
+                "p:b": view("p:b", state: "working", gitOK: true, unpushed: true),
+                "p:c": view("p:c", state: "done", gitOK: true, dirty: true, unpushed: true),
+                "p:d": view("p:d", state: "parked"),
+            ]
             // The two bits are independent — ± and ↑ are different work in
             // different places, and a row can want both icons at once.
-            assert(app.worktrees["p:a"]?.dirty == true)
-            assert(app.worktrees["p:a"]?.unpushed == false)
-            assert(app.worktrees["p:b"]?.dirty == false)
-            assert(app.worktrees["p:b"]?.unpushed == true)
-            assert(app.worktrees["p:c"]?.dirty == true && app.worktrees["p:c"]?.unpushed == true)
+            assert(app.views["p:a"]?.dirty == true && app.views["p:a"]?.unpushed == false)
+            assert(app.views["p:b"]?.dirty == false && app.views["p:b"]?.unpushed == true)
+            assert(app.views["p:c"]?.dirty == true && app.views["p:c"]?.unpushed == true)
+            assert(app.views["p:d"]?.gitOK == false, "unknown is not clean")
+            assert(app.gitBadges(for: sample("nosuch")) == nil, "no view is no badge")
 
-            // A session that is gone loses its badges, one that is still here
-            // keeps them — this is the prune `refresh()` runs.
-            app.set(worktrees: app.worktrees.filter { ["p:a"].contains($0.key) })
-            assert(app.worktrees.keys.sorted() == ["p:a"], "\(app.worktrees.keys.sorted())")
-
-            // Committing and pushing everything clears the icons but keeps the
-            // row known — absent and clean are different answers, and only
-            // absent means "we never got one".
-            app.set(worktrees: ["p:a": .init(known: true)])
-            assert(app.worktrees["p:a"]?.dirty == false)
-            assert(app.worktrees["p:a"] != nil, "clean is an answer, not a missing one")
+            // A fresh on-demand status beats the snapshot's, which the core
+            // caches for about a minute: a pane that just committed and pushed
+            // must not keep a dirty badge while its own detail pane says clean.
+            let dirtyRow = sample("a")
+            app.views = [dirtyRow.id: view(dirtyRow.id, state: "working", gitOK: true, dirty: true)]
+            assert(app.gitBadges(for: dirtyRow)?.dirty == true)
+            app.statuses[dirtyRow.id] = .init(known: true)
+            assert(app.gitBadges(for: dirtyRow)?.dirty == false, "the fresher answer wins")
+            // …but a status nobody could determine is not an answer at all.
+            app.statuses[dirtyRow.id] = .init(known: false)
+            assert(app.gitBadges(for: dirtyRow)?.dirty == true)
         }
 
         // Which delete dialog opens. The safety-critical one: only a worktree
@@ -847,94 +834,37 @@ public final class AppState {
         actionError = "\(what) failed: \(error.localizedDescription)"
     }
 
-    /// Creates a session, then does the four things the TUI does *after*
-    /// `CreateSession` returns — and this method exists rather than the sheet
-    /// calling the client directly because every one of them is a semantic the
-    /// core does not apply and a second front end would otherwise get wrong:
+    /// Creates a session. One call: the core cuts the worktree and branch,
+    /// starts the agent, attaches the PR tag, composes the first prompt
+    /// (thinking-level prefix for the agents with no launch flag for it, then
+    /// the ticket and PR lines) and types it into the pane.
     ///
-    /// 1. A changed auto-submit toggle is remembered as the new default, best
-    ///    effort — the TUI writes it before creating, and a failed config save
-    ///    must not block a session.
-    /// 2. A PR tag is set afterwards, because `CreateSession` takes a ticket
-    ///    and not a PR.
-    /// 3. The thinking level reaches claude and opencode as a phrase prepended
-    ///    to the first prompt — neither has a launch-time flag for it. codex is
-    ///    the exception: its level is a real `-c model_reasoning_effort` value
-    ///    that the core already applied, so prepending it there would say it
-    ///    twice.
-    /// 4. Ticket and PR are appended to the prompt as their own lines, so the
-    ///    agent knows what it is working on.
+    /// All of that used to be replayed here, step by step, and drifting from
+    /// the TUI's copy of the same sequence was exactly how `moomux spawn` ended
+    /// up storing no prompt at all. The one thing left on this side is
+    /// remembering a changed auto-submit toggle, which is a config write and
+    /// not part of the transaction.
     ///
-    /// `dangerous` is the caller's to compute: `App.CreateSession` takes it as
-    /// a plain bool with no fallback to the project, so leaving it out creates
-    /// sessions in a `dangerous = true` project *without*
-    /// `--dangerously-skip-permissions`. Everything else may be "" for "let the
-    /// core default it".
+    /// `dangerous` is the caller's to compute rather than left nil, because the
+    /// form shows a real toggle: nil would mean "the project's default", which
+    /// is a different answer from the one the user just looked at.
     public func create(project: String, name: String, existingBranch: String = "",
                        baseBranch: String = "", agent: String = "", dangerous: Bool,
                        model: String = "", thinking: String = "", ticket: String = "",
                        pr: String = "", prompt: String, autoSubmit: Bool = false) {
         let rememberAutoSubmit = autoSubmit != (config?.autoSubmitDefault ?? false)
+        let req = CreateRequest(project: project, name: name, agent: agent,
+                                branch: existingBranch, baseBranch: baseBranch,
+                                ticket: ticket, pr: pr, model: model, thinking: thinking,
+                                prompt: prompt, autoSubmit: autoSubmit, dangerous: dangerous)
         mutate("Creating session") { client in
             if rememberAutoSubmit {
                 // Best effort, exactly as the TUI treats it: remembering a
                 // toggle is not worth failing a session creation over.
                 try? client.setAutoSubmitDefault(autoSubmit)
             }
-            let (session, created) = try client.createSession(
-                project: project, name: name, agent: agent, existingBranch: existingBranch,
-                ticket: ticket, dangerous: dangerous, baseBranch: baseBranch,
-                model: model, thinking: thinking)
-            // The worktree and the tmux session exist from here on, so nothing
-            // below may be reported as a failed creation — it would invite a
-            // retry that answers "session already exists".
-            var hint = created
-            if !pr.isEmpty {
-                do {
-                    try client.setTags(id: session.id, ticket: ticket, pr: pr)
-                } catch {
-                    hint = joinHint(hint, "couldn't set PR tag: \(error.localizedDescription)")
-                }
-            }
-            guard !prompt.isEmpty else { return hint }
-            var prompt = prompt
-            if agent != "codex" {
-                prompt = AppState.thinkingPromptPrefix(thinking) + prompt
-            }
-            let extras = AppState.promptExtras(ticket: ticket, pr: pr)
-            if !extras.isEmpty { prompt += "\n\n" + extras }
-            // Recorded on the session as well as typed into the pane, so the
-            // detail pane's "First prompt" has something to show. Best-effort,
-            // exactly as the TUI treats it.
-            try? client.setPrompt(id: session.id, prompt: prompt)
-            do {
-                try client.startFirstPrompt(tmuxSession: session.tmuxSession,
-                                            prompt: prompt, autoSubmit: autoSubmit)
-            } catch {
-                // The worktree and the tmux session already exist by now. A
-                // prompt that never landed is a hint, not a failed creation —
-                // reporting it as one would tell the user to try again and
-                // hand them "session already exists".
-                return joinHint(hint, "couldn't send first prompt: \(error.localizedDescription)")
-            }
-            return hint
+            return try client.createSession(req).1
         }
-    }
-
-    /// `internal/tui`'s `thinkingPromptPrefix`: there is no CLI flag for
-    /// extended-thinking effort on claude or opencode, so the level goes in as
-    /// the same magic words a user would type. "default" prepends nothing.
-    nonisolated static func thinkingPromptPrefix(_ level: String) -> String {
-        (level.isEmpty || level == "default") ? "" : level + ": "
-    }
-
-    /// `internal/tui`'s `newFormPromptExtras`: the ticket and PR as their own
-    /// lines under the first prompt, so the agent is told what it is on.
-    nonisolated static func promptExtras(ticket: String, pr: String) -> String {
-        var lines: [String] = []
-        if !ticket.isEmpty { lines.append("Ticket: " + ticket) }
-        if !pr.isEmpty { lines.append("PR: " + pr) }
-        return lines.joined(separator: "\n")
     }
 
     public func open(_ session: Session) {
@@ -1195,15 +1125,6 @@ public final class AppState {
         detach(session)
         if selectedSessionID == session.id { selectedSessionID = nil }
     }
-}
-
-/// Two notes on one line, dropping whichever half is empty. `internal/app`'s
-/// `joinHint`, for the same reason: a create that succeeded but could not send
-/// its prompt has two things to say and one place to say them.
-func joinHint(_ a: String, _ b: String) -> String {
-    if a.isEmpty { return b }
-    if b.isEmpty { return a }
-    return a + "\n" + b
 }
 
 /// Every `MoomuxClient` call is a blocking socket read. Running one on the main

@@ -300,7 +300,7 @@ private struct NewSessionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var form = NewSessionForm()
 
-    private var projects: [String] { app.config?.orderedProjectNames ?? app.projects }
+    private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
     private var models: [String] { app.models(for: form.agent) }
     private var thinking: [String] { app.thinking(for: form.agent) }
@@ -614,7 +614,7 @@ private struct RootTitle: View {
                 if let session {
                     VStack(alignment: .leading, spacing: 0) {
                         Text(session.name).font(.headline)
-                        Text(app.state(for: session).label).font(.caption).foregroundStyle(.secondary)
+                        Text(app.label(for: session)).font(.caption).foregroundStyle(.secondary)
                     }
                 } else {
                     Text("moomux").font(.headline)
@@ -713,7 +713,7 @@ private struct SessionRow: View {
         HStack(spacing: 8) {
             Image(systemName: state.symbol)
                 .foregroundStyle(Theme.color(state, app.palette))
-                .help(state.label)
+                .help(app.label(for: session))
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.name)
                 Text(session.branch)
@@ -730,7 +730,7 @@ private struct SessionRow: View {
             // literal glyphs so they weigh and align like the row's other
             // icons; they draw the same ± and ↑. Counts stay in the detail
             // panel's Changes row.
-            if let git = app.worktrees[session.id] {
+            if let git = app.gitBadges(for: session) {
                 if git.dirty {
                     Image(systemName: "plusminus")
                         .foregroundStyle(Theme.gitWarn(app.palette))
@@ -794,7 +794,7 @@ private struct EmptyState: View {
                         .foregroundStyle(.secondary)
                 }
             }
-        } else if app.projects.isEmpty {
+        } else if app.config?.projects.isEmpty != false {
             // The first thing a fresh install sees. Until the app could add a
             // project it had to say "go and use the TUI"; now it can offer the
             // one action that gets you out of here.
@@ -838,12 +838,13 @@ private struct SessionDetail: View {
         Group {
             if attached {
                 SessionTerminal(session: session, onDetach: { app.detach(session) })
-            } else if checkingAttach && app.state(for: session) != .parked {
+            } else if checkingAttach && app.isAlive(session) {
                 // Only a live session has anything to wait for. A parked one
                 // cannot attach whatever `loadStatus` comes back with, so
                 // spinning at it just hides the landing page — and if that
-                // round trip never returns, forever. Keyed off the same
-                // derived state the row's icon draws, not off `alive` again.
+                // round trip never returns, forever. `isAlive` and not
+                // `state != .parked`: before the first snapshot there is no
+                // view at all, and "unknown" is not something to spin at.
                 AttachingSpinner()
             } else {
                 SessionInfo(session: session, onAttach: { app.attach(session) })
@@ -969,9 +970,11 @@ private struct SessionInfo: View {
                         } else if status.known {
                             Field("Changes", "clean")
                         }
-                        if let pr = status.pr, !pr.summary.isEmpty {
-                            Field("PR status", pr.summary)
-                        }
+                    }
+                    // Off the snapshot, not a call of its own: the core caches
+                    // and jitters the `gh pr view` behind it for every session.
+                    if let pr = app.views[session.id]?.pr, !pr.summary.isEmpty {
+                        Field("PR status", pr.summary)
                     }
                     Field("Created", session.createdAt.formatted(date: .abbreviated, time: .shortened))
                     if session.hasBeenOpened {
@@ -981,7 +984,10 @@ private struct SessionInfo: View {
                     if let pr = session.pr, !pr.isEmpty { Field("PR", pr) }
                 }
 
-                if let prompt = session.prompt, !prompt.isEmpty {
+                // The core recovers this from the agent's own logs for a
+                // session moomux didn't start, so it is not always the stored one.
+                let prompt = app.prompt(for: session)
+                if !prompt.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("First prompt").font(.headline)
                         Text(prompt).font(Theme.mono).textSelection(.enabled)
@@ -1055,7 +1061,7 @@ struct MenuBarContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(app.visibleSessions.filter { app.state(for: $0) != .parked }) { session in
+            ForEach(app.visibleSessions.filter { app.isAlive($0) }) { session in
                 Button {
                     app.open(session)
                     app.selectedSessionID = session.id
@@ -1067,7 +1073,7 @@ struct MenuBarContent: View {
                         Image(systemName: state.symbol).foregroundStyle(Theme.color(state, app.palette))
                         Text("\(session.project) · \(session.name)")
                         Spacer()
-                        Text(state.label).foregroundStyle(.secondary)
+                        Text(app.label(for: session)).foregroundStyle(.secondary)
                     }
                 }
                 .buttonStyle(.plain)
