@@ -203,14 +203,19 @@ case "type", "key":
     } else {
         let codes: [String: CGKeyCode] = ["return": 36, "tab": 48, "space": 49, "escape": 53,
                                           "down": 125, "up": 126]
+        // "shift-tab" and friends: back-tab is the only way to check that a
+        // key-view loop works in both directions.
+        let shift = needle.hasPrefix("shift-")
+        let needle = shift ? String(needle.dropFirst(6)) : needle
         guard let code = codes[needle] else {
             FileHandle.standardError.write(
                 Data("unknown key \"\(needle)\" — try \(codes.keys.sorted().joined(separator: "/"))\n".utf8))
             exit(2)
         }
         for down in [true, false] {
-            CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)?
-                .post(tap: .cghidEventTap)
+            let e = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
+            if shift { e?.flags = .maskShift }
+            e?.post(tap: .cghidEventTap)
             usleep(20_000)
         }
         print("pressed \(needle)")

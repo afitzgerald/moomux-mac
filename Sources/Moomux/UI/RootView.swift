@@ -331,15 +331,31 @@ private struct NewSessionSheet: View {
                 TextField("Base branch", text: $form.baseBranch,
                           prompt: Text(project?.baseBranch ?? "the project's default"))
                     .disabled(project?.isPlain == true)
-                // A vertical-axis TextField, not a TextEditor: an NSTextView
-                // swallows Tab as a literal character, so the prompt box was a
-                // keyboard trap with no way out. Losing multi-line entry with
-                // it costs nothing — the core types this prompt in with
-                // `send-keys -l`, where a literal newline submits it early, and
-                // the TUI's own field is a single-line `textinput`. It still
-                // wraps to four lines for a long prompt.
-                TextField("First prompt", text: $form.prompt, axis: .vertical)
-                    .lineLimit(1...4)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("First prompt")
+                    TextEditor(text: $form.prompt)
+                        .font(.body)
+                        .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 160)
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
+                        // An NSTextView takes Tab as a literal character, which
+                        // made this box a keyboard trap. Return has to stay a
+                        // newline — the core sends the prompt as one paste-like
+                        // `send-keys -l` chunk, so a multi-line prompt arrives
+                        // intact — so Tab is what gives, moving focus the way it
+                        // does in every other field.
+                        // Back-tab is its own key equivalent (U+0019), not
+                        // `.tab` with a shift modifier — matching only `.tab`
+                        // gets you a box you can leave forwards and not back.
+                        .onKeyPress(keys: [.tab, KeyEquivalent("\u{19}")], phases: .down) { press in
+                            let w = NSApp.keyWindow
+                            if press.modifiers.contains(.shift) {
+                                w?.selectPreviousKeyView(nil)
+                            } else {
+                                w?.selectNextKeyView(nil)
+                            }
+                            return .handled
+                        }
+                }
                 TextField("Ticket", text: $form.ticket)
                 TextField("PR", text: $form.pr)
 
