@@ -77,25 +77,20 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
 
-      # Produces dist/Moomux-<version>.dmg, signed with the Developer ID cert
-      # just imported (DIST_IDENTITY picks it up automatically — see
-      # Makefile) plus hardened runtime and a secure timestamp, both required
-      # for notarization.
-      - name: Build and sign DMG
-        run: make dist
-
-      - name: Notarize
+      # Produces dist/Moomux-<version>.dmg: signed with the Developer ID cert
+      # just imported (DIST_IDENTITY picks it up automatically — see Makefile)
+      # plus hardened runtime and a secure timestamp, then notarized and
+      # stapled twice over — the .app first, the image around it second. Both
+      # tickets matter and the Makefile explains why; CI does not repeat the
+      # sequence, it just supplies the credentials, since a second copy of it
+      # is exactly how the app inside the image ended up unstapled.
+      - name: Build, sign and notarize DMG
         env:
-          DMG: dist/Moomux-${{ steps.version.outputs.version }}.dmg
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" \
-            --wait
-          xcrun stapler staple "$DMG"
-          spctl --assess --type open --context context:primary-signature -vv "$DMG"
+          NOTARY_ARGS: >-
+            --apple-id ${{ secrets.APPLE_ID }}
+            --team-id ${{ secrets.APPLE_TEAM_ID }}
+            --password ${{ secrets.APPLE_APP_PASSWORD }}
+        run: make notarize
 
       - name: Checksum
         id: archive
