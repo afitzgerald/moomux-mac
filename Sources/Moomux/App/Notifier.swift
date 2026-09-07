@@ -32,18 +32,18 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Post for every session that just *became* blocked; clear the banner for
     /// every one that stopped being.
-    public func report(previous: [String: AgentState], current: [String: AgentState]) {
+    public func report(previous: [Session.ID: SessionView], current: [Session.ID: SessionView]) {
         guard let center, let app else { return }
-        let change = Notifier.transitions(from: previous, to: current)
+        let change = Notifier.transitions(from: previous.mapValues(\.state),
+                                          to: current.mapValues(\.state))
         // Guarded, not because an empty removal does anything, but because it
         // is an XPC round trip per watcher tick — tens a second, and every one
         // of them logged. Nothing to remove is the overwhelmingly common case.
         if !change.ended.isEmpty {
-            center.removeDeliveredNotifications(
-                withIdentifiers: change.ended.compactMap { app.session(atPath: $0)?.id })
+            center.removeDeliveredNotifications(withIdentifiers: change.ended)
         }
-        for path in change.started {
-            guard let session = app.session(atPath: path), !session.archived else { continue }
+        for id in change.started {
+            guard let session = app.session(id: id), !session.archived else { continue }
             // A banner for the window you are already looking at is noise.
             if NSApp.isActive, app.selectedSessionID == session.id { continue }
             post(session, to: center)
@@ -84,10 +84,10 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: The pure half
 
-    /// The transitions worth acting on: paths that just entered needs-input,
-    /// and paths that just left it.
+    /// The transitions worth acting on: sessions that just entered
+    /// needs-input, and sessions that just left it.
     ///
-    /// A path must already be in `old` for a start to count. That is both the
+    /// A session must already be in `old` for a start to count. That is both the
     /// dedup (sitting in needs-input is not a transition) and the launch guard:
     /// the first snapshot seeds rather than firing a banner for every session
     /// that was already waiting when the app opened — the menu-bar count is
@@ -96,15 +96,15 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         from old: [String: AgentState], to new: [String: AgentState]
     ) -> (started: [String], ended: [String]) {
         var started: [String] = [], ended: [String] = []
-        for (path, state) in new where old[path] != nil && old[path] != state {
-            if state == .needsInput { started.append(path) }
-            if old[path] == .needsInput { ended.append(path) }
+        for (id, state) in new where old[id] != nil && old[id] != state {
+            if state == .needsInput { started.append(id) }
+            if old[id] == .needsInput { ended.append(id) }
         }
         return (started.sorted(), ended.sorted())  // sorted so demo() can assert
     }
 
     nonisolated static func demo() {
-        let a = "/wt/a", b = "/wt/b"
+        let a = "p:a", b = "p:b"
         // First sight of a session seeds; it never banners.
         assert(transitions(from: [:], to: [a: .needsInput]).started.isEmpty)
         // A real transition fires once, and sitting there does not re-fire.
@@ -116,7 +116,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // Another session's churn is ignored.
         assert(transitions(from: [a: .working, b: .working],
                            to: [a: .working, b: .needsInput]).started == [b])
-        // The watcher's partial snapshots: an absent path is not a change.
+        // A session that is simply gone (deleted, or filtered out) is not a
+        // transition either.
         let u = transitions(from: [a: .needsInput, b: .working], to: [b: .working])
         assert(u.started.isEmpty && u.ended.isEmpty, "\(u)")
     }

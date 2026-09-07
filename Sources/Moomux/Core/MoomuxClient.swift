@@ -36,6 +36,9 @@ public final class MoomuxClient: Sendable {
 
     public let socketPath: String
 
+    /// The `Watch` connection currently open, so `nudge()` can write on it.
+    private let live = LiveWatch()
+
     public init(socketPath: String = MoomuxClient.defaultSocketPath) {
         self.socketPath = socketPath
     }
@@ -54,42 +57,31 @@ public final class MoomuxClient: Sendable {
     /// `omitempty` on the Go side, so unset fields simply do not appear.
     ///
     /// Every field has to stay Optional. A non-optional `Bool` would encode
-    /// `false` on every call, and `open_terminal:false` on a call that never
-    /// meant to say anything about it is a different message.
+    /// `false` on every call, and `on:false` on a call that never meant to say
+    /// anything about it is a different message.
     struct Args: Encodable {
         var id: String?
         var name: String?
-        var project: String?
         var agent: String?
-        var branch: String?
-        var baseBranch: String?
         var ticket: String?
         var pr: String?
-        var prompt: String?
-        var model: String?
-        var thinking: String?
         var theme: String?
         var appearance: String?
-        var tmuxSession: String?
         var delta: Int?
         var dangerous: Bool?
-        var openTerminal: Bool?
-        var autoSubmit: Bool?
         var on: Bool?
+        /// `CreateSession`'s whole transaction. One field rather than a dozen
+        /// flat ones, because the core runs the sequence end to end.
+        var req: CreateRequest?
         /// A whole `config.Project`, for the four project writes. `Project`'s
         /// own encoder decides which of its fields cross.
         var proj: Project?
 
-        // Four of `ipc.Args`' json tags are snake_case; the rest already match
-        // their property names. A missing entry here is invisible in both
-        // directions — Go ignores the unknown key and uses the zero value.
+        // Every `ipc.Args` key this app sends already matches its property
+        // name. A missing entry here would be invisible in both directions —
+        // Go ignores the unknown key and uses the zero value.
         enum CodingKeys: String, CodingKey {
-            case id, name, project, agent, branch, ticket, pr, prompt, model, thinking, delta
-            case dangerous, on, theme, appearance, proj
-            case baseBranch = "base_branch"
-            case tmuxSession = "tmux_session"
-            case openTerminal = "open_terminal"
-            case autoSubmit = "auto_submit"
+            case id, name, agent, ticket, pr, delta, dangerous, on, theme, appearance, req, proj
         }
     }
 
@@ -111,8 +103,6 @@ public final class MoomuxClient: Sendable {
         /// the mutations below.
         var session: Session?
         var sessions: [Session]?
-        var strings: [String]?
-        var alive: [String: Bool]?
         var cfg: Config?
         var agents: [AgentOption]?
         var themes: [ThemePalette]?
@@ -122,12 +112,15 @@ public final class MoomuxClient: Sendable {
         var unpushed: Bool?
         var files: Int?
         var commits: Int?
-        var pr: PRInfo?
     }
 
-    /// What the core can say about a session's worktree and its pull request.
+    /// What the core can say about a session's worktree, on demand.
     ///
-    /// `known` is the `ok` the Go side returns from all three calls: false for
+    /// The snapshot stream carries the same dirty/unpushed bits (and the PR),
+    /// but up to a minute old — this is the fresh check the delete dialog runs
+    /// before removing a worktree, and the file/commit counts it shows.
+    ///
+    /// `known` is the `ok` the Go side returns from both calls: false for
     /// an unknown session, a plain (non-git) project, or a lookup that failed.
     /// Kept as a flag rather than making the whole thing optional so "we asked
     /// and the answer is nothing" is distinguishable from "we never asked".
@@ -137,7 +130,6 @@ public final class MoomuxClient: Sendable {
         public var unpushed = false
         public var filesChanged = 0
         public var unpushedCommits = 0
-        public var pr: PRInfo?
 
         /// Empty when the worktree is clean, so the row can be hidden.
         public var changeSummary: String {
@@ -199,19 +191,9 @@ public final class MoomuxClient: Sendable {
         try call("Sessions").sessions ?? []
     }
 
-    public func projects() throws -> [String] {
-        try call("Projects").strings ?? []
-    }
-
-    /// Session id → whether its tmux session is still alive.
-    public func tmuxAliveAll() throws -> [String: Bool] {
-        try call("TmuxAliveAll").alive ?? [:]
-    }
-
     /// Just the worktree half of `status(id:)`: one round trip and one
-    /// `git status` on the Go side, with no `git log` and no `gh` call over the
-    /// network. Cheap enough to poll for every session, which is what the
-    /// sidebar's dirty dot does; the full `status(id:)` is not.
+    /// `git status` on the Go side, with no `git log`. It also refreshes the
+    /// remote ref, which `ChangeSummary` does not.
     public func worktreeStatus(id: String) throws -> SessionStatus {
         var status = SessionStatus()
         let worktree = try call("WorktreeStatus", Args(id: id))
@@ -221,25 +203,18 @@ public final class MoomuxClient: Sendable {
         return status
     }
 
-    /// Worktree and PR state for one session.
+    /// Worktree state and change counts for one session.
     ///
-    /// Three round trips, and every one of them shells out on the Go side —
-    /// `git status`, `git log`, and `gh` over the network for the PR. That is
-    /// why this is fetched for the selected session on demand rather than for
-    /// every session in the poll loop.
+    /// Two round trips, both shelling out to git on the Go side — the delete
+    /// dialog's guard and the detail pane's Changes row. Everything a *list*
+    /// needs is on the snapshot stream instead; this is the on-demand check.
     public func status(id: String) throws -> SessionStatus {
         var status = try worktreeStatus(id: id)
-
         let changes = try call("ChangeSummary", Args(id: id))
         if changes.ok == true {
             status.filesChanged = changes.files ?? 0
             status.unpushedCommits = changes.commits ?? 0
         }
-
-        // Only meaningful when a PR is attached; the core returns ok=false
-        // otherwise rather than an error.
-        let pr = try call("PRStatus", Args(id: id))
-        if pr.ok == true { status.pr = pr.pr }
         return status
     }
 
@@ -257,40 +232,23 @@ public final class MoomuxClient: Sendable {
     // away on purpose: `AppState.mutate` reloads everything a beat later, and
     // splicing one row in by hand would be a second source of truth.
 
-    /// Cuts a worktree and a branch, runs the worktree-create userscripts and
-    /// starts a tmux session. Tens of seconds, and the only call here that is.
-    /// Returns the new session plus the server's hint — the userscripts'
-    /// warnings and "attach with: tmux attach -t …", which is guidance.
+    /// The whole "new session" transaction in one call: a worktree and a
+    /// branch, the worktree-create userscripts, a tmux session with the agent
+    /// in it, the PR tag, and the composed first prompt typed into the pane.
+    /// Tens of seconds, and the only call here that is.
     ///
-    /// Every empty string here means "the core decides": an empty `agent`
-    /// takes the project's, an empty `baseBranch` becomes the project's base,
-    /// an empty `model`/`thinking` passes no flag at all. They are sent as ""
-    /// rather than omitted only because Go's `omitempty` makes the two
-    /// identical on the wire — see `AppState.create` for who computes what.
+    /// Returns the new session plus the server's hint — userscript warnings,
+    /// "attach with: tmux attach -t …", and any step that degraded *after* the
+    /// pane existed (a PR tag or a first prompt that didn't land). Those are
+    /// guidance, never a failed create: the session is real from the pane on.
     ///
-    /// `dangerous` is the exception the caller must always supply: the core
-    /// takes it as a plain bool with no fallback to the project's own setting.
-    /// `open_terminal` stays unset: this app attaches sessions itself.
-    public func createSession(project: String, name: String, agent: String = "",
-                              existingBranch: String = "", ticket: String = "",
-                              dangerous: Bool, baseBranch: String = "",
-                              model: String = "", thinking: String = "") throws -> (Session, String) {
-        let result = try call("CreateSession",
-                              Args(name: name, project: project, agent: agent,
-                                   branch: existingBranch, baseBranch: baseBranch,
-                                   ticket: ticket, model: model, thinking: thinking,
-                                   dangerous: dangerous))
+    /// Every empty field means "the core decides": an empty `agent` takes the
+    /// project's, an empty `baseBranch` the project's base, an empty
+    /// `model`/`thinking` passes no flag at all.
+    public func createSession(_ req: CreateRequest) throws -> (Session, String) {
+        let result = try call("CreateSession", Args(req: req))
         guard let session = result.session else { throw Failure.emptyResponse }
         return (session, result.hint ?? "")
-    }
-
-    /// Types a prompt into a freshly created agent pane, pressing Enter when
-    /// `autoSubmit` is set. Blocks while the Go side waits for that pane to be
-    /// ready, which is however long the agent takes to boot.
-    public func startFirstPrompt(tmuxSession: String, prompt: String,
-                                 autoSubmit: Bool = false) throws {
-        try call("StartFirstPrompt",
-                 Args(prompt: prompt, tmuxSession: tmuxSession, autoSubmit: autoSubmit))
     }
 
     /// Kills tmux, removes the worktree and runs the worktree-delete
@@ -313,12 +271,6 @@ public final class MoomuxClient: Sendable {
     /// typed rather than mapped to nil.
     public func setTags(id: String, ticket: String, pr: String) throws {
         try call("SetSessionTags", Args(id: id, ticket: ticket, pr: pr))
-    }
-
-    /// Records the first prompt on the session record, which is what makes it
-    /// show in the detail pane. Separate from typing it into the pane.
-    public func setPrompt(id: String, prompt: String) throws {
-        try call("SetSessionPrompt", Args(id: id, prompt: prompt))
     }
 
     public func setArchived(id: String, _ archived: Bool) throws {
@@ -402,24 +354,30 @@ public final class MoomuxClient: Sendable {
 
     // MARK: - Status stream
 
-    /// Yields a snapshot per watcher tick until the connection drops, then
-    /// finishes throwing. Reconnecting is the caller's job — see
-    /// `AppState.watchLoop`, which mirrors `ipc.Client.Run`.
-    public func watch() -> AsyncThrowingStream<StatusSnapshot, Error> {
+    /// Yields a snapshot per tick until the connection drops, then finishes
+    /// throwing. Reconnecting is the caller's job — see `AppState.watchLoop`,
+    /// which mirrors `ipc.Client.Run`.
+    ///
+    /// This is the whole render path: sessions in display order, and a view per
+    /// session carrying state, label, quip, prompt, git and PR status. Nothing
+    /// on it is polled for, and nothing on it is re-derived here.
+    public func watch() -> AsyncThrowingStream<Snapshot, Error> {
         AsyncThrowingStream { continuation in
             let holder = SocketHolder()
             // Closing the fd is what unblocks the read; cancelling the task is
             // not enough, since `bytes.lines` is parked inside read(2).
             continuation.onTermination = { _ in holder.close() }
-            Task.detached { [socketPath] in
+            Task.detached { [socketPath, live] in
                 do {
                     let socket = try UnixSocket(path: socketPath)
                     guard holder.adopt(socket) else { return continuation.finish() }
+                    live.adopt(socket)
+                    defer { live.drop(socket) }
                     try socket.write(Wire.encoder.encode(Request(method: "Watch")))
                     for try await line in socket.lines {
                         guard !line.isEmpty else { continue }
                         continuation.yield(
-                            try Wire.decoder.decode(StatusSnapshot.self, from: Data(line.utf8)))
+                            try Wire.decoder.decode(Snapshot.self, from: Data(line.utf8)))
                     }
                     // The server only stops sending when it goes away.
                     continuation.finish(throwing: Failure.disconnected)
@@ -427,6 +385,40 @@ public final class MoomuxClient: Sendable {
                     continuation.finish(throwing: error)
                 }
             }
+        }
+    }
+
+    /// Asks the core for a snapshot now rather than at its next tick — the
+    /// client's half of the `Watch` stream (`ipc.nudgeRequest`). For the
+    /// moments where waiting out the interval is visible: a session just
+    /// created, renamed, archived or parked.
+    ///
+    /// Best effort by design. No stream open, or one the server has already
+    /// hung up on, just means the next tick does the job — which is also why
+    /// this neither blocks nor throws, and can be called from the main actor.
+    public func nudge() {
+        live.nudge()
+    }
+
+    /// The live stream's socket, shared between the detached task that owns it
+    /// and whoever calls `nudge()`.
+    ///
+    /// Cleared by identity rather than unconditionally: a stream that ends
+    /// after its replacement has already connected must not take the new
+    /// connection's socket down with it.
+    private final class LiveWatch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var socket: UnixSocket?
+
+        func adopt(_ socket: UnixSocket) { lock.withLock { self.socket = socket } }
+
+        func drop(_ socket: UnixSocket) {
+            lock.withLock { if self.socket === socket { self.socket = nil } }
+        }
+
+        func nudge() {
+            guard let socket = lock.withLock({ socket }) else { return }
+            try? socket.write(Data(#"{"nudge":true}"#.utf8))
         }
     }
 
@@ -498,43 +490,18 @@ public final class MoomuxClient: Sendable {
             as: UTF8.self)
         assert(unarchive == #"{"args":{"id":"s1","on":false},"method":"SetSessionArchived"}"#, unarchive)
 
-        // Create sends two fields and nothing else. Every absent one is a
-        // deliberate "use the project's default" — `open_terminal` especially:
-        // sending it as true would hand the new session to iTerm behind the
-        // app's back.
+        // A create rides entirely inside `req` — one transaction the core runs
+        // end to end, rather than a dozen flat args and five follow-up calls.
+        // `Dangerous` is spelled out because this app's form asks; leaving it
+        // nil would mean "the project's default", which is a different answer.
         let create = String(
-            decoding: try! encoder.encode(
-                Request(method: "CreateSession", args: Args(name: "macos", project: "moomux"))),
-            as: UTF8.self)
-        assert(create == #"{"args":{"name":"macos","project":"moomux"},"method":"CreateSession"}"#,
-               create)
-
-        // The four keys `ipc.Args` spells differently from their property
-        // names. Checked on a bare Args because no one call sends all of them;
-        // a missing CodingKeys entry is otherwise silent, and Go would read the
-        // zero value while the UI looked merely broken.
-        let snake = String(
-            decoding: try! encoder.encode(
-                Args(baseBranch: "main", tmuxSession: "moomux-x",
-                     openTerminal: true, autoSubmit: true)),
-            as: UTF8.self)
-        assert(snake == #"{"auto_submit":true,"base_branch":"main","#
-               + #""open_terminal":true,"tmux_session":"moomux-x"}"#, snake)
-
-        // A fully specified create. `dangerous` is always present — the core
-        // has no fallback to the project's own setting — and every other field
-        // is only there because the user chose it. `open_terminal` stays absent
-        // so the new session lands in this app rather than in iTerm.
-        let full = String(
             decoding: try! encoder.encode(Request(method: "CreateSession", args: Args(
-                name: "macos", project: "moomux", agent: "codex", branch: "alan/x",
-                baseBranch: "develop", ticket: "T-1", model: "gpt-5.6-sol",
-                thinking: "high", dangerous: true))),
+                req: CreateRequest(project: "moomux", name: "macos", dangerous: false)))),
             as: UTF8.self)
-        assert(full == #"{"args":{"agent":"codex","base_branch":"develop","branch":"alan/x","#
-               + #""dangerous":true,"model":"gpt-5.6-sol","name":"macos","project":"moomux","#
-               + #""thinking":"high","ticket":"T-1"},"method":"CreateSession"}"#, full)
-        assert(!full.contains("open_terminal"), "a new session belongs in this app")
+        assert(create == #"{"args":{"req":{"Agent":"","AutoSubmit":false,"BaseBranch":"","#
+               + #""Branch":"","Dangerous":false,"Model":"","Name":"macos","PR":"","#
+               + #""Project":"moomux","Prompt":"","Thinking":"","Ticket":""}},"#
+               + #""method":"CreateSession"}"#, create)
 
         // A whole config.Project rides in `proj`, encoded by `Project` itself.
         let addProject = String(
@@ -602,12 +569,12 @@ public final class MoomuxClient: Sendable {
         assert(summary.changeSummary == "uncommitted changes", summary.changeSummary)
         assert(SessionStatus(known: true).changeSummary.isEmpty, "a clean worktree says nothing")
 
-        let ok = """
-        {"result":{"strings":["moomux","site"],"alive":{"a":true,"b":false}}}
-        """
-        let good = try! Wire.decoder.decode(Response.self, from: Data(ok.utf8))
+        // A plain successful call: no error, and the fields it did not fill
+        // stay nil rather than reading as zeros.
+        let good = try! Wire.decoder.decode(
+            Response.self, from: Data(#"{"result":{"hint":"attach with: tmux attach -t x"}}"#.utf8))
         assert(good.err == nil)
-        assert(good.result?.strings == ["moomux", "site"])
-        assert(good.result?.alive == ["a": true, "b": false])
+        assert(good.result?.hint == "attach with: tmux attach -t x")
+        assert(good.result?.sessions == nil)
     }
 }

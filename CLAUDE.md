@@ -149,7 +149,7 @@ Three things to know about that scratch home:
   what makes "unknown session" reproducible by deleting an entry under a running server.
 
 - **`XDG_CONFIG_HOME` isolates more than moomux.** `gh` keeps its credentials in
-  `$XDG_CONFIG_HOME/gh`, so the core's `PRStatus` silently comes back "unknown" — the scratch home
+  `$XDG_CONFIG_HOME/gh`, so the PR status on every `View` silently comes back empty — the scratch home
   has logged `gh` out. `ln -s ~/.config/gh /tmp/mmxtest/gh` fixes it. Anything else the core shells
   out to that reads XDG will have the same problem.
 - **Give the worktree a real git repo** if you want the worktree rows to say anything:
@@ -229,10 +229,17 @@ moomux serve  (unix socket, JSON)
       |
 MoomuxClient           one request line in, one response line out; Watch streams
       |
-AppState.refresh()     @MainActor @Observable root store — poll + watch loops
+AppState               @MainActor @Observable root store — watch loop + a config poll
       |
 Views                  read AppState and nothing else
 ```
+
+**The core computes, this app renders.** The `Watch` stream carries
+`sessionview.Snapshot`: the session list *already in display order*, plus a `View` per session id
+with the effective state (tmux liveness folded in), label, quip, recovered first prompt, git status
+and PR status. Nothing on it is re-derived here and nothing on it is polled for — see
+`docs/wire-protocol.md` in the Go repo, which is the contract. If a front end has to work something
+out to draw it, that is a hole in the protocol, not a thing to implement here.
 
 ```
 Core/UnixSocket.swift    AF_UNIX plumbing; blocking, closed to cancel
@@ -240,7 +247,7 @@ Core/Models.swift        the wire types + JSON coding + Wire.demo()
 Core/MoomuxClient.swift  the Swift half of internal/ipc
 Core/ToolPath.swift      finding tmux without a shell's PATH
 App/Forms.swift          the two multi-field forms' state and defaulting rules, pure
-App/AppState.swift       the single root store, poll loop, watch loop
+App/AppState.swift       the single root store, snapshot loop, config poll
 App/Notifier.swift       the only file allowed to touch UNUserNotificationCenter
 App/MoomuxApp.swift      scenes: main window + MenuBarExtra
 App/SelfTest.swift       --selftest
@@ -275,17 +282,17 @@ to fix in Go, not a reason to link the core.
   A "Remove" in an alert over a pane whose button is also "Remove" gets the pane's, behind the
   alert, and the stray click dismisses the alert — so the action silently never runs. Click an
   alert's button by coordinate (`find` prints them) rather than by label.
-- **`prstatus.Info` still spells its JSON keys differently from everything else.** It has no json
-  tags, so Go's encoder falls back to the Go field names (`State`, `CI`) instead of snake_case.
-  `session.Session`, `config.Config` and `config.Project` all carry `json:"..."` tags now. Every
-  type in `Models.swift` still declares explicit `CodingKeys` rather than a shared
-  `keyDecodingStrategy`, so `PRInfo` alone needs the capitalized mapping. If a
-  decode starts returning nils, check the Go struct's tags first.
-- **Watcher snapshots must be merged, never assigned.** `watcher.MultiWatcher` fans out one
-  snapshot per sub-watcher, each carrying only its own agent's paths, so replacing wholesale wipes
-  every other agent's sessions on every tick. Merge, then prune against live worktree paths — the
-  watcher also reports on `/` and the home directory. `AppState.merge` and
-  `internal/tui/update.go`'s `StatusTickMsg` are the same logic; change them together.
+- **`session.CreateRequest` has no json tags**, so it is the one thing this app *sends* that Go
+  decodes off its own Go field names — `Project`, `BaseBranch`, `AutoSubmit`, `PR`. Everything else
+  on the wire, `prstatus.Info` included, is snake_case. A key that stops matching is silent on both
+  sides: the session is created with that field simply unset, which is how a `dangerous` project
+  once got sessions without `--dangerously-skip-permissions`. `CreateRequest`'s encoding is pinned
+  by an assert in `Wire.demo()`.
+- **A snapshot is absolute state; replace the view map, never merge it.** It used to be the
+  opposite — `watcher.MultiWatcher` fans out one *path*-keyed snapshot per agent, each carrying only
+  its own agent's sessions, so a client had to merge and prune. `internal/sessionview` does that
+  join now, along with the tmux-liveness one that decides "parked", and hands out one finished map
+  keyed by session id. A client that missed a snapshot loses nothing; the next supersedes it.
 - **A failed call must not read as "empty".** `AppState.refresh` leaves the last-good lists in place
   and reports the failure through `connection`. The Go client caches for the same reason: one nil
   `Sessions()` would otherwise read as "every session was deleted".
@@ -427,8 +434,11 @@ Decisions, not oversights. Don't "fix" these without being asked.
   guard, and `ackDelete` clears and re-presents one runloop turn later. Measured: without the flag,
   "Continue" is indistinguishable from "Cancel".
 - **Every write the socket serves is wired up**, session and config alike, with two exceptions:
-  `SetSessionStatusTitle`, which is the watcher's write path and this app runs no watcher, and
-  `SetCompactDetail`, which trims a detail panel this app does not have. The other TUI-only
+  `SetCompactDetail`, which trims a detail panel this app does not have, and `SetSessionPrompt`,
+  which is now only what `CreateSession` calls internally — this app has no other moment that would
+  rewrite a session's first prompt. (`SetSessionStatusTitle`
+  and `StartFirstPrompt` are gone from the wire entirely — the core keeps tmux window titles in
+  step itself, and the first prompt is part of the `CreateSession` transaction.) The other TUI-only
   settings (theme, appearance, auto-tmux) are here because they are one-line flags on a shared
   config file and a front end that could edit projects but not those would stop somewhere odd; a
   flag whose *only* meaning is the shape of the TUI's own panel is over that line.
@@ -479,28 +489,24 @@ Decisions, not oversights. Don't "fix" these without being asked.
   `internal/tui`'s three lookup helpers *including their fallbacks*, over the same data. A field the
   app can fill from `Config`, from that table, or from free text is fair game; one that needs a
   hardcoded table is still not.
-  **Four semantics the core does not apply live in `AppState.create`**, because a second front end
-  gets every one of them wrong by omission: a changed auto-submit toggle is persisted as the new
-  default first (best effort — a failed config write must not block a session); the PR tag is set
-  *after* creation, since `CreateSession` takes a ticket and no PR; the thinking level is prepended
-  to the first prompt as a phrase for claude and opencode but **not** for codex, whose level is a
-  real `-c model_reasoning_effort` value the core already applied; and ticket/PR are appended as
-  their own lines. `internal/tui/update.go`'s Enter handler is the reference — change them together.
-  `open_terminal` stays deliberately unset, so a new session lands in the sidebar rather than in
-  iTerm.
-  **`dangerous` is the exception and the app has to send it**: `App.CreateSession` takes it as a
-  plain `bool` and hands it straight to `buildAgentCmd`, with no fallback to `proj.Dangerous` — the
-  defaulting lives in `internal/tui/update.go`, not in the core. Leaving it unset created sessions in
-  a `dangerous = true` project *without* `--dangerously-skip-permissions`, so the same project's
-  agents behaved differently depending on which front end made them. `AppState.create` reads it off
-  `Config` before the call. Anything else added here needs the same check: "the core defaults it" is
-  true of most fields and not of all of them.
+  **Creating a session is one call.** `CreateSession` takes a whole `session.CreateRequest` and the
+  core runs the sequence — worktree and branch, tmux pane and agent, PR tag, composed first prompt
+  (thinking-level prefix for the agents with no launch flag for it, then the ticket and PR lines),
+  typed into the pane. This app replayed all of it step by step until the core owned it, and
+  drifting from the TUI's copy of the same sequence is exactly how `moomux spawn` ended up storing
+  no prompt at all. Do not reintroduce any of those steps here.
+  The two things still on this side: a changed auto-submit toggle is persisted as the new default
+  (best effort — a failed config write must not block a session), and `Dangerous` is sent as an
+  explicit `true`/`false` rather than left nil. Nil means "the project's default", which is a
+  different answer from the one the form just showed the user. `OpenTerminal` stays unset, so a new
+  session lands in the sidebar rather than in iTerm.
 - **A slow write reports in the toolbar, not in its sheet.** `AppState.busy` is set by `mutate` for
   every action and rendered by `ConnectionBadge`, so the New Session sheet closes on Create rather
   than sitting there for the tens of seconds a worktree plus the worktree-create userscripts take.
-  A refusal still lands in the "Couldn't do that" alert. `StartFirstPrompt` failing is folded into
-  the *hint* rather than the error, because by then the worktree and the tmux session already exist
-  — reporting it as a failed creation invites a retry that answers "session already exists".
+  A refusal still lands in the "Couldn't do that" alert. A step that degrades *after* the pane
+  exists — a PR tag or a first prompt that did not land — comes back on the result's `hint` rather
+  than as an error, and the core is what decides that: once the pane exists the session is real, and
+  reporting it as a failed creation invites a retry that answers "session already exists".
 - **No `dist`/`notarize`, no Sparkle, no signing identity.** Ad-hoc signing is fine until something
   depends on a stable designated requirement — launch-at-login, which is still unproven.
   **Notification authorization is not one of those things**: measured with a throwaway bundle of

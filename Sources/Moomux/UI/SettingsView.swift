@@ -133,7 +133,7 @@ private struct ProjectsPane: View {
     @Binding var editing: SettingsSheet.ProjectTarget?
     @State private var selection: String?
 
-    private var names: [String] { app.config?.orderedProjectNames ?? app.projects }
+    private var names: [String] { app.config?.orderedProjectNames ?? [] }
 
     var body: some View {
         VStack(spacing: 8) {
