@@ -571,6 +571,17 @@ public final class AppState {
             do {
                 for try await snapshot in client.watch() {
                     backoff = .milliseconds(200) // a working connection earns a fast retry
+                    // A core older than the derived-state protocol streams the
+                    // previous shape, which decodes into an *empty* snapshot
+                    // rather than failing. Adopting it blanks a sidebar the
+                    // pull just filled, and the reconnect flickers it back —
+                    // so hand the list back to the poll loop and say why.
+                    guard snapshot.derived else {
+                        streaming = false
+                        set(statusError: "this moomux core is too old for this app"
+                            + " — update it, or the session list is all you get")
+                        continue
+                    }
                     streaming = true
                     if snapshot.views != views {
                         let previous = views

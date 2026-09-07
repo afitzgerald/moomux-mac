@@ -443,6 +443,14 @@ public struct Snapshot: Decodable, Sendable {
     public var views: [String: SessionView]
     public var pollTime: Date
     public var err: String?
+    /// False when the snapshot carried no `views` key at all: a core older
+    /// than the derived-state protocol, still sending path-keyed `states` and
+    /// `quips`. Its snapshot has no session list either, so decoding one
+    /// yields an *empty* list that is indistinguishable from "every session
+    /// was deleted" unless absence is tracked separately — which is what this
+    /// is. There is no version handshake on this socket; this is the only
+    /// signal there is.
+    public var derived: Bool
 
     enum CodingKeys: String, CodingKey {
         case sessions, views, err
@@ -455,6 +463,9 @@ public struct Snapshot: Decodable, Sendable {
         views = try c.decodeIfPresent([String: SessionView].self, forKey: .views) ?? [:]
         pollTime = try c.decodeIfPresent(Date.self, forKey: .pollTime) ?? Date()
         err = try c.decodeIfPresent(String.self, forKey: .err)
+        // Present-but-null counts: a core with no sessions at all sends
+        // `"views": null`, and that is an answer.
+        derived = c.contains(.views)
     }
 }
 
@@ -742,6 +753,26 @@ public enum Wire {
         assert(snap.views["p:b"]?.pr == nil, "no PR attached is nil, not a blank row")
         assert(snap.views["p:c"]?.state == .unknown, "an unknown state name must degrade, not throw")
         assert(snap.err == nil)
+        assert(snap.derived)
+
+        // A core too old to have `internal/sessionview` streams the previous
+        // shape — path-keyed `states`, no session list. It decodes without
+        // throwing (every field is optional), so `derived` is the only thing
+        // between it and a client rendering an empty sidebar over 22 real
+        // sessions. Measured against a live one: keys were `["poll_time",
+        // "states"]` exactly.
+        let old = try! decoder.decode(Snapshot.self, from: Data(#"""
+        {"states":{"/wt/a":3},"quips":{"/wt/a":"moo-mentum building"},
+         "poll_time":"2026-09-02T10:11:12Z"}
+        """#.utf8))
+        assert(!old.derived, "no views key means this core does not speak the new protocol")
+        assert(old.sessions.isEmpty && old.views.isEmpty)
+        // …and an *empty* answer from a core that does speak it is still an
+        // answer, null map included.
+        let none = try! decoder.decode(
+            Snapshot.self, from: Data(#"{"sessions":null,"views":null,"poll_time":"2026-09-02T10:11:12Z"}"#.utf8))
+        assert(none.derived, "present-but-null is an answer, not an older core")
+        assert(none.sessions.isEmpty)
 
         // A CreateRequest is the one thing this app sends that Go decodes off
         // its *field names* — CreateRequest carries no json tags. A key that
