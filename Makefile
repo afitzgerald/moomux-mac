@@ -39,15 +39,22 @@ SIGNFLAGS := $(if $(filter -,$(DIST_IDENTITY)),,--options runtime --timestamp)
 # CI does not use this profile — release.yml passes API-key credentials to
 # notarytool directly instead of storing them in a keychain.
 NOTARY_PROFILE ?= moomux-mac-notary
+# How `notarize` authenticates. CI has no keychain to store a profile in, so
+# release.yml overrides this with the API/app-password credentials directly —
+# same recipe both ways, which is the point: the stapling order below is easy
+# to get wrong and there should only be one copy of it.
+NOTARY_ARGS ?= --keychain-profile $(NOTARY_PROFILE)
 VERSION := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
 DMG := dist/Moomux-$(VERSION).dmg
 STAGE := .build/dmg
+# notarytool takes a zip, not a bundle — a .app is a directory.
+APPZIP := .build/Moomux.zip
 # Deferred (=) rather than immediate (:=): `dev` sets CONFIG per-target, and :=
 # would bake in the release path at parse time.
 BINDIR = $(shell swift build -c $(CONFIG) --show-bin-path)
 BIN = $(BINDIR)/Moomux
 
-.PHONY: build app run dev selfcheck install shot dist notarize clean
+.PHONY: build app run dev selfcheck install shot signapp dmg dist notarize clean
 
 build:
 	swift build -c $(CONFIG)
@@ -130,7 +137,7 @@ shot:
 # Nothing nested to sign separately — this bundle has no dylib.
 # Same reason as `install` above: never package whatever `app` another goal
 # in the same invocation happened to leave in .build.
-dist:
+signapp:
 	$(MAKE) app CONFIG=release BUNDLE_ID=app.moomux.Moomux
 	@if [ "$(DIST_IDENTITY)" = "-" ]; then \
 		echo "WARNING: no Developer ID cert — packaging the ad-hoc build as-is."; \
@@ -138,6 +145,11 @@ dist:
 	else \
 		codesign --force --sign "$(DIST_IDENTITY)" $(SIGNFLAGS) --identifier $(BUNDLE_ID) $(APP); \
 	fi
+
+# Wraps whatever $(APP) currently is, ticket included if one has been stapled —
+# so `notarize` staples the app *before* calling this, and the copy the user
+# drags to /Applications carries its own ticket.
+dmg:
 	mkdir -p dist
 	rm -f $(DMG)
 	rm -rf $(STAGE)
@@ -152,22 +164,46 @@ dist:
 	$(if $(filter -,$(DIST_IDENTITY)),,codesign --force --sign "$(DIST_IDENTITY)" --timestamp $(DMG))
 	@echo "$(DMG)"
 
+# Sub-makes rather than prerequisites: `make -j` is free to run prerequisites
+# of a phony target in parallel, and packaging half a signed bundle is not a
+# failure that announces itself.
+dist:
+	$(MAKE) signapp
+	$(MAKE) dmg
+
 # Ships a disk image anyone can open without the right-click > Open dance.
-# Stapling writes the notarization ticket into the .dmg, so the file that gets
-# uploaded afterwards is the same one that was submitted — no re-packaging step
-# that could throw the ticket away.
+#
+# Two submissions, in this order, and the order is the whole point: a ticket
+# stapled to the .dmg covers the image only. The app copied *out* of it has no
+# ticket of its own, so it opens solely while Gatekeeper can reach Apple to look
+# the notarization up — offline, behind a captive portal, or on a slow CloudKit
+# day it is "Apple could not verify Moomux is free of malware", on a build that
+# assesses as `accepted` on the machine that made it. That shipped once. So:
+# notarize and staple the app, then build the image around the stapled app and
+# notarize that too. There is no staple-it-afterwards option — a mounted image
+# is read-only.
+#
+# Stapling does not break the signature: the ticket lands at
+# Contents/CodeResources, which codesign's default rules exclude from the seal.
 #
 # notarytool and stapler both ship in CommandLineTools, so this needs no Xcode —
 # only a Developer ID certificate, which needs a paid Apple Developer account.
-# Local use only: CI (release.yml) calls notarytool directly with API-key
-# credentials instead of a stored keychain profile.
-notarize: dist
+# CI runs this same target with NOTARY_ARGS overridden.
+notarize:
 	@[ "$(DIST_IDENTITY)" != "-" ] || { \
 		echo "No 'Developer ID Application' certificate installed — this build is signed"; \
 		echo "ad-hoc and can't be notarized. Needs an Apple Developer Program membership."; \
 		exit 1; }
-	xcrun notarytool submit $(DMG) --keychain-profile $(NOTARY_PROFILE) --wait
+	$(MAKE) signapp
+	rm -f $(APPZIP)
+	ditto -c -k --keepParent $(APP) $(APPZIP)
+	xcrun notarytool submit $(APPZIP) $(NOTARY_ARGS) --wait
+	xcrun stapler staple $(APP)
+	$(MAKE) dmg
+	xcrun notarytool submit $(DMG) $(NOTARY_ARGS) --wait
 	xcrun stapler staple $(DMG)
+	@# Both checks, because either one passing alone is the bug above.
+	xcrun stapler validate $(APP)
 	spctl --assess --type open --context context:primary-signature -vv $(DMG)
 	@echo "notarized: $(DMG)"
 
