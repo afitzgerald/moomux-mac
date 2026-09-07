@@ -432,19 +432,18 @@ Decisions, not oversights. Don't "fix" these without being asked.
   differently for the same typing. ⌘F needs `.searchFocused`, which is macOS 15 while the bundle
   targets 14, so the shortcut *and* its menu item are behind an availability check — the field
   itself is there and clickable on 14, and a menu item that could only no-op is worse than none.
-- **Delete asks twice unless the worktree is known clean.** `internal/tui` makes you press `y`
-  twice past a dirty/unpushed warning (`confirmAck`), because one keystroke is too easy to fire by
-  reflex; one click on a destructive button over the same warning is the same weakness. The test is
-  "known clean", not "known dirty": the status is whatever `loadStatus` already fetched for a
-  *selected* session, a row deleted from the context menu has none, and three shell-outs plus a
-  `gh` call is far too slow to block a dialog on — so an unchecked worktree is treated as one with
-  something to lose. An alert also cannot be updated in place the way the TUI's overlay can, which
-  is how it gets to show "checking…".
-  The second dialog is a genuine re-presentation, not a content swap: SwiftUI dismisses an alert on
-  **any** button and will not swap its content in place, and that dismissal writes `false` through
-  the presentation binding — which cancels the very delete being advanced. `advancingDelete` is the
-  guard, and `ackDelete` clears and re-presents one runloop turn later. Measured: without the flag,
-  "Continue" is indistinguishable from "Cancel".
+- **Delete asks once, and the dialog names what is at stake.** `internal/tui` makes you press `y`
+  twice past a dirty/unpushed warning (`confirmAck`); this app does not, because a second
+  "are you sure" click is a reflex rather than a safeguard — the information is. `askDelete` opens
+  one alert and re-fetches the worktree status behind it (`loadStatus(force:)`), and
+  `AppState.deleteWarning` leads with a flagged line per hazard ("⚠︎ 2 FILES CHANGED", "⚠︎ 1 COMMIT
+  UNPUSHED", split out of `changeSummary` so one place decides the wording) before the sentence
+  about the worktree and branch. Upper case because **an alert's message renders markdown `**…**`
+  at the same weight as the rest** — measured, twice; caps are the only emphasis it has. Until the
+  status lands the message says it is checking rather than implying a check that never ran (whether
+  the alert re-renders that line in place when the status arrives is **not** measured — treat the
+  first frame as what the user reads). A worktree nobody has checked must never read as clean — that is the one thing
+  `demo()` pins.
 - **Every write the socket serves is wired up**, session and config alike, with two exceptions:
   `SetCompactDetail`, which trims a detail panel this app does not have, and `SetSessionPrompt`,
   which is now only what `CreateSession` calls internally — this app has no other moment that would
