@@ -529,6 +529,15 @@ Decisions, not oversights. Don't "fix" these without being asked.
   stapled bundle and submit the image too. Two submissions, and there is no fixing it afterwards —
   a mounted image is read-only. `spctl` on the image is not the check; `xcrun stapler validate` on
   the `.app` is, and both are asserted because either passing alone is the bug.
+- **The cask drops `com.apple.quarantine` in `postflight_steps`**, which is not the default and
+  Homebrew discourages it. brew copies the downloaded image's quarantine record onto all 13 files
+  of the installed bundle, so every install and upgrade gates the first launch behind "Moomux is an
+  app downloaded from the Internet. Are you sure?" — and over a stale policy record for that path
+  (0.0.26, unstapled) the process is instead spawned and killed ~2s later with no window and, after
+  the first time, no dialog at all. Both measured. The staple is what proves provenance offline, so
+  the xattr asserts nothing brew's sha256 check and the ticket don't already. Use
+  `postflight_steps`, **not** `postflight` — the block form is deprecated and warns on every
+  install; `args` are template-expanded, which is what makes `{{appdir}}` work there.
 - **Config is re-fetched on every 2s poll** rather than only after a change. One extra socket
   round trip, and it keeps project order and emoji fresh with no invalidation logic.
 - **Review happens in a tmux window, not in a patch viewer.** "Review Changes" runs
