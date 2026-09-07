@@ -20,8 +20,11 @@ permissions:
 jobs:
   release:
     # Needs a real Mac: swift build produces a Mach-O binary, and codesign /
-    # notarytool / stapler only exist on macOS.
-    runs-on: macos-15
+    # notarytool / stapler only exist on macOS. macos-26 specifically: macOS
+    # only draws the Liquid Glass toolbar for a binary linked against the
+    # macOS 26 SDK, so a macos-15 runner shipped a release whose toolbar
+    # buttons lost their capsules while local `make dev` builds kept them.
+    runs-on: macos-26
     steps:
       # workflow_dispatch can be triggered manually with any string, and
       # inputs.tag feeds straight into checkout's ref: below — reject
