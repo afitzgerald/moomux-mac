@@ -58,6 +58,19 @@ enum Theme {
         resolve(palette?.warn) ?? .orange
     }
 
+    /// The sidebar's PR icon. Merged is the palette's `done`, conflicts and
+    /// failing CI its `warn` — the same two entries the git badges and state
+    /// dots already use, so nothing new is hardcoded here.
+    static func pr(_ badge: PRInfo.Badge, _ palette: ThemePalette?) -> Color {
+        switch badge {
+        case .merged: return resolve(palette?.done) ?? .green
+        case .conflicts, .failing: return gitWarn(palette)
+        // Pending is not a problem, so it stays secondary: warn here would
+        // put an amber icon on every PR for the minutes its checks run.
+        case .open, .closed, .pending: return .secondary
+        }
+    }
+
     /// A served color as SwiftUI sees it. `system` wins when the core names
     /// one — that is how the state dots keep following the user's live
     /// accent instead of a frozen #007aff. Otherwise the light/dark pair, as
@@ -741,6 +754,23 @@ private struct SessionRow: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 4)
+            // `internal/tui/list.go` draws the tag icons before the git ones,
+            // in this order. The PR icon carries its merge/CI state the way
+            // `prGlyph` does — a merged or blocked PR is exactly what you want
+            // to spot without opening the session.
+            if let ticket = session.ticket, !ticket.isEmpty {
+                Image(systemName: "ticket")
+                    .foregroundStyle(.secondary)
+                    .help(ticket)
+            }
+            if let pr = session.pr, !pr.isEmpty {
+                let info = app.views[session.id]?.pr
+                let badge = PRInfo.badge(info)
+                Image(systemName: badge.symbol)
+                    .foregroundStyle(Theme.pr(badge, app.palette))
+                    .help(info?.summary.isEmpty == false ? "\(badge.help) — \(info!.summary)"
+                                                         : badge.help)
+            }
             // `internal/tui/list.go`'s two git icons, in its order: ± for a
             // dirty worktree, ↑ for commits that are not on the remote. Both
             // can show at once — they are different work in different places,

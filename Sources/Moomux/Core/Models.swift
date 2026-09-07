@@ -382,6 +382,54 @@ public struct PRInfo: Decodable, Equatable, Sendable {
         if mergeable == "CONFLICTING" { parts.append("conflicts") }
         return parts.joined(separator: " · ")
     }
+
+    /// `internal/tui/detail.go`'s `prGlyph`, in the same precedence: the state
+    /// wins, then conflicts, then failing CI. The TUI draws emoji and this app
+    /// draws SF Symbols, so the mapping — not the glyph — is what the two
+    /// front ends share.
+    public enum Badge: Sendable {
+        case open, merged, closed, conflicts, failing, pending
+
+        public var symbol: String {
+            switch self {
+            case .open: return "arrow.triangle.pull"
+            case .merged: return "checkmark.circle.fill"
+            case .closed: return "nosign"
+            case .conflicts: return "exclamationmark.triangle.fill"
+            case .failing: return "xmark.octagon.fill"
+            case .pending: return "clock"
+            }
+        }
+
+        public var help: String {
+            switch self {
+            case .open: return "pull request"
+            case .merged: return "pull request merged"
+            case .closed: return "pull request closed"
+            case .conflicts: return "pull request has conflicts"
+            case .failing: return "pull request checks failing"
+            case .pending: return "pull request checks running"
+            }
+        }
+    }
+
+    /// nil is no status yet, or a lookup that failed — the plain open icon,
+    /// same as the TUI: "unknown" isn't worth a glyph of its own.
+    public static func badge(_ info: PRInfo?) -> Badge {
+        guard let info else { return .open }
+        switch info.state {
+        case "MERGED": return .merged
+        case "CLOSED": return .closed
+        default: break
+        }
+        if info.mergeable == "CONFLICTING" { return .conflicts }
+        if info.ci == "FAILING" { return .failing }
+        // The one place this app says more than the TUI's prGlyph, which has
+        // no pending glyph: a PR whose checks are still running is not yet
+        // worth walking over to.
+        if info.ci == "PENDING" { return .pending }
+        return .open
+    }
 }
 
 // MARK: - The snapshot stream
@@ -720,6 +768,26 @@ public enum Wire {
         let merged = try! decoder.decode(
             PRInfo.self, from: Data(#"{"state":"MERGED","mergeable":"UNKNOWN","ci":"NONE"}"#.utf8))
         assert(merged.summary == "merged", merged.summary)
+        // prGlyph's precedence, which is state first: a merged PR whose last
+        // CI run failed is merged, not failing.
+        assert(PRInfo.badge(nil) == .open, "no status yet is a plain open PR")
+        assert(PRInfo.badge(pr) == .conflicts, "conflicts outrank failing CI")
+        assert(PRInfo.badge(merged) == .merged)
+        let mergedFailing = try! decoder.decode(
+            PRInfo.self, from: Data(#"{"state":"MERGED","mergeable":"CONFLICTING","ci":"FAILING"}"#.utf8))
+        assert(PRInfo.badge(mergedFailing) == .merged, "the state wins over both")
+        let failing = try! decoder.decode(
+            PRInfo.self, from: Data(#"{"state":"OPEN","mergeable":"MERGEABLE","ci":"FAILING"}"#.utf8))
+        assert(PRInfo.badge(failing) == .failing)
+        let closed = try! decoder.decode(
+            PRInfo.self, from: Data(#"{"state":"CLOSED","mergeable":"UNKNOWN","ci":"NONE"}"#.utf8))
+        assert(PRInfo.badge(closed) == .closed)
+        let pending = try! decoder.decode(
+            PRInfo.self, from: Data(#"{"state":"OPEN","mergeable":"UNKNOWN","ci":"PENDING"}"#.utf8))
+        assert(PRInfo.badge(pending) == .pending, "UNKNOWN mergeable is not a conflict")
+        let noChecks = try! decoder.decode(
+            PRInfo.self, from: Data(#"{"state":"OPEN","mergeable":"MERGEABLE","ci":"NONE"}"#.utf8))
+        assert(PRInfo.badge(noChecks) == .open, "a repo with no CI is a plain open PR")
         // A struct Go could not fill in at all must read as "nothing to show",
         // not as a row full of blanks.
         let empty = try! decoder.decode(PRInfo.self, from: Data("{}".utf8))
