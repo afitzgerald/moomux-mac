@@ -1055,7 +1055,36 @@ public final class AppState {
     /// other client on that session, so auto-attaching would silently squash
     /// the user's iTerm and phone windows as they browsed the list. See
     /// `TerminalPane` for why this is inherent to a plain attach.
-    public func attach(_ session: Session) { attachedSessions.insert(session.id) }
+    ///
+    /// A parked session is revived first rather than refused. Recreating the
+    /// tmux session and relaunching the agent is the core's job either way, so
+    /// making the user press a different button for it was ceremony — but it is
+    /// `EnsureTmux` and not `OpenSession`, because nothing the app does in a
+    /// normal flow may make the core open a terminal window. That belongs to
+    /// the "Open in terminal" button alone.
+    public func attach(_ session: Session) {
+        guard !isAlive(session) else {
+            attachedSessions.insert(session.id)
+            return
+        }
+        Task {
+            busy = "Starting tmux"
+            defer { busy = nil }
+            do {
+                let hint = try await withoutBlockingTheUI({ [client] in
+                    try client.ensureTmux(id: session.id)
+                })
+                if !hint.isEmpty { self.hint = hint }
+                // Attach only once the snapshot agrees the session is live:
+                // `SessionTerminal` spawns its `tmux attach` on appear, and a
+                // stale "parked" view would also keep the row's dot grey.
+                await refresh()
+                attachedSessions.insert(session.id)
+            } catch {
+                failed("Attach", error)
+            }
+        }
+    }
 
     /// Unlike merely navigating away in the sidebar, this actually kills
     /// whatever tmux client was kept running for the session.

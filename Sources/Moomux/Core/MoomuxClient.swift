@@ -220,9 +220,22 @@ public final class MoomuxClient: Sendable {
 
     /// Attaches the session in the user's terminal. Returns the server's hint —
     /// a user-facing instruction such as "run: tmux attach -t …", not an error.
+    ///
+    /// This is the one call that makes the core touch a terminal app, and it is
+    /// only ever reached from the explicit "Open in terminal" button. Reviving a
+    /// parked session is `ensureTmux`.
     @discardableResult
     public func openSession(id: String) throws -> String {
         try call("OpenSession", Args(id: id)).hint ?? ""
+    }
+
+    /// Recreates the session's tmux session and relaunches its agent if the
+    /// tmux session is gone — `OpenSession` minus the terminal tab. What the
+    /// app's own Attach uses, so attaching inside the app never opens a window
+    /// somewhere else. A no-op on a live session; returns the same kind of hint.
+    @discardableResult
+    public func ensureTmux(id: String) throws -> String {
+        try call("EnsureTmux", Args(id: id)).hint ?? ""
     }
 
     // MARK: - Mutations
@@ -470,6 +483,11 @@ public final class MoomuxClient: Sendable {
             decoding: try! encoder.encode(Request(method: "OpenSession", args: Args(id: "s1"))),
             as: UTF8.self)
         assert(open == #"{"args":{"id":"s1"},"method":"OpenSession"}"#, open)
+
+        let ensure = String(
+            decoding: try! encoder.encode(Request(method: "EnsureTmux", args: Args(id: "s1"))),
+            as: UTF8.self)
+        assert(ensure == #"{"args":{"id":"s1"},"method":"EnsureTmux"}"#, ensure)
 
         // An empty tag is how a tag is cleared, so it has to go over the wire
         // as "" rather than being dropped — and every field nobody set must be
