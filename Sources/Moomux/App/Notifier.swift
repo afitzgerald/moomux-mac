@@ -55,12 +55,33 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.title = "\(session.project) · \(session.name)"
         content.body = "needs input"
         content.sound = .default
+        if let art = Notifier.bannerArtwork() { content.attachments = [art] }
         // Identifier = session id: a re-post replaces rather than stacks, and
         // it is how a tap finds its way back to a session.
         let request = UNNotificationRequest(identifier: session.id, content: content, trigger: nil)
         // No authorization check here: `add` returns no error while denied, so
         // there is nothing to learn from asking. `init` did the asking.
         Task { try? await center.add(request) }
+    }
+
+    /// The app mark, as the banner's thumbnail. Without an attachment macOS
+    /// draws only the small app icon; the plate is the same artwork at a size
+    /// worth looking at.
+    ///
+    /// A fresh temp copy per banner because the system *moves* an attachment's
+    /// file into its own store — handing it the bundle's copy would delete the
+    /// resource, and handing it one temp path twice works exactly once.
+    private static func bannerArtwork() -> UNNotificationAttachment? {
+        guard let src = Bundle.main.url(forResource: "PeekabooPlate", withExtension: "png")
+        else { return nil }
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("moomux-banner-\(UUID().uuidString).png")
+        guard (try? FileManager.default.copyItem(at: src, to: tmp)) != nil else { return nil }
+        guard let art = try? UNNotificationAttachment(identifier: "plate", url: tmp) else {
+            try? FileManager.default.removeItem(at: tmp)
+            return nil
+        }
+        return art
     }
 
     // MARK: Tapping a banner
