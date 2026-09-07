@@ -10,8 +10,10 @@ private let cowNoseImage: NSImage? = Bundle.main
 
 /// `sharedBackgroundVisibility` is macOS 26 SDK API — referencing it at all,
 /// even behind `#available`, fails to compile against an older SDK (that's
-/// a *runtime* check; the symbol still has to exist at compile time). CI's
-/// macos-15 runner has no such SDK. `#if compiler(>=6.2)` is a *compile*-time
+/// a *runtime* check; the symbol still has to exist at compile time). CI is
+/// on macos-26 now and has it; a macos-15 runner or an older toolchain does
+/// not, and that is what shipped a release with no glass toolbar at all.
+/// `#if compiler(>=6.2)` is a *compile*-time
 /// gate instead: Xcode 26 is the first release whose Swift compiler reports
 /// that version, and it always ships the macOS 26 SDK alongside it — so
 /// whenever this branch is even parsed, the symbol is guaranteed present.
