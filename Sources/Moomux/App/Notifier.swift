@@ -52,7 +52,10 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     private func post(_ session: Session, to center: UNUserNotificationCenter) {
         let content = UNMutableNotificationContent()
-        content.title = "\(session.project) · \(session.name)"
+        // Session name first: macOS truncates a long title, and the project
+        // prefix used to be all that survived.
+        content.title = session.name
+        content.subtitle = session.project
         content.body = "needs input"
         content.sound = .default
         if let art = Notifier.bannerArtwork() { content.attachments = [art] }
