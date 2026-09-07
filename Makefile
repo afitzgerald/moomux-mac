@@ -46,6 +46,10 @@ NOTARY_PROFILE ?= moomux-mac-notary
 NOTARY_ARGS ?= --keychain-profile $(NOTARY_PROFILE)
 VERSION := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
 DMG := dist/Moomux-$(VERSION).dmg
+VOLNAME := Moomux $(VERSION)
+# The intermediate read-write image: the only kind whose volume attributes can
+# be changed, which is what the volume icon needs.
+DMGRW := .build/Moomux-rw.dmg
 STAGE := .build/dmg
 # notarytool takes a zip, not a bundle — a .app is a directory.
 APPZIP := .build/Moomux.zip
@@ -131,7 +135,7 @@ shot:
 
 # A drag-to-Applications disk image — what someone downloading this expects, and
 # the one artifact `notarize` stamps. Plain hdiutil, no create-dmg dependency:
-# that buys a background image and icon placement, which this doesn't have anyway.
+# that buys a background image and icon placement, which this doesn't have.
 #
 # Re-signs first: `app` used the ad-hoc identity, which no other Mac will trust.
 # Nothing nested to sign separately — this bundle has no dylib.
@@ -151,13 +155,25 @@ signapp:
 # drags to /Applications carries its own ticket.
 dmg:
 	mkdir -p dist
-	rm -f $(DMG)
+	rm -f $(DMG) $(DMGRW)
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)
 	cp -R $(APP) $(STAGE)/
 	ln -s /Applications $(STAGE)/Applications
-	hdiutil create -volname "Moomux $(VERSION)" -srcfolder $(STAGE) -ov -quiet \
-		-format UDZO $(DMG)
+	@# The mounted image gets the app's own icon instead of a generic white drive.
+	@# It needs both halves: .VolumeIcon.icns at the volume root, and the volume's
+	@# custom-icon bit, which can only be set on a *mounted read-write* image — so
+	@# build UDRW, flag it, and convert to the compressed image we actually ship.
+	@# The flag survives the conversion (measured with GetFileInfo -a).
+	cp Resources/AppIcon.icns $(STAGE)/.VolumeIcon.icns
+	hdiutil detach -quiet "/Volumes/$(VOLNAME)" 2>/dev/null || true
+	hdiutil create -volname "$(VOLNAME)" -srcfolder $(STAGE) -ov -quiet \
+		-format UDRW $(DMGRW)
+	hdiutil attach -nobrowse -quiet $(DMGRW)
+	SetFile -a C "/Volumes/$(VOLNAME)"
+	hdiutil detach -quiet "/Volumes/$(VOLNAME)"
+	hdiutil convert $(DMGRW) -format UDZO -quiet -o $(DMG)
+	rm -f $(DMGRW)
 	rm -rf $(STAGE)
 	@# Signing the image itself (not just the app inside) is what lets the staple in
 	@# `notarize` attach to it. No-op on the ad-hoc path.
