@@ -31,10 +31,10 @@ harness is built around:
   `no such module 'Testing'`. Both ship inside Xcode. See "the harness is `demo()`" below.
 - SwiftUI, AppKit, `@Observable`, `MenuBarExtra`, `Settings`, UserNotifications and Network all
   compile fine. Only the Xcode-only macros don't.
-- Notarization would still work without Xcode (`notarytool` and `stapler` are in CommandLineTools);
-  only a Developer ID certificate is missing. Nothing here ships yet, so `dist`/`notarize` targets
-  are deliberately absent — copy them from `~/tmp/mergeright/Makefile` when there is something to
-  ship.
+- Notarization needs no Xcode — `notarytool` and `stapler` are in CommandLineTools — so `make dist`
+  and `make notarize` work here, and `.github/workflows/release.yml` runs the same `notarize`
+  target on a `macos-15` runner. A Developer ID certificate is the only piece Xcode would not have
+  supplied, and there is one.
 
 ## Commands
 
@@ -507,12 +507,28 @@ Decisions, not oversights. Don't "fix" these without being asked.
   exists — a PR tag or a first prompt that did not land — comes back on the result's `hint` rather
   than as an error, and the core is what decides that: once the pane exists the session is real, and
   reporting it as a failed creation invites a retry that answers "session already exists".
-- **No `dist`/`notarize`, no Sparkle, no signing identity.** Ad-hoc signing is fine until something
-  depends on a stable designated requirement — launch-at-login, which is still unproven.
-  **Notification authorization is not one of those things**: measured with a throwaway bundle of
+- **No Sparkle.** A tag ships a Developer ID-signed, notarized `.dmg` and a Homebrew cask
+  (`release.yml` → `afitzgerald/homebrew-moomux-mac`); `brew upgrade` is the update mechanism.
+  **`app`, and therefore `make install`, still signs ad-hoc** (`--sign -`) — deliberately: only
+  `dist`/`notarize` re-sign with the Developer ID, and a locally built bundle carries no
+  `com.apple.quarantine`, so Gatekeeper never assesses it and the ad-hoc signature costs nothing.
+  (`spctl --assess` on one still says *rejected*; that is spctl answering a hypothetical, not what
+  happens on launch.) The catch is that `make install` over a downloaded copy swaps a Developer ID
+  signature for an ad-hoc one and so changes the designated requirement — harmless until something
+  depends on a stable one, which means launch-at-login, still unproven.
+  **Notification authorization does not depend on it**: measured with a throwaway bundle of
   exactly `make app`'s shape (hand-assembled, `codesign --force --sign -`), the prompt appears
   normally, `add` succeeds, and the grant survives a rebuild that changes the CDHash and a move
   between `~/Applications` and `.build/`. It is keyed by bundle identifier, not by signature.
+- **A notarization ticket is stapled to the app *and* to the image, in that order.** Stapling only
+  the `.dmg` covers the image and nothing inside it, so the app dragged to `/Applications` has no
+  ticket and opens solely while Gatekeeper can reach Apple to look the notarization up — offline or
+  on a slow CloudKit day it is "Apple could not verify Moomux is free of malware", on a build that
+  `spctl --assess` calls `accepted` on the machine that made it. 0.0.26 shipped that way. Hence
+  `notarize`'s shape: `signapp`, submit the zipped `.app`, staple *that*, then `dmg` around the
+  stapled bundle and submit the image too. Two submissions, and there is no fixing it afterwards —
+  a mounted image is read-only. `spctl` on the image is not the check; `xcrun stapler validate` on
+  the `.app` is, and both are asserted because either passing alone is the bug.
 - **Config is re-fetched on every 2s poll** rather than only after a change. One extra socket
   round trip, and it keeps project order and emoji fresh with no invalidation logic.
 - **Review happens in a tmux window, not in a patch viewer.** "Review Changes" runs
