@@ -41,6 +41,7 @@ harness is built around:
 ```sh
 make build                                   # swift build -c release. Must stay at zero warnings.
 make selfcheck                               # the assert-based demo() checks — run after touching logic
+make warnings                                # every distinct warning in Sources/, without a clean build
 make dev ARGS="--socket /tmp/mmx.sock"       # debug bundle, sign, relaunch
 make run                                     # same, release
 make shot OUT=/tmp/x.png                     # screenshot the running app
@@ -188,12 +189,10 @@ would have settled it immediately.
 
 **A warning count from an incremental build is meaningless.** `swift build` only re-emits
 diagnostics for files it recompiles, so a second build reports zero while the warning is still in
-the source — and a clean build double-reports (module-emit and compile passes both). Count distinct
-causes:
-
-```sh
-rm -rf .build && swift build 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
-```
+the source — and a clean build double-reports (module-emit and compile passes both). `make
+warnings` counts distinct causes. It touches `Sources/` rather than `rm -rf .build`: nuking the
+build directory also rebuilds SwiftTerm, which is 65 of the 74 seconds of a clean release build and
+cannot produce a warning that is ours to fix. Same output, 6s instead of 74s.
 
 **The harness is `demo()`, because there is no test framework.** Each file with non-trivial pure
 logic gets a `static func demo()` full of `assert`s, called from nowhere in production and run
