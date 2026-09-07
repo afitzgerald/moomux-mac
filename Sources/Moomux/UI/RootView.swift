@@ -337,6 +337,24 @@ private struct NewSessionSheet: View {
                         .font(.body)
                         .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 160)
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
+                        // An NSTextView takes Tab as a literal character, which
+                        // made this box a keyboard trap. Return has to stay a
+                        // newline — the core sends the prompt as one paste-like
+                        // `send-keys -l` chunk, so a multi-line prompt arrives
+                        // intact — so Tab is what gives, moving focus the way it
+                        // does in every other field.
+                        // Back-tab is its own key equivalent (U+0019), not
+                        // `.tab` with a shift modifier — matching only `.tab`
+                        // gets you a box you can leave forwards and not back.
+                        .onKeyPress(keys: [.tab, KeyEquivalent("\u{19}")], phases: .down) { press in
+                            let w = NSApp.keyWindow
+                            if press.modifiers.contains(.shift) {
+                                w?.selectPreviousKeyView(nil)
+                            } else {
+                                w?.selectNextKeyView(nil)
+                            }
+                            return .handled
+                        }
                 }
                 TextField("Ticket", text: $form.ticket)
                 TextField("PR", text: $form.pr)
