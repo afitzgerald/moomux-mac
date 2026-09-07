@@ -241,26 +241,15 @@ struct RootView: View {
                 SettingsSheet()
             }
         }
-        .alert(app.deleteStep == .warnUnsaved ? "This worktree may have work in it"
-                                              : "Delete session?",
+        .alert(Text(app.pendingDelete.map { "Delete “\($0.name)”?" } ?? "Delete session?"),
                isPresented: Binding(
             get: { app.pendingDelete != nil },
             set: { if !$0 { app.dismissDelete() } }
         ), presenting: app.pendingDelete) { session in
-            switch app.deleteStep {
-            case .warnUnsaved:
-                // Not destructive, and not the default button: this step exists
-                // to cost a deliberate second look, so the reflex key (Escape)
-                // and the reflex button (Cancel) both keep the worktree.
-                Button("Continue") { app.ackDelete() }
-                Button("Cancel", role: .cancel) {}
-            case .confirm:
-                Button("Delete", role: .destructive) { app.delete(session) }
-                Button("Cancel", role: .cancel) {}
-            }
+            Button("Delete", role: .destructive) { app.delete(session) }
+            Button("Cancel", role: .cancel) {}
         } message: { session in
-            Text(app.deleteStep == .warnUnsaved ? unsavedWarning(for: session)
-                                                : deleteWarning(for: session))
+            Text(app.deleteWarning(for: session))
         }
         // The whole visible surface of `actionError` for now: a refused action
         // has to say so somewhere, and an alert is the least that qualifies.
@@ -274,35 +263,6 @@ struct RootView: View {
         }
     }
 
-    /// The first step's message. Says what is actually at stake when the
-    /// status is known, and says it is *unknown* when it is — "moomux hasn't
-    /// looked" is information, and papering over it with the generic sentence
-    /// would imply a check that never ran.
-    private func unsavedWarning(for session: Session) -> String {
-        let changes = app.statuses[session.id]?.changeSummary ?? ""
-        guard !changes.isEmpty else {
-            return "moomux hasn't checked \(session.worktreePath) for uncommitted or unpushed "
-                + "work yet. Deleting removes the worktree either way."
-        }
-        return "\(session.name) has \(changes). Deleting removes the worktree, and that work "
-            + "goes with it."
-    }
-
-    /// Reuses the status already fetched for the selected session rather than
-    /// paying for a fresh `WorktreeStatus` round trip inside an alert — the same
-    /// warning the TUI's confirm dialog shows, at no extra cost. A session that
-    /// was never selected has no status, and then the alert is the base text.
-    private func deleteWarning(for session: Session) -> String {
-        let base = "Kills tmux, removes the worktree at \(session.worktreePath), "
-            + "and deletes the branch if moomux made it."
-        let changes = app.statuses[session.id]?.changeSummary ?? ""
-        // First letter only. `.capitalized` title-cases every word, so the
-        // server's "2 files changed, 2 commits unpushed" came out as "2 Files
-        // Changed, 2 Commits Unpushed" — visibly not the same sentence the
-        // detail pane shows.
-        guard !changes.isEmpty else { return base }
-        return "\(changes.prefix(1).uppercased())\(changes.dropFirst()). \(base)"
-    }
 }
 
 /// The full new-session form — the same questions the TUI's dialog asks, now

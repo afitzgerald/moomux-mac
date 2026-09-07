@@ -161,23 +161,6 @@ public final class AppState {
     /// step below is skipped.
     public var pendingDelete: Session?
 
-    /// Which half of the delete confirmation is showing.
-    ///
-    /// Delete removes the worktree, so uncommitted or unpushed work goes with
-    /// it. `internal/tui` guards that by making you press `y` **twice** past
-    /// the warning (`confirmAck` in `update.go`) — one keystroke is too easy to
-    /// fire by reflex. A single click on a destructive button over the same
-    /// warning is the same weakness, so this app asks twice too.
-    public enum DeleteStep { case warnUnsaved, confirm }
-    public private(set) var deleteStep: DeleteStep = .confirm
-
-    /// True only between clearing `pendingDelete` and re-presenting it one
-    /// runloop turn later. SwiftUI dismisses an alert on *any* button and will
-    /// not swap its content in place, so the second dialog has to be a genuinely
-    /// new presentation — and the dismissal writes `false` through the
-    /// presentation binding, which would otherwise cancel the delete we are in
-    /// the middle of advancing.
-    public private(set) var advancingDelete = false
     /// The project the remove confirmation is asking about. Same reason.
     public var pendingProjectDelete: String?
 
@@ -754,35 +737,24 @@ public final class AppState {
             assert(app.gitBadges(for: dirtyRow)?.dirty == true)
         }
 
-        // Which delete dialog opens. The safety-critical one: only a worktree
-        // *known* to be clean skips the unsaved-work step, so a session nobody
-        // has looked at is never a single click away from losing work.
+        // The delete dialog is one click over a message, so the message is
+        // the safeguard: it must never read as "nothing to lose" for a
+        // worktree nobody has checked.
         MainActor.assumeIsolated {
             let app = AppState()
             let s = sample("doomed")
 
-            app.askDelete(s)
-            assert(app.deleteStep == .warnUnsaved, "an unchecked worktree must warn first")
+            assert(app.deleteWarning(for: s).contains("Checking"),
+                   "an unchecked worktree must not read as clean")
 
             app.statuses[s.id] = .init(known: true)
-            app.askDelete(s)
-            assert(app.deleteStep == .confirm, "a known-clean worktree goes straight to confirm")
+            assert(app.deleteWarning(for: s).contains("Nothing uncommitted or unpushed"))
 
-            app.statuses[s.id] = .init(known: true, dirty: true)
-            app.askDelete(s)
-            assert(app.deleteStep == .warnUnsaved)
-            app.statuses[s.id] = .init(known: true, unpushed: true)
-            app.askDelete(s)
-            assert(app.deleteStep == .warnUnsaved, "unpushed commits are work too")
-
-            // Advancing past the warning must survive the dismissal that
-            // SwiftUI drives through the presentation binding — without the
-            // guard, "Continue" cancels the delete it is confirming.
-            app.ackDelete()
-            app.dismissDelete()
-            assert(app.pendingDelete == nil, "the alert is down mid-advance")
-            assert(app.advancingDelete, "…but the delete is still in flight")
-            assert(app.deleteStep == .confirm)
+            app.statuses[s.id] = .init(known: true, dirty: true, unpushed: true,
+                                       filesChanged: 2, unpushedCommits: 1)
+            let warning = app.deleteWarning(for: s)
+            assert(warning.hasPrefix("⚠︎ 2 FILES CHANGED\n⚠︎ 1 COMMIT UNPUSHED"), warning)
+            assert(warning.contains("removes the worktree"), warning)
         }
 
         // A mutation the server refuses is an answer, not a dead socket. It has
@@ -1072,46 +1044,41 @@ public final class AppState {
         mutate("Kill tmux") { try $0.killTmux(id: session.id); return nil }
     }
 
-    /// Opens the delete confirmation, at the unsaved-work step unless the
-    /// worktree is known to be clean.
+    /// Opens the delete confirmation, and refreshes the worktree status
+    /// behind it.
     ///
-    /// "Unless known clean" and not "if known dirty" on purpose: the status is
-    /// whatever `loadStatus` already fetched for a *selected* session, and a row
-    /// deleted straight from the context menu has none. Three shell-outs and a
-    /// `gh` call over the network is far too slow to block a dialog on, and an
-    /// alert cannot be updated in place the way the TUI's overlay can (which is
-    /// how it gets to show "checking…"). So an unknown worktree is treated as
-    /// one with something to lose — never a weaker guard than the TUI's, at the
-    /// cost of a second click on a session nobody looked at first.
+    /// One dialog, not two: what is at stake belongs in the message, and a
+    /// second "are you sure" click is a reflex, not a safeguard. The status is
+    /// re-fetched because it is the whole point of the message — it lands a
+    /// beat later and the message fills itself in, saying so meanwhile rather
+    /// than implying a check that never ran.
     public func askDelete(_ session: Session) {
-        let status = statuses[session.id]
-        let known = status?.known == true
-        deleteStep = (known && !(status!.dirty || status!.unpushed)) ? .confirm : .warnUnsaved
         pendingDelete = session
-        // Not awaited: it is what fills the warning's detail line in for next
-        // time, and the dialog is already up either way.
-        Task { await loadStatus(for: session.id) }
+        Task { await loadStatus(for: session.id, force: true) }
     }
 
-    /// The unsaved-work step's "Continue" — see `advancingDelete` for why this
-    /// is a dismiss and a re-present rather than a state flip.
-    public func ackDelete() {
-        guard let session = pendingDelete else { return }
-        advancingDelete = true
-        pendingDelete = nil
-        deleteStep = .confirm
-        Task { @MainActor in
-            pendingDelete = session
-            advancingDelete = false
+    public func dismissDelete() { pendingDelete = nil }
+
+    /// What the delete dialog says is at stake. Pure, so `demo()` can hold it
+    /// to saying the three different things it has to say.
+    ///
+    /// The at-risk work goes first, one flagged line each — this is a
+    /// single-click destructive dialog, so what is lost has to be the first
+    /// thing read, not a clause in a paragraph. Upper case rather than
+    /// markdown bold: an alert's message renders `**…**` at the same weight as
+    /// everything else (measured), so caps are the only emphasis it has.
+    /// `changeSummary` is split rather than re-derived: one place still
+    /// decides the wording.
+    public func deleteWarning(for session: Session) -> String {
+        let tail = "Kills tmux, removes the worktree at \(session.worktreePath), "
+            + "and deletes the branch if moomux made it."
+        guard let status = statuses[session.id], status.known else {
+            return "Checking \(session.worktreePath) for uncommitted or unpushed work…\n\n"
+                + tail
         }
-    }
-
-    /// Cancels, or finishes, whatever the confirmation was asking. Called by
-    /// the presentation binding, so it has to no-op mid-advance.
-    public func dismissDelete() {
-        guard !advancingDelete else { return }
-        pendingDelete = nil
-        deleteStep = .confirm
+        let lines = status.changeSummary.split(separator: ", ").map { "⚠︎ \($0.uppercased())" }
+        guard !lines.isEmpty else { return "Nothing uncommitted or unpushed.\n\n" + tail }
+        return lines.joined(separator: "\n") + "\n\nThat work goes with it. " + tail
     }
 
     public func delete(_ session: Session) {
