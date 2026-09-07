@@ -58,10 +58,20 @@ APPZIP := .build/Moomux.zip
 BINDIR = $(shell swift build -c $(CONFIG) --show-bin-path)
 BIN = $(BINDIR)/Moomux
 
-.PHONY: build app run dev selfcheck install shot signapp dmg dist notarize clean
+.PHONY: build app run dev selfcheck warnings install shot signapp dmg dist notarize clean
 
 build:
 	swift build -c $(CONFIG)
+
+# Every warning in *our* sources, without the `rm -rf .build` that idiom used
+# to need. swift build only re-emits diagnostics for files it recompiles, so
+# something has to force a full recompile — but nuking .build also rebuilds
+# SwiftTerm, which is 65 of the 74 seconds of a clean release build and can
+# never produce a warning we can act on. Touching our own sources recompiles
+# exactly the module we care about: 6s instead of 74s, same output.
+warnings:
+	@find Sources -name '*.swift' -exec touch {} +
+	@swift build -c $(CONFIG) 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
 
 # The assert-based checks. Deliberately not part of `build`: they must never be
 # built with -O, which deletes every assert (see Scripts/selfcheck.sh).
