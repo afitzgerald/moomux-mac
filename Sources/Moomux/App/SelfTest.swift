@@ -29,6 +29,7 @@ enum SelfTest {
         String.shellQuotedDemo()
         AppState.ghosttyConfigDemo()
         Theme.demo()
+        GhosttyResourceBundle.demo()
 
         print("selftest: ok")
         exit(0)

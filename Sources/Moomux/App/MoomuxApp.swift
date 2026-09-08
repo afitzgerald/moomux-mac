@@ -10,6 +10,7 @@ struct MoomuxApp: App {
     @MainActor
     private static func bootstrap() -> AppState {
         SelfTest.runIfRequested() // exits the process when --selftest is passed
+        GhosttyResourceBundle.warm() // before any TerminalController
         let socket = socketPathArgument() ?? MoomuxClient.defaultSocketPath
         return AppState(client: MoomuxClient(socketPath: socket))
     }
