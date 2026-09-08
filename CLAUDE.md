@@ -355,23 +355,62 @@ to fix in Go, not a reason to link the core.
   answer (⌘C/⌘V/⌘A), rendered *after* the user's own config so a `keybind` they set is cleared too.
   Anything new that binds a ⌘ key in a pane has to be added there, and if a menu item ever "does
   nothing but only sometimes", this is the first place to look.
-- **Detach has to free the surface explicitly; dropping the view does not.** Measured: the UI
+- **Every surface needs explicit teardown, panes and tiles alike; dropping the view does not.** Measured: the UI
   detached, and `tmux list-clients` still showed our client, because something in the package (the
   display link is the likely holder) outlives the view and keeps the surface coordinator alive with
   it — so the user's iTerm and phone stay letterboxed, which is the exact thing detach exists to
   undo. libghostty-spm publishes no `free()`; `AppState.detach` assigns `controller = nil`, which
   runs `rebuildIfReady(removingBridgeFrom:)`, and a non-nil previous controller skips the
-  keep-the-surface early return so teardown runs. **`tmux list-clients` before and after is the
-  only proof** — the UI looks right either way.
+  keep-the-surface early return so teardown runs. `SessionGrid.dismantleNSView` does the same for
+  a tile, or a grid toggled open and shut leaks a surface, a wakeup observer and a display link
+  per tile every time. **`tmux list-clients` before and after is the only proof** for the pane —
+  the UI looks right either way.
+- **Two `TerminalSurfaceOptions` fields must be set explicitly, not left nil/default.**
+  `waitAfterCommand: false`, because nil means "whatever the user's ghostty config says" and
+  `wait-after-command = true` keeps the surface open after the tmux client exits — so
+  `terminalDidClose` never fires and the session sits in `attachedSessions` with a dead client
+  (same reasoning as sending `Dangerous` explicitly on a create). And
+  `resizeThrottleMilliseconds: 96`, which the dependency's own note recommends by name for
+  alt-screen agent TUIs: ghostty coalesces resizes on a 25ms trailing-only window, so a live
+  divider drag otherwise composites a stale grid into the new bounds.
 - **The SwiftPM resource bundle has to be copied into the app by hand.** libghostty's terminfo and
   shell integration ship as `GhosttyKit_GhosttyTerminal.bundle` next to the binary; `make app`
   copies it into `Contents/Resources` (that is where `Bundle.module` looks). Without it a pane's
   child gets `TERM=xterm-ghostty` with no terminfo to match it. `tmux list-clients` naming
   `xterm-ghostty` is the check that it landed.
-- **A `TerminalController`'s `theme:` is layered on top of its config file**, and
-  `TerminalTheme.default` is a full Afterglow/Alabaster palette — so passing the default alongside
-  `.file(...)` silently overwrites every colour the user's config just set. Pass an empty
-  `TerminalTheme`; the controller then short-circuits to the file verbatim.
+- **A `TerminalController`'s `theme:` is layered on top of its config**, and
+  `TerminalTheme.default` is a full Afterglow/Alabaster palette — so passing the default silently
+  overwrites every colour the user's config just set. Pass an empty `TerminalTheme` (and an empty
+  `terminalConfiguration`); the controller then uses the base verbatim instead of re-rendering.
+- **ghostty looks for four config files, not one, and the current name is `config.ghostty`.**
+  `Config.loadDefaultFiles`: legacy `config` then `config.ghostty`, under the XDG directory and
+  then `~/Library/Application Support/com.mitchellh.ghostty`, loading *all* of them and letting
+  the later ones override. `AppState.ghosttyConfigPaths` mirrors that; checking only `config` and
+  taking the first hit was wrong twice over — it missed `config.ghostty` entirely (the only
+  ghostty config on this machine is one, so the whole feature was silently dead while Settings
+  said "No Ghostty config found") and where two exist it picked the one ghostty ranks *lowest*.
+  `XDG_CONFIG_HOME` **replaces** `~/.config`, it does not add to it.
+- **libghostty-spm calls only `ghostty_config_load_file`** — never
+  `ghostty_config_load_recursive_files`, never `load_default_files`. So a `config-file =` include
+  in a user's config is silently ignored however the config is loaded, which is also why
+  "just emit `config-file =` lines" is not a way to layer configs here. `AppState.paneConfig`
+  concatenates the files' text instead; the ceiling is that a directive naming a path relative to
+  its config (`theme = mine` beside a `themes/`) resolves against the generated file's directory.
+- **`prepareConfig` rejects a config on *any* diagnostic.** One unknown or deprecated key throws
+  the whole thing away and the panes fall back to built-in defaults —
+  `lastConfigurationIssue` (shown in Settings → Terminal) is the only signal. It does not
+  "load without the bad line".
+- **A surface with no `TerminalSurfaceOpenURLDelegate` does not refuse to open links — ghostty
+  core opens them itself.** `TerminalController+Callbacks.swift` reports the action unhandled and
+  the core spawns `/usr/bin/open`, straight past `TerminalLink`'s allowlist. Every surface this
+  app creates conforms, tiles included, even though a tile's `hitTest` already refuses the click —
+  otherwise it is fail-open by luck.
+- **A surface with no `TerminalSurfaceClipboardConfirmationDelegate` silently denies every
+  protected clipboard operation.** The bridge answers `completion(false)`, so with ghostty's
+  default `clipboard-paste-protection` a multi-line ⌘V does nothing at all: no paste, no dialog,
+  nothing logged. `TerminalPane.Coordinator` answers it, splitting on initiator — a paste is the
+  user's keystroke and is allowed, OSC 52 is the program asking and is refused. Verified with a
+  two-line clipboard, which is the case that was being dropped.
 - **Read the dependency's source from `.build/checkouts/`, not a fresh clone**, and the *pinned*
   version at that. A SwiftTerm scroller bug once cost an extra round because the property was read
   from its `main`, where it behaved differently. `git clone --branch <tag>` also falls back to the
@@ -458,9 +497,9 @@ Decisions, not oversights. Don't "fix" these without being asked.
   there yet.
 
 - **No font, size or theme settings — panes read the user's own Ghostty config.**
-  `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`'s, or the `com.mitchellh.ghostty` one, checked
-  in ghostty's own order) so a Ghostty user's panes look like their terminal, and a built-in dark
-  fallback when there is none. There is deliberately no picker: libghostty is configured by ghostty
+  All four files ghostty itself reads — `config` then `config.ghostty`, under `$XDG_CONFIG_HOME`
+  (or `~/.config`) and then `com.mitchellh.ghostty`, concatenated in that order — so a Ghostty
+  user's panes look like their terminal, and a built-in dark fallback when there is none. There is deliberately no picker: libghostty is configured by ghostty
   config text, and a second place to set the same values would have to either lose to the file or
   silently override it — a user editing their config and seeing nothing change is worse than no
   control at all. The Settings → Terminal tab says which file won and shows

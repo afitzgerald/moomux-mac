@@ -152,6 +152,14 @@ private struct SnapshotTerminal: NSViewRepresentable {
         context.coordinator.repaint()
     }
 
+    /// The same explicit teardown `AppState.detach` needs, and for the same
+    /// measured reason: releasing the view does not free the surface, so a
+    /// grid toggled open and shut repeatedly would otherwise leave a surface,
+    /// a wakeup observer and a display link per tile behind every time.
+    static func dismantleNSView(_ view: AppTerminalView, coordinator: Coordinator) {
+        view.controller = nil
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     /// Truncation needs the tile's column count, and only the terminal knows
@@ -159,7 +167,8 @@ private struct SnapshotTerminal: NSViewRepresentable {
     /// live here and are painted from both sides: a fresh capture, and the
     /// resize that first reveals how wide a tile is. Without the second, the
     /// first paint lands on a zero-column grid and draws nothing.
-    final class Coordinator: NSObject, TerminalSurfaceResizeDelegate {
+    final class Coordinator: NSObject, TerminalSurfaceResizeDelegate,
+                             TerminalSurfaceOpenURLDelegate {
         /// Nothing types into a tile — `hitTest` refuses the click that would
         /// give it focus — so the host side of the backend discards writes.
         let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
@@ -176,6 +185,16 @@ private struct SnapshotTerminal: NSViewRepresentable {
             session.receive(TmuxSnapshot.screen(from: rows, columns: columns))
         }
 
+        /// A tile cannot be ⌘-clicked — `hitTest` refuses — so in practice this
+        /// never fires. It is here because the alternative is not "no links":
+        /// a surface whose delegate does not conform has its `open_url`
+        /// reported unhandled, and ghostty core then spawns `/usr/bin/open`
+        /// itself, bypassing `TerminalLink`'s allowlist entirely. Relying on
+        /// `hitTest` alone would make that fail-open-by-luck, one refactor away
+        /// from opening whatever a pane printed.
+        func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
+            TerminalLink.open(url)
+        }
     }
 }
 

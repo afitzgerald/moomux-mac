@@ -9,8 +9,13 @@ import Foundation
 /// whether the link should be followed — it hands the host a string and the
 /// host answers. A pane shows whatever an agent prints, which includes files it
 /// did not write, so this is the allowlist that stands between
-/// `cat hostile.txt` and the system opening it. With no delegate at all nothing
-/// opens, so this is the only policy there is.
+/// `cat hostile.txt` and the system opening it.
+///
+/// **Every surface must install that delegate.** Not doing so does not mean
+/// "nothing opens" — the package reports the action unhandled and ghostty core
+/// then spawns `/usr/bin/open` itself (`TerminalController+Callbacks.swift`
+/// says so in as many words), which walks straight past this allowlist. Fail
+/// open, not closed.
 enum TerminalLink {
 
     /// Terminal output is attacker-influenceable, so nothing outside this set

@@ -370,41 +370,59 @@ private struct PreferencesPane: View {
 // MARK: - Terminal
 
 /// Where the terminal panes get their font, colours and cursor: the user's own
-/// Ghostty config, read from the same three paths ghostty itself looks at.
+/// Ghostty config, read from the same four paths ghostty itself looks at.
 ///
 /// There is deliberately no font picker and no theme picker here. libghostty is
 /// configured by ghostty config text, and a second place to set the same values
 /// would have to either lose to the file or silently override it — a Ghostty
 /// user editing their config and seeing nothing change is worse than no control
-/// at all. What this pane does is say which file won, and get out of the way.
+/// at all. What this pane does is say which files were used, and get out of the
+/// way.
 private struct TerminalPreferencesPane: View {
     @Environment(AppState.self) private var app
 
-    private var configPath: String? { AppState.ghosttyConfigPath }
+    /// All of them, in load order, because ghostty loads all of them and lets
+    /// the later ones override — showing only the first would misreport which
+    /// settings actually won.
+    private var configPaths: [String] { AppState.ghosttyConfigPaths() }
+
+    private func short(_ path: String) -> String {
+        path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
 
     var body: some View {
         Form {
             LabeledContent("Config") {
-                if let configPath {
-                    Text(configPath.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                        .textSelection(.enabled)
-                        .foregroundStyle(.secondary)
-                } else {
+                if configPaths.isEmpty {
                     Text("No Ghostty config found \u{2014} using built-in defaults")
                         .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        ForEach(configPaths, id: \.self) { path in
+                            Text(short(path))
+                                .textSelection(.enabled)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
-            if let configPath {
+            if let last = configPaths.last {
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting(
-                        [URL(fileURLWithPath: configPath)])
+                        [URL(fileURLWithPath: last)])
                 }
-                if let issue = app.terminalController.lastConfigurationIssue {
-                    Text(issue)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            }
+            // Whatever ghostty said, verbatim, and it is stricter than it
+            // looks: libghostty rejects a config on **any** diagnostic, so one
+            // unknown or deprecated key throws the whole thing away and the
+            // panes fall back to the built-in defaults. This string is the only
+            // signal that happened, which is why it is not hidden behind
+            // having found a file.
+            if let issue = app.terminalController.lastConfigurationIssue {
+                Text(issue)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)

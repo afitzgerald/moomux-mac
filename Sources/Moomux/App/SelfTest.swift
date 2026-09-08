@@ -27,6 +27,7 @@ enum SelfTest {
         TmuxSnapshot.demo()
         TerminalLink.demo()
         String.shellQuotedDemo()
+        AppState.ghosttyConfigDemo()
         Theme.demo()
 
         print("selftest: ok")

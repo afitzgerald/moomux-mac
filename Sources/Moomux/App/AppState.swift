@@ -156,37 +156,55 @@ public final class AppState {
     /// ghostty C runtime, and `--selftest` runs in a binary that never draws a
     /// terminal — see `SelfTest`.
     @ObservationIgnored public private(set) lazy var terminalController: TerminalController = {
-        // The user's own Ghostty config, so panes here look like their
-        // terminal: font, theme, cursor, padding, the lot. An empty
-        // `TerminalTheme` is not a detail — the controller layers `theme` *on
-        // top of* the base config, and `TerminalTheme.default` is a full
-        // Afterglow/Alabaster palette that would silently overwrite every
-        // colour the file just set.
-        if let path = Self.ghosttyConfigPath {
-            return TerminalController(
-                configSource: .file(path),
-                theme: TerminalTheme(light: TerminalConfiguration(), dark: TerminalConfiguration()),
-                terminalConfiguration: Self.paneKeybinds
-            )
-        }
-        // No config file: a dark pane, matching what this app looked like
+        // One `.generated` source rather than two branches: the user's ghostty
+        // config files concatenated in ghostty's own load order, then this
+        // app's keybinds last so they win. An empty `TerminalTheme` is not a
+        // detail — the controller layers `theme` *on top of* the base config,
+        // and `TerminalTheme.default` is a full Afterglow/Alabaster palette
+        // that would silently overwrite every colour the config just set.
+        // `terminalConfiguration` is left empty for the same reason: with both
+        // empty the controller uses the base verbatim instead of re-rendering.
+        TerminalController(
+            configSource: .generated(Self.paneConfig()),
+            theme: TerminalTheme(light: TerminalConfiguration(), dark: TerminalConfiguration())
+        )
+    }()
+
+    /// The ghostty config text every pane and tile is built from: whatever the
+    /// user's own config files say, then this app's keybinds.
+    ///
+    /// ponytail: the files' *text* is concatenated and handed over as one
+    /// generated config, which is the only shape that both honours several
+    /// files and gets the keybinds in last. Two ceilings, both inherent to the
+    /// dependency rather than to this: a `config-file =` include is ignored
+    /// (libghostty-spm only ever calls `ghostty_config_load_file`, never
+    /// `ghostty_config_load_recursive_files`, so includes never resolve however
+    /// the config is loaded), and a directive naming a path relative to the
+    /// config — `theme = mine` looking for a sibling `themes/` — resolves
+    /// against the generated file's own directory instead. The upgrade is a
+    /// package that layers configs or calls the recursive loader.
+    nonisolated static func paneConfig(files: [String] = ghosttyConfigPaths(),
+                           read: (String) -> String? = {
+                               try? String(contentsOfFile: $0, encoding: .utf8)
+                           }) -> String {
+        let user = files.compactMap(read).filter { !$0.isEmpty }
+        // No config anywhere: a dark pane, matching what this app looked like
         // before it read one. Colours only — no 16-entry palette, because
         // ghostty's own default is better than a hand-copied table and a
         // machine with no ghostty config has expressed no opinion about it.
-        return TerminalController(
-            configSource: .generated(TerminalConfiguration(startingFrom: .default) {
-                $0.withBackground("1a1b26")
-                $0.withForeground("c0cbf4")
-                // A Nerd Font so powerline/devicon glyphs in prompts and
-                // statuslines render as icons rather than tofu. ghostty falls
-                // back on its own if the family isn't installed.
-                $0.withFontFamily("Hack Nerd Font Mono")
-                $0.withFontSize(12)
-            }.rendered),
-            theme: TerminalTheme(light: TerminalConfiguration(), dark: TerminalConfiguration()),
-            terminalConfiguration: Self.paneKeybinds
-        )
-    }()
+        let base = user.isEmpty ? [Self.builtInPaneConfig.rendered] : user
+        return (base + [Self.paneKeybinds.rendered]).joined(separator: "\n") + "\n"
+    }
+
+    nonisolated private static let builtInPaneConfig = TerminalConfiguration(startingFrom: .default) {
+        $0.withBackground("1a1b26")
+        $0.withForeground("c0cbf4")
+        // A Nerd Font so powerline/devicon glyphs in prompts and statuslines
+        // render as icons rather than tofu. ghostty falls back on its own if
+        // the family isn't installed.
+        $0.withFontFamily("Hack Nerd Font Mono")
+        $0.withFontSize(12)
+    }
 
     /// The app owns ⌘-shortcuts; ghostty owns none of them.
     ///
@@ -202,6 +220,13 @@ public final class AppState {
     /// own config, so a `keybind` they set is cleared too — deliberate, since
     /// the alternative is a menu item that silently does nothing depending on
     /// where focus happens to be.
+    ///
+    /// `clipboard-paste-protection` is deliberately *not* set here. It stays at
+    /// ghostty's default (on) and `TerminalPane.Coordinator` answers the
+    /// confirmation it raises — allowing the ⌘V the user just pressed and
+    /// refusing a program's OSC 52. Turning the flag off would reach the same
+    /// place today while moving the decision into a config line, where the
+    /// reasoning cannot live and a future dialog could not hook in.
     nonisolated private static let paneKeybinds = TerminalConfiguration { builder in
         builder.withCustom("keybind", "clear")
         builder.withCustom("keybind", "super+c=copy_to_clipboard")
@@ -209,18 +234,68 @@ public final class AppState {
         builder.withCustom("keybind", "super+a=select_all")
     }
 
-    /// The first readable file of the three ghostty itself looks at, or nil.
-    /// Kept in the same order as ghostty's own lookup so the app cannot
-    /// disagree with the terminal it is imitating.
-    nonisolated public static var ghosttyConfigPath: String? {
-        var candidates: [String] = []
-        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
-            candidates.append("\(xdg)/ghostty/config")
+    /// Every ghostty config file that exists, in the order ghostty loads them.
+    ///
+    /// All of them, not the first: ghostty loads each in turn and lets the
+    /// later ones override, and it looks for **two** names per directory — the
+    /// legacy `config` and then `config.ghostty`, which is the current one
+    /// (`Config.loadDefaultFiles`). Checking only `config` and taking the first
+    /// hit got both halves wrong: it misses a `config.ghostty` entirely — the
+    /// only ghostty config on this machine is one — and where two exist it
+    /// picks the one ghostty gives *lower* precedence.
+    ///
+    /// The filesystem probe is injected so `demo()` does not depend on what
+    /// happens to be installed.
+    nonisolated public static func ghosttyConfigPaths(
+        home: String = NSHomeDirectory(),
+        xdgConfigHome: String? = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"],
+        isReadable: (String) -> Bool = { FileManager.default.isReadableFile(atPath: $0) }
+    ) -> [String] {
+        // One XDG directory, not both: `XDG_CONFIG_HOME` *replaces* `~/.config`
+        // when set, it does not add to it.
+        let xdg = (xdgConfigHome?.isEmpty == false ? xdgConfigHome! : "\(home)/.config")
+            + "/ghostty"
+        let appSupport = "\(home)/Library/Application Support/com.mitchellh.ghostty"
+        return [xdg, appSupport]
+            .flatMap { ["\($0)/config", "\($0)/config.ghostty"] }
+            .filter(isReadable)
+    }
+
+    nonisolated static func ghosttyConfigDemo() {
+        let home = "/h"
+        func paths(_ present: Set<String>, xdg: String? = nil) -> [String] {
+            ghosttyConfigPaths(home: home, xdgConfigHome: xdg) { present.contains($0) }
         }
-        let home = NSHomeDirectory()
-        candidates.append("\(home)/.config/ghostty/config")
-        candidates.append("\(home)/Library/Application Support/com.mitchellh.ghostty/config")
-        return candidates.first { FileManager.default.isReadableFile(atPath: $0) }
+        assert(paths([]).isEmpty)
+        // The current filename, which is the one that was being missed.
+        assert(paths(["/h/.config/ghostty/config.ghostty"])
+               == ["/h/.config/ghostty/config.ghostty"])
+        // Legacy before current, XDG before Application Support: ghostty's
+        // order, and later entries override earlier ones.
+        assert(paths(["/h/.config/ghostty/config.ghostty", "/h/.config/ghostty/config"])
+               == ["/h/.config/ghostty/config", "/h/.config/ghostty/config.ghostty"])
+        assert(paths(["/h/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+                      "/h/.config/ghostty/config"])
+               == ["/h/.config/ghostty/config",
+                   "/h/Library/Application Support/com.mitchellh.ghostty/config.ghostty"])
+        // XDG_CONFIG_HOME replaces ~/.config rather than adding to it.
+        assert(paths(["/h/.config/ghostty/config", "/x/ghostty/config"], xdg: "/x")
+               == ["/x/ghostty/config"])
+        assert(paths(["/h/.config/ghostty/config"], xdg: "") == ["/h/.config/ghostty/config"],
+               "an empty XDG_CONFIG_HOME is unset, not a path")
+
+        // The keybinds must come last, or ghostty keeps the user's binding and
+        // the app's menu shortcuts stay swallowed.
+        let text = paneConfig(files: ["/a", "/b"], read: { $0 == "/a" ? "font-size = 9" : "x = 1" })
+        assert(text.hasPrefix("font-size = 9\nx = 1\n"), text)
+        assert(text.range(of: "keybind = clear")!.lowerBound
+               > text.range(of: "font-size = 9")!.lowerBound, text)
+        // Nothing readable falls back to the built-in dark, still with keybinds.
+        let fallback = paneConfig(files: [], read: { _ in nil })
+        assert(fallback.contains("background = 1a1b26"), fallback)
+        assert(fallback.contains("keybind = clear"), fallback)
+        // An unreadable or empty file must not blank the fallback.
+        assert(paneConfig(files: ["/a"], read: { _ in "" }).contains("background = 1a1b26"))
     }
 
     public let client: MoomuxClient

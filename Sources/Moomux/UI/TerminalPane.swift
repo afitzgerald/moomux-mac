@@ -113,7 +113,22 @@ struct TerminalPane: NSViewRepresentable {
         // corrupt.
         view.configuration = TerminalSurfaceOptions(
             backend: .exec,
-            command: "\(executable.shellQuoted) -u attach -t \(tmuxSession.shellQuoted)"
+            command: "\(executable.shellQuoted) -u attach -t \(tmuxSession.shellQuoted)",
+            // Explicit `false`, not nil. Nil means "whatever the user's ghostty
+            // config says", and a user with `wait-after-command = true` would
+            // keep the surface open after the tmux client exits — so
+            // `terminalDidClose` never fires, `onExit` never runs, and the
+            // session stays listed in `attachedSessions` with a dead client.
+            // Same reasoning as sending `Dangerous` explicitly on a create.
+            waitAfterCommand: false,
+            // ~96ms, on the dependency's own advice for this exact workload:
+            // ghostty's IO thread coalesces resizes on a 25ms trailing-only
+            // window, and an alt-screen agent TUI that fully repaints on every
+            // winsize posts sizes faster than that resolves, so a live divider
+            // drag composites a stale grid into the new bounds. 0 (the default)
+            // is right for a transcript that never re-emits its scrollback; a
+            // pane holding an agent is the other case.
+            resizeThrottleMilliseconds: 96
         )
         pool.plainPanes[sessionID] = view
         return view
@@ -131,7 +146,8 @@ struct TerminalPane: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, TerminalSurfaceCloseDelegate,
-                             TerminalSurfaceOpenURLDelegate {
+                             TerminalSurfaceOpenURLDelegate,
+                             TerminalSurfaceClipboardConfirmationDelegate {
         var onExit: () -> Void
 
         init(onExit: @escaping () -> Void) { self.onExit = onExit }
@@ -148,6 +164,23 @@ struct TerminalPane: NSViewRepresentable {
             TerminalLink.open(url)
         }
 
+        /// ghostty asks before a protected clipboard operation, and with no
+        /// delegate the bridge answers `false` — silently. That is right for a
+        /// program reading the clipboard and wrong for the ⌘V the user just
+        /// pressed: per the package's `handleClipboardConfirmation`, an
+        /// unanswered paste simply does not happen, with no dialog and nothing
+        /// in the log.
+        ///
+        /// So the cases are split on their initiator rather than lumped: a
+        /// paste is the user's own keystroke and is allowed, while OSC 52 is the
+        /// *program* in the pane asking to read or write the system clipboard,
+        /// which is the thing worth refusing — pane output is
+        /// attacker-influenceable, the same premise as `TerminalLink`.
+        func terminalDidRequestClipboardConfirmation(
+            _ request: TerminalClipboardConfirmationRequest
+        ) {
+            request.respond(allow: request.kind == .paste)
+        }
     }
 }
 
