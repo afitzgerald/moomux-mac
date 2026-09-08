@@ -412,12 +412,28 @@ private struct TerminalPreferencesPane: View {
                         [URL(fileURLWithPath: last)])
                 }
             }
-            // Whatever ghostty said, verbatim, and it is stricter than it
-            // looks: libghostty rejects a config on **any** diagnostic, so one
-            // unknown or deprecated key throws the whole thing away and the
-            // panes fall back to the built-in defaults. This string is the only
-            // signal that happened, which is why it is not hidden behind
-            // having found a file.
+            // The lines ghostty refused. libghostty rejects a config on
+            // **any** diagnostic — it does not load it minus the bad line — so
+            // `AppState` retries without them rather than letting one typo cost
+            // the whole config, and this is the only report that it happened.
+            let dropped = app.paneConfigDropped
+            if !dropped.isEmpty {
+                LabeledContent("Ignored") {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        ForEach(dropped, id: \.self) { line in
+                            Text(line)
+                                .textSelection(.enabled)
+                                .foregroundStyle(.orange)
+                        }
+                        Text("Ghostty rejected these; the rest of the config loaded.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            // Whatever ghostty said when even the narrowed config would not
+            // load — a broken managed-config write, say. Verbatim, because
+            // there is nothing this app can do with it but show it.
             if let issue = app.terminalController.lastConfigurationIssue {
                 Text(issue)
                     .font(.caption)

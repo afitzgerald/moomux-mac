@@ -378,6 +378,32 @@ to fix in Go, not a reason to link the core.
   copies it into `Contents/Resources` (that is where `Bundle.module` looks). Without it a pane's
   child gets `TERM=xterm-ghostty` with no terminfo to match it. `tmux list-clients` naming
   `xterm-ghostty` is the check that it landed.
+- **Shipping the terminfo is not the same as the child finding it.** The package sets
+  `GHOSTTY_RESOURCES_DIR` (shell integration) and *never* `TERMINFO`, which Ghostty.app sets for
+  its own children — so on a machine with no Ghostty installed the pane's `tmux attach` exits in
+  ~70ms with `missing or unsuitable terminal: xterm-ghostty` and ghostty paints its "failed to
+  launch the requested command" screen. `TerminalPane` passes `TERMINFO` through
+  `TerminalSurfaceOptions.envVars`, from `GhosttyRuntimeResources.terminfoDirectoryURL`. It looks
+  exactly like an attach bug, and it only reproduces where Ghostty.app is absent.
+- **A pane that dies in ~70ms is terminfo, not tmux nesting.** `make dev` runs `open`, which hands
+  the app the launching shell's environment — so started from a moomux pane it inherits `TMUX` and
+  `TMUX_PANE`, and a dead pane reads exactly like tmux refusing to nest. It is not: measured, the
+  app attaches fine with `TMUX` set, *including* to the very session it was launched from, because
+  tmux's nesting check compares the client's tty against the session's panes and a ghostty surface
+  is neither. Two hours went into that theory. Get the real message before theorising — run the
+  failing command yourself in a pane that has a terminal:
+  `tmux send-keys -t probe "env -u TMUX TERM=xterm-ghostty bash -c \"exec tmux -u attach -t X\"" Enter`,
+  then `capture-pane`. Ghostty's "failed to launch the requested command" screen names the command
+  and the runtime and nothing else, which is not enough to debug from.
+- **ghostty's themes are not in the package either — this repo vendors them.**
+  `theme = <name>` resolves under `GHOSTTY_RESOURCES_DIR/themes`, which libghostty-spm ships empty,
+  so every named theme was unresolvable and (see the `prepareConfig` bullet) took the user's whole
+  config down with it. `Resources/ghostty-themes` holds 69 of the 607 upstream ones, ~276KB;
+  `Scripts/themes.sh` refreshes them from `mbadolato/iTerm2-Color-Schemes` (ghostty's own source
+  for them) against the allowlist in `Scripts/themes.txt`, and names anything upstream renamed.
+  `make app` copies them *into* the resource bundle before the bundle is copied on, so the
+  unbundled `.build` binary resolves them too. A theme not on the list is now merely dropped
+  rather than fatal — adding one is a line in `themes.txt` and a re-run.
 - **A `TerminalController`'s `theme:` is layered on top of its config**, and
   `TerminalTheme.default` is a full Afterglow/Alabaster palette — so passing the default silently
   overwrites every colour the user's config just set. Pass an empty `TerminalTheme` (and an empty
@@ -397,9 +423,12 @@ to fix in Go, not a reason to link the core.
   concatenates the files' text instead; the ceiling is that a directive naming a path relative to
   its config (`theme = mine` beside a `themes/`) resolves against the generated file's directory.
 - **`prepareConfig` rejects a config on *any* diagnostic.** One unknown or deprecated key throws
-  the whole thing away and the panes fall back to built-in defaults —
-  `lastConfigurationIssue` (shown in Settings → Terminal) is the only signal. It does not
-  "load without the bad line".
+  the whole thing away and the panes fall back to built-in defaults. It does not "load without the
+  bad line" — so `AppState` does that itself: only when the first load fails, `narrowedConfig`
+  re-offers the config a line at a time through `updateConfigSource` and keeps the ones ghostty
+  accepts, and Settings → Terminal lists the rest under "Ignored". Blank and comment lines are kept
+  without asking; the happy path is still one load. `lastConfigurationIssue` survives for the case
+  where even the narrowed config will not load.
 - **A surface with no `TerminalSurfaceOpenURLDelegate` does not refuse to open links — ghostty
   core opens them itself.** `TerminalController+Callbacks.swift` reports the action unhandled and
   the core spawns `/usr/bin/open`, straight past `TerminalLink`'s allowlist. Every surface this
@@ -502,9 +531,9 @@ Decisions, not oversights. Don't "fix" these without being asked.
   user's panes look like their terminal, and a built-in dark fallback when there is none. There is deliberately no picker: libghostty is configured by ghostty
   config text, and a second place to set the same values would have to either lose to the file or
   silently override it — a user editing their config and seeing nothing change is worse than no
-  control at all. The Settings → Terminal tab says which file won and shows
-  `lastConfigurationIssue` when ghostty rejected part of it, and that is the whole pane. The cost:
-  a config change needs a restart, because a live surface is not reconfigured.
+  control at all. The Settings → Terminal tab says which files were read and lists any line ghostty
+  refused under "Ignored" — the rest of the config still loads — and that is the whole pane. The
+  cost: a config change needs a restart, because a live surface is not reconfigured.
 - **libghostty comes prebuilt, from `Lakr233/libghostty-spm` (MIT), pinned to an exact version.**
   Upstream publishes releases for libghostty-*vt* only — a VT parser with no renderer and no pty.
   The embeddable library that has both is built with `zig build -Demit-xcframework=true`, ending in

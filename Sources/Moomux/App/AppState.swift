@@ -164,11 +164,65 @@ public final class AppState {
         // that would silently overwrite every colour the config just set.
         // `terminalConfiguration` is left empty for the same reason: with both
         // empty the controller uses the base verbatim instead of re-rendering.
-        TerminalController(
+        let controller = TerminalController(
             configSource: .generated(Self.paneConfig()),
             theme: TerminalTheme(light: TerminalConfiguration(), dark: TerminalConfiguration())
         )
+        // `prepareConfig` rejects a config on *any* diagnostic — it does not
+        // load it without the bad line — so one `theme = <something we did not
+        // vendor>` costs the user every colour, font and setting they wrote.
+        // Only on that path, drop the lines ghostty refuses and keep the rest.
+        if controller.lastConfigurationIssue != nil {
+            let (kept, dropped) = Self.narrowedConfig(Self.paneConfig()) {
+                controller.updateConfigSource(.generated($0))
+            }
+            paneConfigDropped = dropped
+            _ = controller.updateConfigSource(.generated(kept))
+        }
+        return controller
     }()
+
+    /// Lines of the user's ghostty config that ghostty refused, dropped so the
+    /// rest of it could load. Shown in Settings → Terminal; empty is the
+    /// normal case. Reading it builds the controller, because that is when the
+    /// narrowing happens.
+    public var paneConfigDropped: [String] {
+        get { _ = terminalController; return _paneConfigDropped }
+        set { _paneConfigDropped = newValue }
+    }
+
+    @ObservationIgnored private var _paneConfigDropped: [String] = []
+
+    /// The longest prefix-preserving subset of `text` that ghostty accepts,
+    /// and the directives left out to get there.
+    ///
+    /// Line by line rather than by bisection: `accepts` is the whole cost and a
+    /// config is tens of lines, so the clever version saves milliseconds on a
+    /// path that only runs when the config was already broken. Blank and
+    /// comment lines are kept without asking — they cannot be the diagnostic,
+    /// and re-parsing for each of them is the one thing that would make this
+    /// slow enough to notice.
+    ///
+    /// ponytail: O(n²) parsing, n = config lines. Bisect if a 1000-line config
+    /// ever shows up.
+    nonisolated static func narrowedConfig(
+        _ text: String,
+        accepts: (String) -> Bool
+    ) -> (kept: String, dropped: [String]) {
+        var kept: [String] = []
+        var dropped: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            let bare = line.trimmingCharacters(in: .whitespaces)
+            if bare.isEmpty || bare.hasPrefix("#") {
+                kept.append(line)
+            } else if accepts((kept + [line]).joined(separator: "\n")) {
+                kept.append(line)
+            } else {
+                dropped.append(bare)
+            }
+        }
+        return (kept.joined(separator: "\n"), dropped)
+    }
 
     /// The ghostty config text every pane and tile is built from: whatever the
     /// user's own config files say, then this app's keybinds.
@@ -296,6 +350,23 @@ public final class AppState {
         assert(fallback.contains("keybind = clear"), fallback)
         // An unreadable or empty file must not blank the fallback.
         assert(paneConfig(files: ["/a"], read: { _ in "" }).contains("background = 1a1b26"))
+
+        // Narrowing: one bad directive costs that directive, not the config.
+        // The stand-in for ghostty refuses any config mentioning `theme`.
+        func accepts(_ text: String) -> Bool { !text.contains("theme") }
+        let (kept, dropped) = narrowedConfig(
+            "# a comment\ntheme = Nope\nfont-size = 9\n\nkeybind = clear\n",
+            accepts: accepts
+        )
+        assert(dropped == ["theme = Nope"], "\(dropped)")
+        assert(kept == "# a comment\nfont-size = 9\n\nkeybind = clear\n", kept)
+        // A config ghostty already accepts comes back byte for byte.
+        let fine = "font-size = 9\nkeybind = clear\n"
+        assert(narrowedConfig(fine, accepts: accepts) == (fine, []))
+        // Everything refused still yields a loadable (empty) config rather
+        // than nil — the caller has nothing else to fall back to.
+        assert(narrowedConfig("theme = a\ntheme = b\n", accepts: accepts)
+               == ("", ["theme = a", "theme = b"]))
     }
 
     public let client: MoomuxClient
