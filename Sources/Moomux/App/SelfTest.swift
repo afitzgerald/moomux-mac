@@ -2,12 +2,15 @@ import Foundation
 
 /// `Moomux --selftest` — runs every `demo()` check in the binary that ships.
 ///
-/// There is no test target and there cannot be one: neither XCTest nor
-/// swift-testing exists in a command-line-tools toolchain, both ship inside
-/// Xcode. So the checks are `assert`-based functions compiled alongside the
-/// code they verify, and this is how they run. Running them through the real
-/// binary rather than a separately-compiled subset means there is no file list
-/// to keep in sync.
+/// The checks are `assert`-based functions compiled alongside the code they
+/// verify, and this is how they run. Running them through the real binary
+/// rather than a separately-compiled subset means there is no file list to keep
+/// in sync.
+///
+/// This started as a workaround — XCTest and swift-testing both ship inside
+/// Xcode, and there was none on this machine. There is now, so a real test
+/// target is possible; this stays because it costs nothing and runs the checks
+/// in the binary that actually ships.
 enum SelfTest {
 
     static func runIfRequested() {
@@ -22,8 +25,9 @@ enum SelfTest {
         ProjectForm.demo()
         Notifier.demo()
         TmuxSnapshot.demo()
-        TerminalColorTheme.demo()
         TerminalLink.demo()
+        String.shellQuotedDemo()
+        AppState.ghosttyConfigDemo()
         Theme.demo()
 
         print("selftest: ok")

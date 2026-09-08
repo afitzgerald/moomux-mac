@@ -369,50 +369,66 @@ private struct PreferencesPane: View {
 
 // MARK: - Terminal
 
-/// The terminal panes' font — client-local (`AppState.terminalFont*`, backed
-/// by `UserDefaults`), not part of the core's shared config. Applies live:
-/// `TerminalPane` reads `app.terminalFont` in `updateNSView`, so a change here
-/// reaches an already-open pane the next time SwiftUI re-renders it rather
-/// than only on the next attach.
+/// Where the terminal panes get their font, colours and cursor: the user's own
+/// Ghostty config, read from the same four paths ghostty itself looks at.
+///
+/// There is deliberately no font picker and no theme picker here. libghostty is
+/// configured by ghostty config text, and a second place to set the same values
+/// would have to either lose to the file or silently override it — a Ghostty
+/// user editing their config and seeing nothing change is worse than no control
+/// at all. What this pane does is say which files were used, and get out of the
+/// way.
 private struct TerminalPreferencesPane: View {
     @Environment(AppState.self) private var app
 
-    /// The stored family, plus itself even if it isn't installed — a font
-    /// this machine doesn't have would otherwise vanish from the picker and
-    /// silently switch to whatever sorts first.
-    private var fontChoices: [String] {
-        let installed = AppState.installedMonospaceFonts
-        return installed.contains(app.terminalFontName) ? installed : installed + [app.terminalFontName]
+    /// All of them, in load order, because ghostty loads all of them and lets
+    /// the later ones override — showing only the first would misreport which
+    /// settings actually won.
+    private var configPaths: [String] { AppState.ghosttyConfigPaths() }
+
+    private func short(_ path: String) -> String {
+        path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
     var body: some View {
         Form {
-            Picker("Font", selection: Binding(
-                get: { app.terminalFontName },
-                set: { app.terminalFontName = $0 })) {
-                ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
+            LabeledContent("Config") {
+                if configPaths.isEmpty {
+                    Text("No Ghostty config found \u{2014} using built-in defaults")
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        ForEach(configPaths, id: \.self) { path in
+                            Text(short(path))
+                                .textSelection(.enabled)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
-            Stepper(value: Binding(
-                get: { app.terminalFontSize },
-                set: { app.terminalFontSize = $0 }), in: 8...24, step: 1) {
-                Text("Size: \(Int(app.terminalFontSize))pt")
+            if let last = configPaths.last {
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: last)])
+                }
             }
-            Picker("Theme", selection: Binding(
-                get: { app.terminalTheme },
-                set: { app.terminalThemeName = $0.rawValue })) {
-                ForEach(TerminalColorTheme.allCases) { Text($0.displayName).tag($0) }
+            // Whatever ghostty said, verbatim, and it is stricter than it
+            // looks: libghostty rejects a config on **any** diagnostic, so one
+            // unknown or deprecated key throws the whole thing away and the
+            // panes fall back to the built-in defaults. This string is the only
+            // signal that happened, which is why it is not hidden behind
+            // having found a file.
+            if let issue = app.terminalController.lastConfigurationIssue {
+                Text(issue)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text("AaBbCc 0123456789  \u{e0b0} \u{f489} \u{f015}")
-                .font(.custom(app.terminalFontName, size: app.terminalFontSize))
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: app.terminalTheme.background))
-                .foregroundStyle(Color(nsColor: app.terminalTheme.foreground))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .formStyle(.grouped)
-        Text("Only Nerd Fonts carry the icons prompts and statuslines use — Font Book's own "
-             + "monospace fonts won't show them.")
+        Text("Panes render with Ghostty's engine and read Ghostty's own config, so they look "
+             + "like your terminal does. Changes apply to panes opened after a restart. Only "
+             + "Nerd Fonts carry the icons prompts and statuslines use.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

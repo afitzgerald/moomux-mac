@@ -143,6 +143,11 @@ Any of A or B needs a VT renderer. Options as of now:
 | **SwiftTerm** | Best today | Mature AppKit `NSView` (`TerminalView`, `LocalProcessTerminalView`), shipping in Secure Shellfish, La Terminal, CodeEdit. CoreText-rendered, so heavy agent redraws are the perf question. Actively maintained. Lowest-risk choice. |
 | **xterm.js in a WebView** | Only if you go web-UI | Battle-tested, worst perf, and it drags the whole UI into a WebView. What Crystal/Nimbalyst do. |
 
+> **Outcome (2026-09):** this played out as written — SwiftTerm shipped first and was swapped
+> for libghostty once a prebuilt xcframework made it a dependency change rather than a port.
+> See CLAUDE.md for why prebuilt and what it costs. The rest of this section is the original
+> reasoning, kept as a record.
+
 Recommendation: **start on SwiftTerm, keep libghostty as the swap-in.** Both
 are `NSView`-shaped, so isolate them behind one protocol and the swap is a day.
 

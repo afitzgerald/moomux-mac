@@ -1,4 +1,5 @@
-import SwiftTerm
+import AppKit
+import GhosttyTerminal
 import SwiftUI
 
 /// A live tmux client, hosted in the app.
@@ -19,8 +20,9 @@ import SwiftUI
 /// larger client is used again. It only recovers on detach. That is why
 /// attaching is an explicit action rather than a consequence of selecting a row.
 ///
-/// The terminal widget is deliberately reached only through this file, so
-/// swapping SwiftTerm for libghostty later is one file, as the plan assumes.
+/// The terminal is libghostty: `AppTerminalView` owns the pty, the VT emulator
+/// and a Metal renderer, so `command` is the whole of what this file asks for.
+/// `AppState.terminalController` supplies the config; nothing here styles it.
 struct TerminalPane: NSViewRepresentable {
     @Environment(AppState.self) private var app
 
@@ -30,7 +32,7 @@ struct TerminalPane: NSViewRepresentable {
     let tmuxSession: String
     let pool: AppState
     /// Called when the tmux client exits — detached, or the session went away.
-    var onExit: (Int32?) -> Void = { _ in }
+    var onExit: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(onExit: onExit) }
 
@@ -41,219 +43,144 @@ struct TerminalPane: NSViewRepresentable {
     /// has no window yet the one time that runs, so this hooks the moment it
     /// gets one. With it, characters, control keys and the tmux prefix all
     /// reach the client (checked against `capture-pane` and `client_prefix`).
-    final class AttachedTerminalView: LocalProcessTerminalView, CachesAppliedFontTheme {
-        var appliedFontKey: String?
-        var appliedThemeName: String?
-
+    ///
+    /// `super` first, and it matters: `AppTerminalView.viewDidMoveToWindow` is
+    /// what builds the ghostty surface, starts its display link and — for a
+    /// SwiftUI host that detaches and reattaches a view while diffing — decides
+    /// *not* to rebuild one that already exists, which is what keeps the
+    /// scrollback across a sidebar switch.
+    final class AttachedTerminalView: AppTerminalView {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             guard window != nil else { return }
             // After SwiftUI finishes installing the pane, not during.
             DispatchQueue.main.async { [weak self] in
-                guard let self, let window = self.window else { return }
-                window.makeFirstResponder(self)
+                self?.acquireProgrammaticFocus()
             }
         }
 
-        /// SwiftTerm's own handler opens any scheme it can parse; `TerminalLink`
-        /// is the allowlist. ⌘-hover underlines the match, ⌘-click lands here.
-        override func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-            TerminalLink.open(link)
-        }
-
+        /// Dropping Finder files onto a terminal types their shell-quoted
+        /// paths, the same convention iTerm and Terminal.app use. libghostty's
+        /// own drop handling is UIKit-only, so this stays ours.
         override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
             sender.moomux_hasFilePaths ? .copy : []
         }
 
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
             guard let text = sender.moomux_filePathsForDrop else { return false }
-            insertText(text, replacementRange: NSRange(location: 0, length: 0))
-            return true
+            // The text path, not keystrokes: a program with bracketed paste on
+            // sees a paste, so a path is never mistaken for typed control keys.
+            return paste(text: text)
         }
     }
 
     /// Reuses a pooled view for this session if one is already running,
     /// rather than starting a fresh `tmux attach` — see `AppState.plainPanes`.
     ///
-    /// `processDelegate` is `weak` in SwiftTerm, so `context.coordinator` —
+    /// `delegate` is `weak` on `AppTerminalView`, so `context.coordinator` —
     /// only owned by SwiftUI for as long as this representable stays mounted
     /// — can't be the delegate: it would deallocate on the next sidebar
     /// switch, and a background exit would have nobody to tell.
     /// `AppState.plainDelegates` keeps one alive per session instead.
-    func makeNSView(context: Context) -> LocalProcessTerminalView {
+    func makeNSView(context: Context) -> AttachedTerminalView {
         if let existing = pool.plainPanes[sessionID] {
-            existing.processDelegate = pool.plainDelegates[sessionID]
+            existing.delegate = pool.plainDelegates[sessionID]
+            existing.setSurfaceVisible(true)
             return existing
         }
         let view = AttachedTerminalView(frame: .init(x: 0, y: 0, width: 640, height: 400))
-        view.applyFontIfNeeded(app.terminalFont)
-        view.applyThemeIfNeeded(app.terminalTheme)
         view.registerForDraggedTypes([.fileURL])
         let delegate = context.coordinator
-        view.processDelegate = delegate
+        view.delegate = delegate
         pool.plainDelegates[sessionID] = delegate
-        // `-u` forces UTF-8: the client's environment here is SwiftTerm's
-        // minimal one, so tmux cannot infer it from LANG the way a login shell
-        // would. Without it, box drawing and any non-ASCII output corrupt.
-        view.startProcess(executable: executable, args: ["-u", "attach", "-t", tmuxSession])
+        view.controller = pool.terminalController
+        // **Quoting is load-bearing.** This string is run by a shell — the
+        // surface spawns `login -flp <user> /bin/bash --noprofile --norc -c
+        // exec -l <command>` — so an unquoted session name carrying `;` or
+        // `$(…)` would execute. The name arrives over the socket from the core,
+        // which is not a reason to trust it with a shell.
+        //
+        // ghostty's *config* has a `direct:` prefix that skips the shell
+        // entirely, and it does **not** work here: measured, the surface config
+        // takes a plain command string and never runs it through ghostty's
+        // `Config.command` parser, so the pane reported that it was looking for
+        // a binary literally named `direct:/opt/homebrew/bin/tmux`. Hence
+        // quoting, not argv.
+        //
+        // `-u` forces UTF-8: the client's environment here is the one
+        // libghostty gives a child, so tmux cannot infer it from LANG the way a
+        // login shell would. Without it, box drawing and any non-ASCII output
+        // corrupt.
+        view.configuration = TerminalSurfaceOptions(
+            backend: .exec,
+            command: "\(executable.shellQuoted) -u attach -t \(tmuxSession.shellQuoted)",
+            // Explicit `false`, not nil. Nil means "whatever the user's ghostty
+            // config says", and a user with `wait-after-command = true` would
+            // keep the surface open after the tmux client exits — so
+            // `terminalDidClose` never fires, `onExit` never runs, and the
+            // session stays listed in `attachedSessions` with a dead client.
+            // Same reasoning as sending `Dangerous` explicitly on a create.
+            waitAfterCommand: false,
+            // ~96ms, on the dependency's own advice for this exact workload:
+            // ghostty's IO thread coalesces resizes on a 25ms trailing-only
+            // window, and an alt-screen agent TUI that fully repaints on every
+            // winsize posts sizes faster than that resolves, so a live divider
+            // drag composites a stale grid into the new bounds. 0 (the default)
+            // is right for a transcript that never re-emits its scrollback; a
+            // pane holding an agent is the other case.
+            resizeThrottleMilliseconds: 96
+        )
         pool.plainPanes[sessionID] = view
         return view
     }
 
-    func updateNSView(_ view: LocalProcessTerminalView, context: Context) {
+    func updateNSView(_ view: AttachedTerminalView, context: Context) {
         pool.plainDelegates[sessionID]?.onExit = onExit
-        (view as? AttachedTerminalView)?.applyFontIfNeeded(app.terminalFont)
-        (view as? AttachedTerminalView)?.applyThemeIfNeeded(app.terminalTheme)
     }
 
-    /// Does nothing: the process and its delegate both keep working in the
-    /// background — see `makeNSView`. Only `AppState.detach(_:)` tears them
-    /// down.
-    static func dismantleNSView(_ view: LocalProcessTerminalView, coordinator: Coordinator) {}
+    /// Stops the renderer, keeps the session. The pty and its tmux client both
+    /// go on running in the background — see `makeNSView` — so switching back
+    /// to this session is instant. Only `AppState.detach(_:)` tears them down.
+    static func dismantleNSView(_ view: AttachedTerminalView, coordinator: Coordinator) {
+        view.setSurfaceVisible(false)
+    }
 
-    final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
-        var onExit: (Int32?) -> Void
+    final class Coordinator: NSObject, TerminalSurfaceCloseDelegate,
+                             TerminalSurfaceOpenURLDelegate,
+                             TerminalSurfaceClipboardConfirmationDelegate {
+        var onExit: () -> Void
 
-        init(onExit: @escaping (Int32?) -> Void) { self.onExit = onExit }
+        init(onExit: @escaping () -> Void) { self.onExit = onExit }
 
-        func processTerminated(source: TerminalView, exitCode: Int32?) {
-            onExit(exitCode)
+        /// The tmux client went away: the user pressed the prefix key and `d`,
+        /// or the session ended under them.
+        func terminalDidClose(processAlive: Bool) { onExit() }
+
+        /// libghostty finds the links — its own implicit-URL matcher plus OSC 8
+        /// payloads — and asks before opening one. `TerminalLink` is the
+        /// allowlist. Without a delegate nothing opens at all, so this is the
+        /// only thing standing between `cat hostile.txt` and the system.
+        func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
+            TerminalLink.open(url)
         }
 
-        // tmux redraws itself on SIGWINCH, so there is nothing to do for a
-        // resize, and the window title is the app's own.
-        func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-        func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
-        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-    }
-}
-
-/// A named background/foreground/ANSI-palette triple, independent of system
-/// appearance. `nativeBackgroundColor` defaults to `NSColor.textBackgroundColor`,
-/// which is white in light mode — that's why panes never looked like this
-/// before any theme was installed at all.
-public enum TerminalColorTheme: String, CaseIterable, Identifiable {
-    case vibrant, classic, dracula, nord, solarizedDark
-
-    public var id: String { rawValue }
-
-    public var displayName: String {
-        switch self {
-        case .vibrant: return "Vibrant"
-        case .classic: return "Classic"
-        case .dracula: return "Dracula"
-        case .nord: return "Nord"
-        case .solarizedDark: return "Solarized Dark"
+        /// ghostty asks before a protected clipboard operation, and with no
+        /// delegate the bridge answers `false` — silently. That is right for a
+        /// program reading the clipboard and wrong for the ⌘V the user just
+        /// pressed: per the package's `handleClipboardConfirmation`, an
+        /// unanswered paste simply does not happen, with no dialog and nothing
+        /// in the log.
+        ///
+        /// So the cases are split on their initiator rather than lumped: a
+        /// paste is the user's own keystroke and is allowed, while OSC 52 is the
+        /// *program* in the pane asking to read or write the system clipboard,
+        /// which is the thing worth refusing — pane output is
+        /// attacker-influenceable, the same premise as `TerminalLink`.
+        func terminalDidRequestClipboardConfirmation(
+            _ request: TerminalClipboardConfirmationRequest
+        ) {
+            request.respond(allow: request.kind == .paste)
         }
-    }
-
-    var background: NSColor {
-        switch self {
-        case .vibrant: return NSColor(red8: 0x1a, green8: 0x1b, blue8: 0x26)
-        case .classic: return .black
-        case .dracula: return NSColor(red8: 0x28, green8: 0x2a, blue8: 0x36)
-        case .nord: return NSColor(red8: 0x2e, green8: 0x34, blue8: 0x40)
-        case .solarizedDark: return NSColor(red8: 0x00, green8: 0x2b, blue8: 0x36)
-        }
-    }
-
-    var foreground: NSColor {
-        switch self {
-        case .vibrant: return NSColor(red8: 0xc0, green8: 0xcb, blue8: 0xf4)
-        case .classic: return .white
-        case .dracula: return NSColor(red8: 0xf8, green8: 0xf8, blue8: 0xf2)
-        case .nord: return NSColor(red8: 0xd8, green8: 0xde, blue8: 0xe9)
-        case .solarizedDark: return NSColor(red8: 0x83, green8: 0x94, blue8: 0x96)
-        }
-    }
-
-    /// The 16 ANSI colors, dark then bright. Only `vibrant` and `classic` reuse
-    /// SwiftTerm's own tables — the other three are each a real theme's actual
-    /// terminal mapping, not this file's invention.
-    var ansiPalette: [SwiftTerm.Color] {
-        switch self {
-        case .vibrant, .classic: return SwiftTerm.Color.vgaColors
-        case .dracula:
-            return [0x21222c, 0xff5555, 0x50fa7b, 0xf1fa8c, 0xbd93f9, 0xff79c6, 0x8be9fd, 0xf8f8f2,
-                    0x6272a4, 0xff6e6e, 0x69ff94, 0xffffa5, 0xd6acff, 0xff92df, 0xa4ffff, 0xffffff]
-                .map(SwiftTerm.Color.init(hex:))
-        case .nord:
-            return [0x3b4252, 0xbf616a, 0xa3be8c, 0xebcb8b, 0x81a1c1, 0xb48ead, 0x88c0d0, 0xe5e9f0,
-                    0x4c566a, 0xbf616a, 0xa3be8c, 0xebcb8b, 0x81a1c1, 0xb48ead, 0x8fbcbb, 0xeceff4]
-                .map(SwiftTerm.Color.init(hex:))
-        case .solarizedDark:
-            return [0x073642, 0xdc322f, 0x859900, 0xb58900, 0x268bd2, 0xd33682, 0x2aa198, 0xeee8d5,
-                    0x002b36, 0xcb4b16, 0x586e75, 0x657b83, 0x839496, 0x6c71c4, 0x93a1a1, 0xfdf6e3]
-                .map(SwiftTerm.Color.init(hex:))
-        }
-    }
-}
-
-extension TerminalColorTheme {
-    /// `Terminal.installPalette` silently no-ops if given anything but exactly
-    /// 16 colors (`Terminal.swift`), so a typo dropping or duplicating one hex
-    /// literal in a palette above would install nothing and leave the
-    /// *previous* theme's palette in place — with no error anywhere. This is
-    /// the check that catches it.
-    static func demo() {
-        for theme in allCases {
-            assert(theme.ansiPalette.count == 16, "\(theme.rawValue) palette must have 16 colors")
-        }
-    }
-}
-
-private extension SwiftTerm.Color {
-    convenience init(hex: Int) {
-        self.init(red8: UInt16((hex >> 16) & 0xff), green8: UInt16((hex >> 8) & 0xff),
-                   blue8: UInt16(hex & 0xff))
-    }
-}
-
-private extension NSColor {
-    convenience init(red8: UInt8, green8: UInt8, blue8: UInt8) {
-        self.init(red: CGFloat(red8) / 255, green: CGFloat(green8) / 255,
-                   blue: CGFloat(blue8) / 255, alpha: 1)
-    }
-}
-
-extension TerminalView {
-    func install(theme: TerminalColorTheme) {
-        nativeBackgroundColor = theme.background
-        nativeForegroundColor = theme.foreground
-        caretColor = theme.foreground
-        terminal.installPalette(colors: theme.ansiPalette)
-    }
-}
-
-/// Adopted by every custom `TerminalView` subclass this app creates, so a
-/// `SwiftUI` `updateNSView` can reapply the current font/theme every render
-/// (they're read from `@Observable` state, so there's no cheaper place to put
-/// the check) without actually touching the view unless the value changed.
-///
-/// This isn't just an optimization: SwiftTerm's `font` setter unconditionally
-/// calls `selectNone()` (dropping a user's in-progress text selection) and
-/// `resetFont()`, which — whenever the view already has a real size —
-/// calls `resize()`, which calls `terminal.softReset()`. Reapplying an
-/// unchanged font on every re-render would silently soft-reset the terminal
-/// and drop selections on every unrelated event (a 2s poll tick, any pane's
-/// `%window-renamed`), not just on an actual font change.
-protocol CachesAppliedFontTheme: AnyObject {
-    var appliedFontKey: String? { get set }
-    var appliedThemeName: String? { get set }
-}
-
-extension CachesAppliedFontTheme where Self: TerminalView {
-    func applyFontIfNeeded(_ newFont: NSFont) {
-        let key = "\(newFont.fontName)@\(newFont.pointSize)"
-        guard appliedFontKey != key else { return }
-        appliedFontKey = key
-        font = newFont
-    }
-
-    func applyThemeIfNeeded(_ theme: TerminalColorTheme) {
-        guard appliedThemeName != theme.rawValue else { return }
-        appliedThemeName = theme.rawValue
-        install(theme: theme)
     }
 }
 
@@ -267,9 +194,46 @@ extension NSDraggingInfo {
     var moomux_filePathsForDrop: String? {
         guard let urls = draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil)
                 as? [URL], !urls.isEmpty else { return nil }
-        return urls.map { url in
-            "'\(url.path.replacingOccurrences(of: "'", with: "'\\''"))'"
-        }.joined(separator: " ")
+        return urls.map(\.path).map(\.shellQuoted).joined(separator: " ")
+    }
+}
+
+extension String {
+    /// This string as a single shell word, safe to interpolate into a command
+    /// line a shell will parse.
+    ///
+    /// Single quotes, because inside them a shell expands nothing at all — no
+    /// `$`, no backtick, no `;`, no glob. The one character that cannot appear
+    /// between them is `'` itself, so each one closes the quote, emits an
+    /// escaped literal quote and reopens. Used by the `tmux attach` command
+    /// line and by dropped file paths, both of which carry text this app did
+    /// not author.
+    var shellQuoted: String {
+        "'" + replacingOccurrences(of: "'", with: #"'\''"#) + "'"
+    }
+
+    /// The escaping is the security boundary, so it gets asserted rather than
+    /// eyeballed: getting the embedded-quote case wrong is exactly how a
+    /// quoting helper becomes the injection it was written to prevent.
+    static func shellQuotedDemo() {
+        assert("lgok".shellQuoted == "'lgok'")
+        // The whole point: a metacharacter stays data.
+        assert("a; touch /tmp/x".shellQuoted == "'a; touch /tmp/x'")
+        assert("$(id)".shellQuoted == "'$(id)'")
+        assert("/opt/home brew/bin/tmux".shellQuoted == "'/opt/home brew/bin/tmux'")
+        assert("".shellQuoted == "''")
+        // A quote has to break out of the quoting and come back.
+        assert("it's".shellQuoted == #"'it'\''s'"#, "it's".shellQuoted)
+        // The break-out attempt: closing the quote and appending a command must
+        // end up as one quoted word again, with no unquoted `;` anywhere.
+        let hostile = #"x'; touch /tmp/pwned; '"#
+        let quoted = hostile.shellQuoted
+        assert(quoted == #"'x'\''; touch /tmp/pwned; '\'''"#, quoted)
+        assert(quoted.hasPrefix("'") && quoted.hasSuffix("'"), quoted)
+        // Every `'` in the output is either a quote boundary or preceded by a
+        // backslash, which is what makes the word unbreakable.
+        assert(!quoted.replacingOccurrences(of: #"'\''"#, with: "").dropFirst().dropLast()
+            .contains("'"), quoted)
     }
 }
 
@@ -285,9 +249,8 @@ struct SessionTerminal: View {
     var body: some View {
         if let tmux = ToolPath.find("tmux") {
             TerminalPane(executable: tmux, sessionID: session.id,
-                        tmuxSession: session.tmuxSession, pool: app) { _ in
-                // SwiftTerm reports termination off the main thread.
-                Task { @MainActor in onDetach() }
+                        tmuxSession: session.tmuxSession, pool: app) {
+                onDetach()
             }
             // Identifies the view per session so SwiftUI does not confuse one
             // session's representable for another's — the actual process
