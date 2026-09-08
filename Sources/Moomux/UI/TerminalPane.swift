@@ -113,6 +113,18 @@ struct TerminalPane: NSViewRepresentable {
         // corrupt.
         view.configuration = TerminalSurfaceOptions(
             backend: .exec,
+            // The child gets `TERM=xterm-ghostty` whether or not anything on the
+            // machine can describe it. libghostty-spm ships the compiled
+            // terminfo in its resource bundle and points the child at the
+            // *shell integration* half (`GHOSTTY_RESOURCES_DIR`) but never at
+            // this half — so on a machine with no Ghostty.app installed, tmux
+            // exits in ~70ms with "missing or unsuitable terminal:
+            // xterm-ghostty" and the pane shows ghostty's "failed to launch the
+            // requested command" screen. Nil path means the bundle did not come
+            // along, which is a different bug (`make app` copies it); no env is
+            // then the same behaviour as before.
+            envVars: GhosttyRuntimeResources.terminfoDirectoryURL
+                .map { ["TERMINFO": $0.path] } ?? [:],
             command: "\(executable.shellQuoted) -u attach -t \(tmuxSession.shellQuoted)",
             // Explicit `false`, not nil. Nil means "whatever the user's ghostty
             // config says", and a user with `wait-after-command = true` would

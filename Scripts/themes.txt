@@ -1,0 +1,69 @@
+Catppuccin Frappe
+Catppuccin Latte
+Catppuccin Macchiato
+Catppuccin Mocha
+TokyoNight
+TokyoNight Day
+TokyoNight Moon
+TokyoNight Night
+TokyoNight Storm
+Gruvbox Dark
+Gruvbox Dark Hard
+Gruvbox Light
+Gruvbox Material
+Gruvbox Material Dark
+Gruvbox Material Light
+Nord
+Nord Light
+Nordfox
+Dracula
+Dracula+
+Solarized Dark Patched
+Solarized Dark Higher Contrast
+iTerm2 Solarized Dark
+iTerm2 Solarized Light
+Rose Pine
+Rose Pine Dawn
+Rose Pine Moon
+Everforest Dark Hard
+Everforest Dark Med
+Everforest Dark Soft
+Everforest Light Med
+Kanagawa Dragon
+Kanagawa Lotus
+Kanagawa Wave
+Atom One Dark
+Atom One Light
+One Half Dark
+One Half Light
+Ayu
+Ayu Light
+Ayu Mirage
+Monokai Pro
+Monokai Pro Machine
+Monokai Pro Ristretto
+Monokai Pro Spectrum
+Monokai Remastered
+GitHub Dark
+GitHub Dark Default
+GitHub Dark Dimmed
+GitHub Light Default
+Nightfox
+Duskfox
+Carbonfox
+Terafox
+Iceberg Dark
+Iceberg Light
+Zenburn
+Material
+Material Darker
+Night Owl
+Snazzy
+Vesper
+Melange Dark
+Melange Light
+Oxocarbon
+Seoulbones Dark
+Seoulbones Light
+Zenbones Dark
+Zenbones Light

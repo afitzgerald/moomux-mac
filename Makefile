@@ -100,6 +100,14 @@ app: build
 	# bundle. `Bundle.module` finds it in Contents/Resources; without it a pane's
 	# child gets TERM=xterm-ghostty with no terminfo to match, and tmux attaches
 	# to a terminal it cannot describe.
+	# ghostty's themes, which libghostty-spm does not ship. They go *into* that
+	# bundle — ghostty resolves `theme = <name>` under GHOSTTY_RESOURCES_DIR,
+	# which the package points at the bundle's `Ghostty` directory. Copied into
+	# $(BINDIR)'s bundle before it is copied on, so the unbundled `.build`
+	# binary resolves them too. Without them one `theme =` line makes
+	# `prepareConfig` reject the user's whole config (see AppState.paneConfig).
+	rm -rf $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle/Ghostty/themes
+	cp -R Resources/ghostty-themes $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle/Ghostty/themes
 	cp -R $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle $(APP)/Contents/Resources/
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP)
