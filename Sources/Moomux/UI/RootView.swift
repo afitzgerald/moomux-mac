@@ -721,17 +721,16 @@ private struct SessionRow: View {
             // `prGlyph` does — a merged or blocked PR is exactly what you want
             // to spot without opening the session.
             if let ticket = session.ticket, !ticket.isEmpty {
-                Image(systemName: "ticket")
+                TagIcon(symbol: "ticket", link: ticket, help: ticket)
                     .foregroundStyle(.secondary)
-                    .help(ticket)
             }
             if let pr = session.pr, !pr.isEmpty {
                 let info = app.views[session.id]?.pr
                 let badge = PRInfo.badge(info)
-                Image(systemName: badge.symbol)
+                TagIcon(symbol: badge.symbol, link: pr,
+                        help: info?.summary.isEmpty == false ? "\(badge.help) — \(info!.summary)"
+                                                            : badge.help)
                     .foregroundStyle(Theme.pr(badge, app.palette))
-                    .help(info?.summary.isEmpty == false ? "\(badge.help) — \(info!.summary)"
-                                                         : badge.help)
             }
             // `internal/tui/list.go`'s two git icons, in its order: ± for a
             // dirty worktree, ↑ for commits that are not on the remote. Both
@@ -1012,6 +1011,30 @@ private struct SessionInfo: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// A tag icon that opens its target when the tag is a link, and stays
+/// decorative when it isn't — a ticket is as often "T-1" as a URL, and a button
+/// that does nothing when clicked is worse than no button. `TerminalLink` is
+/// the same allowlist a ⌘-clicked pane link goes through, so nothing here can
+/// hand the system a scheme that one refuses.
+///
+/// A `Button` and not a tap gesture: a gesture on a row's content outranks the
+/// `List`'s own selection and would stop the row selecting at all.
+private struct TagIcon: View {
+    let symbol: String
+    let link: String
+    let help: String
+
+    var body: some View {
+        if TerminalLink.resolve(link) != nil {
+            Button { TerminalLink.open(link) } label: { Image(systemName: symbol) }
+                .buttonStyle(.plain)
+                .help("\(help) — click to open")
+        } else {
+            Image(systemName: symbol).help(help)
         }
     }
 }
