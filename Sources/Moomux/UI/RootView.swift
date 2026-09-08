@@ -199,7 +199,7 @@ struct RootView: View {
                     .help("Every live session at once, read-only. Click one to open it.")
             }
             ToolbarItem {
-                Toggle("Archived", isOn: $app.showArchived)
+                Toggle(isOn: $app.showArchived) { Label("Archived", systemImage: "archivebox") }
                     .help("Show archived sessions")
             }
             ToolbarItem {
@@ -744,12 +744,12 @@ private struct SessionRow: View {
                 if git.dirty {
                     Image(systemName: "plusminus")
                         .foregroundStyle(Theme.gitWarn(app.palette))
-                        .help("uncommitted changes")
+                        .help("Uncommitted changes")
                 }
                 if git.unpushed {
                     Image(systemName: "arrow.up")
                         .foregroundStyle(Theme.gitWarn(app.palette))
-                        .help("unpushed commits")
+                        .help("Unpushed commits")
                 }
             }
             // Archived rows are only on screen because the Archived toggle is
@@ -758,7 +758,7 @@ private struct SessionRow: View {
             if session.archived {
                 Image(systemName: "archivebox")
                     .foregroundStyle(.tertiary)
-                    .help("archived")
+                    .help("Archived")
             }
         }
         .padding(.vertical, 2)

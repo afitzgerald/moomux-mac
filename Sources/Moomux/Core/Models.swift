@@ -403,12 +403,12 @@ public struct PRInfo: Decodable, Equatable, Sendable {
 
         public var help: String {
             switch self {
-            case .open: return "pull request"
-            case .merged: return "pull request merged"
-            case .closed: return "pull request closed"
-            case .conflicts: return "pull request has conflicts"
-            case .failing: return "pull request checks failing"
-            case .pending: return "pull request checks running"
+            case .open: return "Pull request"
+            case .merged: return "Pull request merged"
+            case .closed: return "Pull request closed"
+            case .conflicts: return "Pull request has conflicts"
+            case .failing: return "Pull request checks failing"
+            case .pending: return "Pull request checks running"
             }
         }
     }
