@@ -3,7 +3,7 @@ import UserNotifications
 
 /// Banners for sessions that start waiting on you while you are elsewhere.
 ///
-/// The whole UserNotifications surface lives here, the way SwiftTerm lives in
+/// The whole UserNotifications surface lives here, the way libghostty lives in
 /// `UI/TerminalPane.swift`: `UNUserNotificationCenter.current()` **traps** in a
 /// binary with no bundle identifier — `swift run`, and `--selftest`, which
 /// `Scripts/selfcheck.sh` execs from `.build`. `center` is nil there and every

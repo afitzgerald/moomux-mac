@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
+import GhosttyTerminal
 import Observation
-import SwiftTerm
 
 /// One-way flow, no exceptions:
 ///
@@ -70,47 +70,6 @@ public final class AppState {
     public private(set) var focusSearchToken = 0
 
     public func focusSearch() { focusSearchToken += 1 }
-    /// The terminal panes' font, client-local — SwiftTerm's rendering choice,
-    /// not a project setting. Defaults to a Nerd Font so powerline/devicon
-    /// glyphs in prompts and statuslines render as icons rather than tofu,
-    /// but falls back to the system monospace font if that family isn't
-    /// installed.
-    public var terminalFontName = UserDefaults.standard.string(forKey: "terminalFontName")
-        ?? "Hack Nerd Font Mono" {
-        didSet { UserDefaults.standard.set(terminalFontName, forKey: "terminalFontName") }
-    }
-    public var terminalFontSize = UserDefaults.standard.object(forKey: "terminalFontSize") as? Double ?? 12 {
-        didSet { UserDefaults.standard.set(terminalFontSize, forKey: "terminalFontSize") }
-    }
-    public var terminalFont: NSFont {
-        NSFont(name: terminalFontName, size: terminalFontSize)
-            ?? .monospacedSystemFont(ofSize: terminalFontSize, weight: .regular)
-    }
-    /// The terminal panes' background/foreground/ANSI-palette theme. Client-local
-    /// for the same reason as the font.
-    public var terminalThemeName = UserDefaults.standard.string(forKey: "terminalThemeName")
-        ?? TerminalColorTheme.vibrant.rawValue {
-        didSet { UserDefaults.standard.set(terminalThemeName, forKey: "terminalThemeName") }
-    }
-    public var terminalTheme: TerminalColorTheme {
-        TerminalColorTheme(rawValue: terminalThemeName) ?? .vibrant
-    }
-    /// Installed monospace font families, for the settings picker. Family
-    /// names, not PostScript names — `terminalFont` resolves a stored family
-    /// name via `NSFont(name:)`, so a family only qualifies here if *that*
-    /// lookup (not just some member's PostScript name) actually succeeds —
-    /// "SF Mono" is a real installed font that fails exactly this check.
-    public static var installedMonospaceFonts: [String] {
-        let fm = NSFontManager.shared
-        return fm.availableFontFamilies.filter { family in
-            guard NSFont(name: family, size: 12) != nil,
-                  let members = fm.availableMembers(ofFontFamily: family) else { return false }
-            return members.contains { member in
-                guard let psName = member[0] as? String else { return false }
-                return NSFont(name: psName, size: 12)?.isFixedPitch == true
-            }
-        }.sorted()
-    }
     /// Replace the detail column with a read-only snapshot of every live
     /// session. Snapshots and not clients: an attached client sizes the shared
     /// tmux window for everyone, so a grid of six would letterbox six real
@@ -184,11 +143,85 @@ public final class AppState {
     /// The actual tmux clients kept running in the background for attached
     /// sessions that aren't the one on screen, so switching back to one is
     /// instant instead of a fresh forkpty. `plainDelegates` exists because
-    /// `LocalProcessTerminalView.processDelegate` is `weak`: without something
-    /// else retaining the delegate, a client that exits while backgrounded
-    /// has nobody to tell.
-    @ObservationIgnored var plainPanes: [Session.ID: LocalProcessTerminalView] = [:]
+    /// `AppTerminalView.delegate` is `weak`: without something else retaining
+    /// the delegate, a client that exits while backgrounded has nobody to tell.
+    @ObservationIgnored var plainPanes: [Session.ID: TerminalPane.AttachedTerminalView] = [:]
     @ObservationIgnored var plainDelegates: [Session.ID: TerminalPane.Coordinator] = [:]
+
+    /// The one libghostty runtime: config, the `ghostty_app_t` behind it, and
+    /// the wakeup fan-out every surface shares. One per process, so the
+    /// attached pane and every grid tile answer to the same config.
+    ///
+    /// Built lazily rather than in `init` because creating it initialises the
+    /// ghostty C runtime, and `--selftest` runs in a binary that never draws a
+    /// terminal — see `SelfTest`.
+    @ObservationIgnored public private(set) lazy var terminalController: TerminalController = {
+        // The user's own Ghostty config, so panes here look like their
+        // terminal: font, theme, cursor, padding, the lot. An empty
+        // `TerminalTheme` is not a detail — the controller layers `theme` *on
+        // top of* the base config, and `TerminalTheme.default` is a full
+        // Afterglow/Alabaster palette that would silently overwrite every
+        // colour the file just set.
+        if let path = Self.ghosttyConfigPath {
+            return TerminalController(
+                configSource: .file(path),
+                theme: TerminalTheme(light: TerminalConfiguration(), dark: TerminalConfiguration()),
+                terminalConfiguration: Self.paneKeybinds
+            )
+        }
+        // No config file: a dark pane, matching what this app looked like
+        // before it read one. Colours only — no 16-entry palette, because
+        // ghostty's own default is better than a hand-copied table and a
+        // machine with no ghostty config has expressed no opinion about it.
+        return TerminalController(
+            configSource: .generated(TerminalConfiguration(startingFrom: .default) {
+                $0.withBackground("1a1b26")
+                $0.withForeground("c0cbf4")
+                // A Nerd Font so powerline/devicon glyphs in prompts and
+                // statuslines render as icons rather than tofu. ghostty falls
+                // back on its own if the family isn't installed.
+                $0.withFontFamily("Hack Nerd Font Mono")
+                $0.withFontSize(12)
+            }.rendered),
+            theme: TerminalTheme(light: TerminalConfiguration(), dark: TerminalConfiguration()),
+            terminalConfiguration: Self.paneKeybinds
+        )
+    }()
+
+    /// The app owns ⌘-shortcuts; ghostty owns none of them.
+    ///
+    /// ghostty ships a full set of its own keybinds, and a focused surface eats
+    /// them before AppKit's menu ever sees the event. Measured: with a pane
+    /// focused, ⌘, opened nothing at all — ghostty's `open_config` swallowed it
+    /// — while the same keystroke with the sidebar focused opened Settings. Its
+    /// ⌘T, ⌘N and ⌘W would have gone the same way, all of them actions this app
+    /// either owns or does not have.
+    ///
+    /// So: `keybind = clear` drops the lot, then the three a terminal is
+    /// genuinely expected to answer are put back. Rendered *after* the user's
+    /// own config, so a `keybind` they set is cleared too — deliberate, since
+    /// the alternative is a menu item that silently does nothing depending on
+    /// where focus happens to be.
+    nonisolated private static let paneKeybinds = TerminalConfiguration { builder in
+        builder.withCustom("keybind", "clear")
+        builder.withCustom("keybind", "super+c=copy_to_clipboard")
+        builder.withCustom("keybind", "super+v=paste_from_clipboard")
+        builder.withCustom("keybind", "super+a=select_all")
+    }
+
+    /// The first readable file of the three ghostty itself looks at, or nil.
+    /// Kept in the same order as ghostty's own lookup so the app cannot
+    /// disagree with the terminal it is imitating.
+    nonisolated public static var ghosttyConfigPath: String? {
+        var candidates: [String] = []
+        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+            candidates.append("\(xdg)/ghostty/config")
+        }
+        let home = NSHomeDirectory()
+        candidates.append("\(home)/.config/ghostty/config")
+        candidates.append("\(home)/Library/Application Support/com.mitchellh.ghostty/config")
+        return candidates.first { FileManager.default.isReadableFile(atPath: $0) }
+    }
 
     public let client: MoomuxClient
 
@@ -1062,9 +1095,25 @@ public final class AppState {
     /// whatever tmux client was kept running for the session.
     public func detach(_ session: Session) { detach(id: session.id) }
 
+    /// `controller = nil` is what kills the client, and it has to be explicit.
+    ///
+    /// `AppTerminalView` owns the ghostty surface; freeing that closes the pty,
+    /// which hangs up the tmux client on the other end. Dropping the view was
+    /// the obvious way to get there and **does not work**: measured, the UI
+    /// detached and `tmux list-clients` still showed our client, because
+    /// something in the package (the display link is the likely holder)
+    /// outlives the view and keeps the surface coordinator alive with it. So
+    /// the user's iTerm and phone would have stayed letterboxed forever —
+    /// exactly the thing detach exists to undo.
+    ///
+    /// libghostty-spm publishes no `free()`, but assigning `controller` runs
+    /// `rebuildIfReady(removingBridgeFrom: oldValue)`, and a non-nil
+    /// `previousController` skips the keep-the-surface early return, so the
+    /// teardown runs before the rebuild bails on the missing controller. That
+    /// is the public spelling of "let go of the pty".
     private func detach(id: Session.ID) {
         attachedSessions.remove(id)
-        plainPanes.removeValue(forKey: id)?.terminate()
+        plainPanes.removeValue(forKey: id)?.controller = nil
         plainDelegates.removeValue(forKey: id)
     }
 

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftTerm
+import GhosttyTerminal
 import SwiftUI
 
 /// Every live session at once, as read-only snapshots.
@@ -58,7 +58,7 @@ private struct SessionTile: View {
                 Text(session.project).foregroundStyle(.secondary).lineLimit(1)
             }
             .font(.caption)
-            SnapshotTerminal(rows: rows)
+            SnapshotTerminal(rows: rows, controller: app.terminalController)
                 .frame(height: 200)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay {
@@ -107,40 +107,46 @@ private func capture(session: String) async -> [String] {
 
 /// A terminal used only as a renderer: bytes in, nothing out.
 ///
-/// `NoScrollerTerminalView` and not `TerminalView`: SwiftTerm reserves ~17pt
-/// for a scroller it never hides, which is a whole column at this size.
+/// libghostty's host-managed backend, so there is no process and no pty behind
+/// a tile — `InMemoryTerminalSession.receive` is the whole input path, and the
+/// capture bytes go straight into the same VT engine the attached pane uses.
 private struct SnapshotTerminal: NSViewRepresentable {
     let rows: [String]
+    let controller: TerminalController
 
     /// A terminal that cannot be clicked, so the tile underneath can be.
     ///
-    /// The snapshot covers ~85% of a tile, and `MacTerminalView.mouseDown`
-    /// swallows a click without forwarding it — the same thing `PaneTerminalView`
-    /// exists to override. SwiftUI's `.allowsHitTesting(false)` does **not**
-    /// reach it (measured: the tap still never fired): the view is a real
-    /// `NSView` in the AppKit hierarchy and the click is resolved by
-    /// `NSView.hitTest` before SwiftUI is consulted. Refusing there is what
-    /// makes "click a tile to open it" true, and it also keeps the terminal
-    /// from stealing first responder from the sidebar list, which is what
-    /// silently killed arrow-key navigation.
-    private final class SnapshotTerminalView: NoScrollerTerminalView {
+    /// The snapshot covers ~85% of a tile, and a terminal view consumes a click
+    /// rather than forwarding it. SwiftUI's `.allowsHitTesting(false)` does
+    /// **not** reach it (measured against SwiftTerm, and the reason is the same
+    /// here): the view is a real `NSView` in the AppKit hierarchy and the click
+    /// is resolved by `NSView.hitTest` before SwiftUI is consulted. Refusing
+    /// there is what makes "click a tile to open it" true, and it also keeps the
+    /// terminal from stealing first responder from the sidebar list, which is
+    /// what silently killed arrow-key navigation.
+    private final class SnapshotTerminalView: AppTerminalView {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 
-    func makeNSView(context: Context) -> TerminalView {
+    func makeNSView(context: Context) -> AppTerminalView {
         let view = SnapshotTerminalView(frame: .init(x: 0, y: 0, width: 400, height: 200))
-        view.terminalDelegate = context.coordinator
-        view.font = .monospacedSystemFont(ofSize: 9, weight: .regular)
-        context.coordinator.view = view
+        view.delegate = context.coordinator
+        view.controller = controller
+        view.configuration = TerminalSurfaceOptions(
+            backend: .inMemory(context.coordinator.session),
+            // A tile is ~50 columns against an agent pane's 150-210, so the
+            // font has to be small for a snapshot to say anything at all.
+            fontSize: 9
+        )
         return view
     }
 
     /// Guarded on the rows actually differing. `AppState` is `@Observable` and
     /// fires on any assignment, so a tile's body re-runs on every poll and every
     /// watcher tick — about once a second — while a capture only arrives every
-    /// five. Unguarded, each tile re-feeds a whole screen into SwiftTerm five
+    /// five. Unguarded, each tile re-feeds a whole screen into the parser five
     /// times per snapshot for nothing.
-    func updateNSView(_ view: TerminalView, context: Context) {
+    func updateNSView(_ view: AppTerminalView, context: Context) {
         guard context.coordinator.rows != rows else { return }
         context.coordinator.rows = rows
         context.coordinator.repaint()
@@ -151,57 +157,25 @@ private struct SnapshotTerminal: NSViewRepresentable {
     /// Truncation needs the tile's column count, and only the terminal knows
     /// it — and only once SwiftUI has given the view a real frame. So the rows
     /// live here and are painted from both sides: a fresh capture, and the
-    /// `sizeChanged` that first reveals how wide a tile is. Without the second,
-    /// the first paint lands on a zero-frame view and SwiftTerm's soft-reset
-    /// wipes it, which is the black-idle-pane bug in miniature.
-    final class Coordinator: TerminalDelegateBase {
-        weak var view: TerminalView?
+    /// resize that first reveals how wide a tile is. Without the second, the
+    /// first paint lands on a zero-column grid and draws nothing.
+    final class Coordinator: NSObject, TerminalSurfaceResizeDelegate {
+        /// Nothing types into a tile — `hitTest` refuses the click that would
+        /// give it focus — so the host side of the backend discards writes.
+        let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
         var rows: [String] = []
+        private var columns = 0
 
-        override func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        func terminalDidResize(columns: Int, rows _: Int) {
+            self.columns = columns
             repaint()
         }
 
         func repaint() {
-            guard let view, !rows.isEmpty else { return }
-            let screen = TmuxSnapshot.screen(from: rows, columns: view.getTerminal().cols)
-            view.feed(byteArray: Array(screen.utf8)[...])
+            guard columns > 0, !rows.isEmpty else { return }
+            session.receive(TmuxSnapshot.screen(from: rows, columns: columns))
         }
-    }
-}
 
-/// Hides SwiftTerm's scroller, which is not cosmetic.
-///
-/// In SwiftTerm 1.20.0 `reservedScrollerWidth` is `scroller?.isHidden == true ? 0
-/// : scrollerWidth` — it ignores `scrollerStyle` entirely, and nothing in the
-/// library ever hides the scroller. So **every** view silently reserves ~17pt,
-/// which is a whole column at tile size.
-///
-/// Note the version: an earlier reading of this same property came from
-/// SwiftTerm's `main`, where it also checks `scrollerStyle == .legacy` and
-/// setting `.overlay` would have been enough. Read `.build/checkouts`, not a
-/// fresh clone.
-class NoScrollerTerminalView: TerminalView {
-    override func didAddSubview(_ subview: NSView) {
-        super.didAddSubview(subview)
-        if subview is NSScroller { subview.isHidden = true }
-    }
-}
-
-/// `TerminalViewDelegate` has a dozen members. SwiftTerm supplies defaults for
-/// most of them, but not all — `rangeChanged` in particular — so this collects
-/// the no-ops in one place and each coordinator overrides only what it needs.
-class TerminalDelegateBase: NSObject, TerminalViewDelegate {
-    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: TerminalView, title: String) {}
-    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-    func send(source: TerminalView, data: ArraySlice<UInt8>) {}
-    func scrolled(source: TerminalView, position: Double) {}
-    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
-    /// Snapshot tiles detect links too, so they need the same allowlist as the
-    /// attached pane — the default implementation opens any scheme.
-    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-        TerminalLink.open(link)
     }
 }
 

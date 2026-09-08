@@ -8,15 +8,29 @@ let package = Package(
     name: "Moomux",
     platforms: [.macOS(.v14)],
     dependencies: [
-        // The one dependency, and the one the plan doc picks: there is no VT
-        // emulator in the stdlib and no writing one. Reached only through
-        // UI/TerminalPane.swift, so swapping in libghostty later is one file.
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0")
+        // The one dependency: Ghostty's terminal engine, as a prebuilt
+        // xcframework wrapped in a Swift package (MIT). Reached only through
+        // UI/TerminalPane.swift and UI/SessionGrid.swift.
+        //
+        // Why prebuilt and not built from ghostty source: upstream publishes
+        // releases for libghostty-*vt* only — a VT parser with no renderer and
+        // no pty. The embeddable library that has both is built with
+        // `zig build -Demit-xcframework=true`, whose last step is
+        // `xcodebuild -create-xcframework`. That is only half the job anyway:
+        // the C API hands over no AppKit surface, so key translation, IME,
+        // mouse, selection and the app runtime would all be ours (Ghostty's own
+        // are ~250KB of Swift; cmux's are ~25,000 lines over a ghostty fork).
+        // This package is that layer, already written. See CLAUDE.md.
+        //
+        // Pinned exactly, not `from:`: releases are weekly `1.5.<YYYYMMDD>`
+        // snapshots of an upstream API that is explicitly not stable yet, so a
+        // bump is a deliberate act with a screenshot behind it.
+        .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "1.5.20260906")
     ],
     targets: [
         .executableTarget(
             name: "Moomux",
-            dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
+            dependencies: [.product(name: "GhosttyTerminal", package: "libghostty-spm")],
             path: "Sources/Moomux",
             swiftSettings: [.swiftLanguageMode(.v5)]
         )

@@ -65,10 +65,10 @@ build:
 
 # Every warning in *our* sources, without the `rm -rf .build` that idiom used
 # to need. swift build only re-emits diagnostics for files it recompiles, so
-# something has to force a full recompile — but nuking .build also rebuilds
-# SwiftTerm, which is 65 of the 74 seconds of a clean release build and can
-# never produce a warning we can act on. Touching our own sources recompiles
-# exactly the module we care about: 6s instead of 74s, same output.
+# something has to force a full recompile — but nuking .build also re-downloads
+# libghostty's 77MB xcframework and rebuilds the Swift layer around it, which
+# can never produce a warning we can act on. Touching our own sources
+# recompiles exactly the module we care about, and in seconds.
 warnings:
 	@find Sources -name '*.swift' -exec touch {} +
 	@swift build -c $(CONFIG) 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
@@ -96,6 +96,11 @@ app: build
 	cp Resources/PeekabooPlate.png $(APP)/Contents/Resources/PeekabooPlate.png
 	cp Resources/icons/moomux-terminal-nose.svg $(APP)/Contents/Resources/moomux-terminal-nose.svg
 	cp Resources/icons/moomux-menubar.svg $(APP)/Contents/Resources/MenuBarIcon.svg
+	# libghostty's terminfo and shell integration, shipped as a SwiftPM resource
+	# bundle. `Bundle.module` finds it in Contents/Resources; without it a pane's
+	# child gets TERM=xterm-ghostty with no terminfo to match, and tmux attaches
+	# to a terminal it cannot describe.
+	cp -R $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle $(APP)/Contents/Resources/
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP)
 

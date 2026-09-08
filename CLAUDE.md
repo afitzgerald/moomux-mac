@@ -1,6 +1,6 @@
 # Moomux.app
 
-The native macOS front end. SwiftUI, SwiftPM executable, one dependency (SwiftTerm), driving the
+The native macOS front end. SwiftUI, SwiftPM executable, one dependency (libghostty), driving the
 Go core over the `moomux serve` unix socket — see `docs/native-macos-rewrite.md` for why this shape
 and not a rewrite. This file is for working on it; the Go side's `AGENTS.md` still governs
 everything outside `macos/`.
@@ -20,18 +20,23 @@ arrow-key navigation, which a terminal's first responder always outranks.
 
 ## The environment decides more than you'd think
 
-**There is no Xcode on this machine** — command line tools only (`xcode-select -p` →
-`/Library/Developer/CommandLineTools`). This is not a preference, it is the constraint the whole
-harness is built around:
+**Xcode is installed but not selected** — `xcode-select -p` still says
+`/Library/Developer/CommandLineTools`, and everything here is built to work that way. Nothing in
+this repo needs Xcode; treat that as the standing arrangement rather than a limitation to route
+around, and if you genuinely need `xcodebuild` say so first, because switching it on
+(`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`) changes the toolchain under
+every other worktree too.
 
-- `xcodebuild` is unavailable. `swift build` is the only build, so there is **no `.xcodeproj`** and
-  there cannot be one. `make app` assembles and signs the bundle by hand.
-- **`#Preview` does not compile.** Its macro plugin ships with Xcode, not the toolchain. So there
-  are no SwiftUI previews, and any dependency that uses `#Preview` internally cannot be adopted.
-- **There is no test framework.** `import XCTest` → `no such module 'XCTest'`; `import Testing` →
-  `no such module 'Testing'`. Both ship inside Xcode. See "the harness is `demo()`" below.
+- `xcodebuild` errors out as things stand ("requires Xcode, but active developer directory
+  … is a command line tools instance"). `swift build` is the only build, so there is **no
+  `.xcodeproj`** and there is no reason to add one. `make app` assembles and signs the bundle
+  by hand.
+- **`#Preview` and XCTest/`Testing` compile only if Xcode is selected.** Both shipped as
+  hard "cannot be done" facts for most of this app's life, and the code still assumes neither
+  exists: there are no SwiftUI previews and no test target. See "the harness is `demo()`" below —
+  that is now a choice rather than a constraint.
 - SwiftUI, AppKit, `@Observable`, `MenuBarExtra`, `Settings`, UserNotifications and Network all
-  compile fine. Only the Xcode-only macros don't.
+  compile fine. So does libghostty, as a prebuilt binary target.
 - Notarization needs no Xcode — `notarytool` and `stapler` are in CommandLineTools — so `make dist`
   and `make notarize` work here, and `.github/workflows/release.yml` runs the same `notarize`
   target on a `macos-15` runner. A Developer ID certificate is the only piece Xcode would not have
@@ -89,9 +94,10 @@ Two traps when checking by screenshot:
   later — and match *this worktree's* build, not any Moomux, since the installed app and other
   worktrees' builds are now routinely running alongside it and would satisfy a bare `pgrep -x`:
   `make dev && sleep 6 && pgrep -f "$PWD/.build/Moomux.app/Contents/MacOS/[M]oomux"`.
-  `Scripts/shot.sh` and `Scripts/ui.swift` both scope themselves the same way — `ui.swift` refuses
-  to drive anything but this worktree's build, because its synthetic clicks land at coordinates
-  where the real app's buttons kill, archive and delete live sessions.
+  `Scripts/ui.swift` refuses to drive anything but this worktree's build — its synthetic clicks land
+  at coordinates where the real app's buttons kill, archive and delete live sessions.
+  `Scripts/shot.sh` only *frames* that build: it passes the rect to `screencapture -R`, so another
+  worktree's window on top of it is what gets photographed. Bring this build to the front first.
 - Against a **locked screen**, `screencapture` photographs the lock screen and `osascript ... get
   count of windows` returns 0 for a perfectly healthy app. Neither is evidence of a problem.
 - Other apps' menu-bar popovers float above ours and land in the shot. Retake rather than debug a
@@ -105,7 +111,11 @@ tmux is the oracle for those, so ask it rather than squinting at pixels.
 
 ```sh
 S=moomux-<session>-<hash>                       # from the session's Info pane
-tmux list-clients -t $S                         # ours is the one marked control-mode
+tmux list-clients -t $S -F '#{client_tty} #{client_termname} #{client_pid}'
+# Ours reports xterm-ghostty; if the user runs Ghostty too, settle it by walking
+# #{client_pid} up its parents to the app (libghostty spawns via `login`, so it is
+# tmux <- login <- Moomux). Client *count* is the oracle for attach and detach:
+# 1 after attaching, 0 after Detach, and the UI looks correct either way.
 tmux list-panes  -t $S -F '#{pane_id} #{pane_width}x#{pane_height} active=#{pane_active}'
 tmux list-windows -t $S -F '#{window_width}x#{window_height} #{window_layout}'
 tmux display-message -t $S -p '#{pane_id}'      # which pane tmux thinks is active
@@ -192,8 +202,9 @@ would have settled it immediately.
 diagnostics for files it recompiles, so a second build reports zero while the warning is still in
 the source — and a clean build double-reports (module-emit and compile passes both). `make
 warnings` counts distinct causes. It touches `Sources/` rather than `rm -rf .build`: nuking the
-build directory also rebuilds SwiftTerm, which is 65 of the 74 seconds of a clean release build and
-cannot produce a warning that is ours to fix. Same output, 6s instead of 74s.
+build directory also re-downloads libghostty's 77MB xcframework and rebuilds the Swift layer
+around it, none of which can produce a warning that is ours to fix. Same output, seconds instead
+of minutes.
 
 **The harness is `demo()`, because there is no test framework.** Each file with non-trivial pure
 logic gets a `static func demo()` full of `assert`s, called from nowhere in production and run
@@ -210,9 +221,11 @@ inversion check whenever you add a check that matters.
 `swiftc -parse <file>` for a syntax check while something else is building.
 
 **Spike a dependency before adopting it.** A throwaway package settles in under a minute what the
-README won't tell you — this is how `#Preview`-using libraries get caught. SwiftTerm was spiked this
-way before it went into `Package.swift` (builds clean under CommandLineTools, `LocalProcessTerminalView`
-instantiates). It is the only dependency; keep it that way for as long as possible.
+README won't tell you — this is how `#Preview`-using libraries get caught. Both terminal
+dependencies were spiked this way before going into `Package.swift`: SwiftTerm first, then
+libghostty-spm (links clean under CommandLineTools, the binary runs unbundled so `make selfcheck`
+survives, no `#Preview` anywhere in it). It is the only dependency; keep it that way for as long
+as possible.
 
 **`NSLog` does not reach `log show` / `log stream` from this bundle.** Two rounds of debugging went
 into a predicate that was never going to match. When you need to trace something inside the running
@@ -252,16 +265,16 @@ App/Notifier.swift       the only file allowed to touch UNUserNotificationCenter
 App/MoomuxApp.swift      scenes: main window + MenuBarExtra
 App/SelfTest.swift       --selftest
 UI/RootView.swift        split view, rows, detail, inspector, menu-bar content
-UI/TerminalPane.swift    SwiftTerm hosting a plain `tmux attach`
+UI/TerminalPane.swift    libghostty hosting a plain `tmux attach`
 UI/TerminalLinks.swift   what a ⌘-clicked link in a pane is allowed to open
 UI/SettingsView.swift    project CRUD and the shared config flags, on two tabs
 UI/SessionGrid.swift     every live session at once, as capture-pane snapshots
 ```
 
-SwiftTerm is reached **only** through `UI/TerminalPane.swift` for the live attached session, so
-swapping it for libghostty later is mostly one file — which is the arrangement the plan doc assumes.
-`UI/SessionGrid.swift` also draws directly into a `TerminalView`, as a read-only renderer for
-`capture-pane` snapshots.
+libghostty is reached **only** through `UI/TerminalPane.swift` (the live attached session, on the
+`.exec` backend) and `UI/SessionGrid.swift` (read-only `capture-pane` snapshots, on the host-fed
+`.inMemory` backend). The one shared piece is `AppState.terminalController`: a single
+`TerminalController`, so every surface answers to the same config and the same `ghostty_app_t`.
 
 `internal/ipc/client.go` is the reference implementation of `MoomuxClient`. Keep the two honest
 against each other — anything the Swift side cannot do over the socket is a hole in the boundary
@@ -324,18 +337,45 @@ to fix in Go, not a reason to link the core.
   not when the bigger client is used again. Grouped sessions (`new-session -t`) do **not** fix this;
   a group shares the windows themselves. All measured. This is why attaching is an explicit action
   and not a consequence of selecting a row.
-- **Every SwiftTerm view silently reserves ~17pt of its width for a scroller.** In 1.20.0
-  `reservedScrollerWidth` is `scroller?.isHidden == true ? 0 : scrollerWidth` — it ignores
-  `scrollerStyle`, and nothing in the library ever hides the scroller. That is noise in a wide
-  ruler and a whole column in the session-grid's small tiles. `NoScrollerTerminalView`
-  (`SessionGrid.swift`) hides it for that view.
-- **Read the dependency's source from `.build/checkouts/`, not a fresh clone.** The scroller bug
-  above cost an extra round because the property was read from SwiftTerm's `main`, where it *does*
-  check `scrollerStyle` and setting `.overlay` would have been enough. The pinned version behaves
-  differently. `git clone --branch <tag>` also falls back to the default branch if the tag is
-  missing, silently giving you the wrong source.
-- **SwiftTerm marks most overrides `public`, not `open`** — `keyDown` cannot be overridden from
-  this module, `mouseDown` and `viewDidMoveToWindow` can.
+- **The `.exec` backend's `command` is run by a shell, so every interpolated value needs
+  quoting.** The surface spawns `login -flp <user> /bin/bash --noprofile --norc -c exec -l
+  <command>`, so an unquoted tmux session name carrying `;` or `$(…)` executes. Proven both ways: a
+  live tmux session literally named `lgok; touch /tmp/PWNED` attaches cleanly and creates no file
+  with `String.shellQuoted` in place, while the same line unquoted in `bash -c` creates it.
+  ghostty's `direct:` prefix, which skips the shell, does **not** help here — the surface config
+  never goes through ghostty's `Config.command` parser, so the pane just reports that
+  `direct:/opt/homebrew/bin/tmux` does not exist. Note the session's *liveness* guard will hide
+  this from a casual test: a name the core reports as not running never reaches the attach path at
+  all, so the payload has to name a session that really exists.
+- **A focused libghostty pane eats the app's ⌘-shortcuts.** ghostty ships its own keybinds and a
+  focused surface answers them before AppKit's menu is consulted. Measured: with a pane focused,
+  ⌘, opened nothing at all (ghostty's `open_config` swallowed it) while the identical keystroke
+  with the sidebar focused opened Settings; ⌘T, ⌘N and ⌘W would have gone the same way.
+  `AppState.paneKeybinds` is `keybind = clear` plus the three a terminal is genuinely expected to
+  answer (⌘C/⌘V/⌘A), rendered *after* the user's own config so a `keybind` they set is cleared too.
+  Anything new that binds a ⌘ key in a pane has to be added there, and if a menu item ever "does
+  nothing but only sometimes", this is the first place to look.
+- **Detach has to free the surface explicitly; dropping the view does not.** Measured: the UI
+  detached, and `tmux list-clients` still showed our client, because something in the package (the
+  display link is the likely holder) outlives the view and keeps the surface coordinator alive with
+  it — so the user's iTerm and phone stay letterboxed, which is the exact thing detach exists to
+  undo. libghostty-spm publishes no `free()`; `AppState.detach` assigns `controller = nil`, which
+  runs `rebuildIfReady(removingBridgeFrom:)`, and a non-nil previous controller skips the
+  keep-the-surface early return so teardown runs. **`tmux list-clients` before and after is the
+  only proof** — the UI looks right either way.
+- **The SwiftPM resource bundle has to be copied into the app by hand.** libghostty's terminfo and
+  shell integration ship as `GhosttyKit_GhosttyTerminal.bundle` next to the binary; `make app`
+  copies it into `Contents/Resources` (that is where `Bundle.module` looks). Without it a pane's
+  child gets `TERM=xterm-ghostty` with no terminfo to match it. `tmux list-clients` naming
+  `xterm-ghostty` is the check that it landed.
+- **A `TerminalController`'s `theme:` is layered on top of its config file**, and
+  `TerminalTheme.default` is a full Afterglow/Alabaster palette — so passing the default alongside
+  `.file(...)` silently overwrites every colour the user's config just set. Pass an empty
+  `TerminalTheme`; the controller then short-circuits to the file verbatim.
+- **Read the dependency's source from `.build/checkouts/`, not a fresh clone**, and the *pinned*
+  version at that. A SwiftTerm scroller bug once cost an extra round because the property was read
+  from its `main`, where it behaved differently. `git clone --branch <tag>` also falls back to the
+  default branch if the tag is missing, silently giving you the wrong source.
 - **`capture-pane -p` returns screen rows, not logical lines** — already wrapped to the pane's
   width. `-J` is the flag that joins them back into logical lines. Measured on tmux 3.7c in a
   40-column pane: a 50-character line comes back as a 40-char row plus a 10-char row plain, and as
@@ -344,12 +384,17 @@ to fix in Go, not a reason to link the core.
   (An hour went into talking myself out of a wrap that was fine.) It also returns the pane's **full
   height**, blank rows below the cursor included — never trimmed — which is what `TmuxSnapshot.screen`
   has to drop before feeding a tile.
-- **SwiftTerm marks its overrides `public`, not `open`.** `keyDown` and friends cannot be overridden
-  from this module — the compiler says "overriding non-open instance method outside of its defining
-  module". `viewDidMoveToWindow` is fine because it comes from `NSView`.
 - **SwiftUI does not give the terminal first responder.** Focus stays on the sidebar list, so
   everything typed after "Attach" goes to the list instead. `updateNSView` is too early (no window
-  yet); `AttachedTerminalView.viewDidMoveToWindow` is the hook that works.
+  yet); `AttachedTerminalView.viewDidMoveToWindow` is the hook that works. Call `super` first —
+  `AppTerminalView`'s own override is what builds the surface, starts the display link, and decides
+  *not* to rebuild one that already exists, which is what keeps scrollback across a sidebar switch.
+- **`Scripts/shot.sh` frames the right window but photographs whatever is on top of it.** It gets
+  the rect from `ui.swift frame` (correctly scoped to this worktree's build) and hands it to
+  `screencapture -R`, so another worktree's Moomux sitting at those coordinates lands in the PNG
+  and looks like your build behaving strangely. `Scripts/ui.swift` is *not* affected — it matches by
+  executable path and refuses anything else. Bring this build to the front before shooting, and if a
+  shot shows sessions you do not recognise, check `pgrep -fl Moomux.app` before debugging the UI.
 - **`open` against an app that is still terminating does nothing at all**, which reads exactly like
   a crash on launch. `make run`/`make dev` wait out the old process for this reason — do not
   "simplify" that loop away.
@@ -412,12 +457,29 @@ Decisions, not oversights. Don't "fix" these without being asked.
   and the next snapshot, or `SessionTerminal` would run `tmux attach` against a session that isn't
   there yet.
 
-- **No visible scrollbar in the session-grid tiles**, and there cannot be one:
-  `NoScrollerTerminalView` has to keep the scroller hidden for the column-width reason above.
-- **No terminal font/size settings** — those are SwiftTerm's defaults. Colors are not: every
-  `TerminalView` gets `installVibrantTheme()` (`TerminalPane.swift`) — a fixed dark background,
-  bright foreground and vga ANSI palette, independent of system light/dark mode. No user-facing
-  customization of it; add that if it's ever asked for.
+- **No font, size or theme settings — panes read the user's own Ghostty config.**
+  `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`'s, or the `com.mitchellh.ghostty` one, checked
+  in ghostty's own order) so a Ghostty user's panes look like their terminal, and a built-in dark
+  fallback when there is none. There is deliberately no picker: libghostty is configured by ghostty
+  config text, and a second place to set the same values would have to either lose to the file or
+  silently override it — a user editing their config and seeing nothing change is worse than no
+  control at all. The Settings → Terminal tab says which file won and shows
+  `lastConfigurationIssue` when ghostty rejected part of it, and that is the whole pane. The cost:
+  a config change needs a restart, because a live surface is not reconfigured.
+- **libghostty comes prebuilt, from `Lakr233/libghostty-spm` (MIT), pinned to an exact version.**
+  Upstream publishes releases for libghostty-*vt* only — a VT parser with no renderer and no pty.
+  The embeddable library that has both is built with `zig build -Demit-xcframework=true`, ending in
+  `xcodebuild -create-xcframework`, and *that is the easy half*: the C API hands over no AppKit
+  surface, so key translation, IME, mouse, selection and the app runtime would all be ours.
+  Ghostty's own are ~250KB of Swift; cmux's are ~25,000 lines on top of a ghostty fork. This
+  package is that layer, already written. Pinned with `exact:` and not `from:` because it ships
+  weekly `1.5.<YYYYMMDD>` snapshots of an API upstream says is not stable yet — a bump is a
+  deliberate act with a screenshot behind it. The escape hatch if it ever goes stale is the source
+  build above, which needs zig 0.16 (brew has exactly that) and Xcode selected.
+- **The app is ~11MB rather than ~5MB**, all of it the statically linked engine (the archive's
+  macOS slice is 39MB universal; the linker keeps about 6MB of it). One-time ~190MB in `.build`
+  for the downloaded xcframework. Measured, and accepted knowingly: Homebrew cask users
+  re-download the difference on every upgrade.
 - **The sidebar's ⌃⌘S is ours, not SwiftUI's.** `NavigationSplitView` ships a toolbar button and
   **no** View-menu item, and on macOS a shortcut needs a menu item — so ⌃⌘S, which every other Mac
   app spells this way, did nothing at all here. Measured before and after. The fix is a
@@ -569,8 +631,10 @@ Decisions, not oversights. Don't "fix" these without being asked.
   `git status` listing rather than as patches — `git add -N` would get them into the diff and is not
   worth mutating a live worktree's index for.
 - **The session grid is snapshots, not live views, and that is the feature.** ⌘⇧G swaps the detail
-  column for a tile per live session, each one a `tmux capture-pane` fed into a read-only
-  `NoScrollerTerminalView` every five seconds. A grid of *attached* clients — the obvious reading of
+  column for a tile per live session, each one a `tmux capture-pane` fed every five seconds into a
+  libghostty surface on the host-managed `.inMemory` backend — no process, no pty, nothing to
+  attach, and `hitTest` refuses the click so the tile underneath stays clickable. A grid of
+  *attached* clients — the obvious reading of
   "several sessions at once" — would be **destructive**: every tmux client on a session sets the
   shared window size (see the bullet above; measured for plain attach and grouped sessions alike),
   so six live tiles would letterbox six real sessions someone else is working in until the

@@ -6,7 +6,7 @@ between releases without notice.
 
 A native macOS front end for [moomux](https://github.com/erickgnclvs/moomux) — a TUI for managing
 Claude Code / codex / opencode sessions across git worktrees. SwiftUI, SwiftPM executable, one
-dependency (SwiftTerm), driving the moomux core over its `moomux serve` unix socket.
+dependency (libghostty), driving the moomux core over its `moomux serve` unix socket.
 
 ## Installing
 
