@@ -602,41 +602,115 @@ public enum Wire {
         return d
     }()
 
-    /// Parses Go's RFC 3339.
+    /// Parses Go's RFC 3339, by hand.
     ///
-    /// Go emits up to nine fractional digits; `ISO8601DateFormatter` accepts at
-    /// most three and returns nil on the rest. Nothing in this app displays
-    /// sub-second time, so the fraction is dropped rather than carrying a
-    /// hand-rolled parser. Upgrade path if that ever changes: peel the fraction
-    /// off, parse the rest, add it back as a `TimeInterval`.
-    public static func parseTimestamp(_ raw: String) -> Date? {
-        rfc3339.date(from: stripFractionalSeconds(raw))
-    }
-
-    static func stripFractionalSeconds(_ raw: String) -> String {
-        guard let dot = raw.firstIndex(of: ".") else { return raw }
-        let after = raw.index(after: dot)
-        guard let end = raw[after...].firstIndex(where: { !$0.isNumber }) else {
-            return String(raw[..<dot])
+    /// `ISO8601DateFormatter` was measured at 23 µs a call against 0.06 µs for
+    /// this — 420x — and with 30 sessions the watcher pushes ~2 snapshots a
+    /// second, each carrying two timestamps per session. That was 7% of the
+    /// app's entire CPU, idle, forever (Instruments, Time Profiler). ICU is the
+    /// wrong tool for a fixed-width numeric format.
+    ///
+    /// Deliberately narrow: `YYYY-MM-DDTHH:MM:SS`, an optional fraction (Go
+    /// emits up to nine digits; nothing here displays sub-second time, so it is
+    /// skipped), then `Z` or `±HH:MM`. Anything else returns nil and the
+    /// decoder falls back to `.distantPast`, exactly as before.
+    static func daysIn(month: Int, year: Int) -> Int {
+        switch month {
+        case 2: return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 ? 29 : 28
+        case 4, 6, 9, 11: return 30
+        default: return 31
         }
-        return String(raw[..<dot]) + String(raw[end...])
     }
 
-    private static let rfc3339: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
+    public static func parseTimestamp(_ raw: String) -> Date? {
+        let b = Array(raw.utf8)
+        guard b.count >= 19 else { return nil }
+        func digits(_ start: Int, _ width: Int) -> Int? {
+            var value = 0
+            for i in start..<(start + width) {
+                let d = Int(b[i]) - 48
+                guard (0...9).contains(d) else { return nil }
+                value = value * 10 + d
+            }
+            return value
+        }
+        guard b[4] == UInt8(ascii: "-"), b[7] == UInt8(ascii: "-"),
+              b[10] == UInt8(ascii: "T") || b[10] == UInt8(ascii: "t"),
+              b[13] == UInt8(ascii: ":"), b[16] == UInt8(ascii: ":"),
+              let year = digits(0, 4), let month = digits(5, 2), let day = digits(8, 2),
+              let hour = digits(11, 2), let minute = digits(14, 2), let second = digits(17, 2),
+              (1...12).contains(month), day >= 1, day <= daysIn(month: month, year: year),
+              hour <= 23, minute <= 59, second <= 60 else { return nil }
+
+        var i = 19
+        if i < b.count, b[i] == UInt8(ascii: ".") {
+            i += 1
+            while i < b.count, (48...57).contains(b[i]) { i += 1 }
+        }
+        // A zone is required, exactly as `.withInternetDateTime` required one:
+        // Go always sends `Z` or an offset, and a bare local-looking time is a
+        // wire change worth noticing rather than silently reading as UTC.
+        guard i < b.count else { return nil }
+        var offset = 0
+        if b[i] != UInt8(ascii: "Z"), b[i] != UInt8(ascii: "z") {
+            let sign = b[i] == UInt8(ascii: "-") ? -1 : 1
+            guard b[i] == UInt8(ascii: "+") || b[i] == UInt8(ascii: "-"),
+                  b.count >= i + 6, b[i + 3] == UInt8(ascii: ":"),
+                  let offsetHours = digits(i + 1, 2), let offsetMinutes = digits(i + 4, 2)
+            else { return nil }
+            offset = sign * (offsetHours * 3600 + offsetMinutes * 60)
+        }
+
+        // Days from 1970-01-01 in the proleptic Gregorian calendar (Hinnant's
+        // days_from_civil). No calendar object, no time zone database: every
+        // timestamp on this wire carries its own offset.
+        let shiftedYear = year - (month <= 2 ? 1 : 0)
+        let era = (shiftedYear >= 0 ? shiftedYear : shiftedYear - 399) / 400
+        let yearOfEra = shiftedYear - era * 400
+        let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        let days = era * 146_097 + dayOfEra - 719_468
+        return Date(timeIntervalSince1970:
+            Double(days * 86_400 + hour * 3600 + minute * 60 + second - offset))
+    }
 
     // MARK: Checks
 
     /// Every assumption above that the Go side could quietly change under us.
     public static func demo() {
-        assert(stripFractionalSeconds("2026-09-02T10:11:12.123456789Z") == "2026-09-02T10:11:12Z")
-        assert(stripFractionalSeconds("2026-09-02T10:11:12Z") == "2026-09-02T10:11:12Z")
-        assert(stripFractionalSeconds("2026-09-02T10:11:12.5+01:00") == "2026-09-02T10:11:12+01:00")
-        assert(parseTimestamp("2026-09-02T10:11:12.123456789Z") != nil)
-        assert(parseTimestamp("0001-01-01T00:00:00Z").map { $0 <= goZeroTimeCutoff } ?? true)
+        // The hand-rolled parser, against the ICU formatter it replaced: same
+        // answer on every shape the Go side emits, or it is not a drop-in.
+        // Pre-Gregorian dates are excluded deliberately — Foundation reads
+        // year 1 through the Julian calendar and lands two days off ours, which
+        // matters to nothing, since the only such timestamp is Go's zero time
+        // and all anyone asks of it is whether it precedes the cutoff.
+        let icu = ISO8601DateFormatter()
+        icu.formatOptions = [.withInternetDateTime]
+        for raw in ["2026-09-02T10:11:12Z", "2026-09-02T10:11:12.123456789Z",
+                    "2026-09-02T10:11:12.5+01:00", "2024-02-29T23:59:59Z",
+                    "1970-01-01T00:00:00Z", "2026-12-31T00:00:00-05:30",
+                    "1999-03-01T12:00:00+00:00"] {
+            let mine = parseTimestamp(raw)
+            let theirs = icu.date(from: raw) ?? icu.date(from: raw.replacingOccurrences(
+                of: #"\.\d+"#, with: "", options: .regularExpression))
+            assert(mine == theirs, "\(raw): \(mine as Any) != \(theirs as Any)")
+        }
+        assert(parseTimestamp("2000-02-29T00:00:00Z") != nil, "2000 is a leap year")
+        assert(parseTimestamp("1900-02-29T00:00:00Z") == nil, "1900 is not")
+        assert(parseTimestamp("0001-01-01T00:00:00Z").map { $0 <= goZeroTimeCutoff } ?? false,
+               "Go's zero time must parse, and must read as before the cutoff")
+        // Malformed input is nil, not a wrong date: the decoder turns nil into
+        // .distantPast, and a garbled timestamp must not become a real one.
+        for bad in ["", "2026-09-02", "2026-09-02T10:11", "2026-13-02T10:11:12Z",
+                    "2026-09-02 10:11:12Z", "2026-09-0aT10:11:12Z",
+                    "2026-09-02T10:11:12+0100", "2026-09-02T25:11:12Z",
+                    // A date that does not exist must not roll over into one
+                    // that does, and a time with no zone is not this wire's.
+                    "2026-02-31T10:11:12Z", "2025-02-29T10:11:12Z",
+                    "2026-04-31T10:11:12Z", "2026-09-02T10:11:12",
+                    "2026-09-02T10:11:12.5"] {
+            assert(parseTimestamp(bad) == nil, "\(bad) must not parse")
+        }
 
         // A session as `moomux serve` actually sends one, zero time included.
         let sessionJSON = """
