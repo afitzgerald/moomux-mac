@@ -264,6 +264,7 @@ App/AppState.swift       the single root store, snapshot loop, config poll
 App/Notifier.swift       the only file allowed to touch UNUserNotificationCenter
 App/MoomuxApp.swift      scenes: main window + MenuBarExtra
 App/SelfTest.swift       --selftest
+App/GhosttyResourceBundle.swift  makes Bundle.module resolvable from inside the .app
 UI/RootView.swift        split view, rows, detail, inspector, menu-bar content
 UI/TerminalPane.swift    libghostty hosting a plain `tmux attach`
 UI/TerminalLinks.swift   what a ⌘-clicked link in a pane is allowed to open
@@ -272,8 +273,10 @@ UI/SessionGrid.swift     every live session at once, as capture-pane snapshots
 ```
 
 libghostty is reached **only** through `UI/TerminalPane.swift` (the live attached session, on the
-`.exec` backend) and `UI/SessionGrid.swift` (read-only `capture-pane` snapshots, on the host-fed
-`.inMemory` backend). The one shared piece is `AppState.terminalController`: a single
+`.exec` backend), `UI/SessionGrid.swift` (read-only `capture-pane` snapshots, on the host-fed
+`.inMemory` backend) and one line of `App/GhosttyResourceBundle.swift` (which forces the package's
+resource bundle to resolve at launch — see the bullet below). The one shared piece is
+`AppState.terminalController`: a single
 `TerminalController`, so every surface answers to the same config and the same `ghostty_app_t`.
 
 `internal/ipc/client.go` is the reference implementation of `MoomuxClient`. Keep the two honest
@@ -373,11 +376,29 @@ to fix in Go, not a reason to link the core.
   `resizeThrottleMilliseconds: 96`, which the dependency's own note recommends by name for
   alt-screen agent TUIs: ghostty coalesces resizes on a 25ms trailing-only window, so a live
   divider drag otherwise composites a stale grid into the new bounds.
-- **The SwiftPM resource bundle has to be copied into the app by hand.** libghostty's terminfo and
-  shell integration ship as `GhosttyKit_GhosttyTerminal.bundle` next to the binary; `make app`
-  copies it into `Contents/Resources` (that is where `Bundle.module` looks). Without it a pane's
-  child gets `TERM=xterm-ghostty` with no terminfo to match it. `tmux list-clients` naming
-  `xterm-ghostty` is the check that it landed.
+- **The SwiftPM resource bundle has to be copied into the app by hand, and `Bundle.module` still
+  cannot find it there.** libghostty's terminfo and shell integration ship as
+  `GhosttyKit_GhosttyTerminal.bundle` next to the binary; `make app` copies it into
+  `Contents/Resources`. Without it a pane's child gets `TERM=xterm-ghostty` with no terminfo to
+  match it — `tmux list-clients` naming `xterm-ghostty` is the check that it landed. But SwiftPM's
+  generated accessor looks in exactly two places, neither of them that one: the **root** of
+  `Bundle.main.bundleURL` (`Moomux.app/GhosttyKit_GhosttyTerminal.bundle`) and the absolute
+  `.build` path baked in at compile time — and it `fatalError`s when both miss. The root is not
+  available: `codesign` refuses to sign an app bundle with anything but `Contents` there
+  ("unsealed contents present in the bundle root" → "code object is not signed at all"), for a
+  directory and for a symlink alike, measured. So `App/GhosttyResourceBundle.warm()` swaps
+  `-[NSBundle initWithPath:]` for the length of one lookup, redirects that path to
+  `Contents/Resources`, and forces `Bundle.module` to settle before anything builds a
+  `TerminalController`. `Unmanaged` on both ends of that hook is not decoration: an `init`
+  consumes `self` and returns +1, and letting ARC touch either segfaults the app on launch —
+  measured, at exactly the point this was meant to fix.
+  **This is invisible on a build machine**, which is why 0.0.38 shipped with it: the second
+  candidate, `.build/.../GhosttyKit_GhosttyTerminal.bundle`, is right there on the machine that
+  made the binary. Everywhere else it is CI's `/Users/runner/...`, and the app dies the moment a
+  session is selected. So the check is: build the app, **move `.build/<triple>/release/
+  GhosttyKit_GhosttyTerminal.bundle` out of the way**, and run the bundle. Launching at all is the
+  proof — `warm()` touches the same `static let` the terminal does, so it either resolves or takes
+  the process with it.
 - **Shipping the terminfo is not the same as the child finding it.** The package sets
   `GHOSTTY_RESOURCES_DIR` (shell integration) and *never* `TERMINFO`, which Ghostty.app sets for
   its own children — so on a machine with no Ghostty installed the pane's `tmux attach` exits in
