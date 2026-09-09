@@ -343,6 +343,13 @@ private struct PreferencesPane: View {
             // Picker whose selection matches no tag renders blank *and*
             // writes nothing, so it would look like a bug and then be
             // silently replaced by the first click on any other row here.
+            // This app's own, not the shared config: the core serves no such
+            // field. The worktree path is appended, so type the command as you
+            // would in a shell minus the directory.
+            TextField("Diff tool", text: Binding(
+                get: { app.diffTool }, set: { app.diffTool = $0 }),
+                prompt: Text("diffier"))
+                .help("⌘D runs this against the selected session's worktree — empty turns it off")
             Picker("Theme", selection: Binding(
                 get: { cfg?.theme?.nilIfEmpty ?? "default" },
                 set: { app.setTheme($0, appearance: cfg?.appearance ?? "") })) {

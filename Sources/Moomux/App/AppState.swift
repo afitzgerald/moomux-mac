@@ -814,6 +814,12 @@ public final class AppState {
         // command, so it is quoted rather than trusted.
         assert(reviewScript(base: "a'b").contains(#"'origin/a'\''b'"#), reviewScript(base: "a'b"))
 
+        // The diff tool command is argv, never a shell line: a program name and
+        // its flags, with the worktree appended by the caller.
+        assert(diffToolArguments("  ") == [])
+        assert(diffToolArguments("diffier") == ["diffier"])
+        assert(diffToolArguments(" code  --diff ") == ["code", "--diff"])
+
         // Search matches `internal/tui/search.go`: name, case-insensitively,
         // substring — and an all-whitespace query is not a search, or typing a
         // space would empty the sidebar.
@@ -1091,6 +1097,49 @@ public final class AppState {
                 hint = "Opened a review window in \(session.tmuxSession)."
             } catch {
                 failed("Review", error)
+            }
+        }
+    }
+
+    /// An external GUI diff tool, run against a session's worktree. Empty
+    /// means the feature is off — there is no default, because a command that
+    /// does not exist on this machine would only ever fail.
+    ///
+    /// In `UserDefaults` and not in the shared config: the core serves no such
+    /// field, and a macOS app launcher is nothing the TUI could use.
+    public var diffTool: String = UserDefaults.standard.string(forKey: diffToolKey) ?? "" {
+        didSet { UserDefaults.standard.set(diffTool, forKey: Self.diffToolKey) }
+    }
+
+    static let diffToolKey = "diffTool"
+
+    public func canOpenDiffTool(_ session: Session) -> Bool {
+        !AppState.diffToolArguments(diffTool).isEmpty && !session.worktreePath.isEmpty
+    }
+
+    /// ponytail: whitespace split, so no shell and therefore no quoting or
+    /// injection to get wrong — the cost is that an argument containing a space
+    /// arrives as two. Parse quotes if that ever comes up.
+    nonisolated static func diffToolArguments(_ command: String) -> [String] {
+        command.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    /// The worktree path is appended as the last argument, so `diffier` and
+    /// `code --diff` both work as typed. Through `ToolPath` rather than a
+    /// shell, since a GUI app's `PATH` would not find `/usr/local/bin`.
+    public func openDiffTool(_ session: Session) {
+        let argv = AppState.diffToolArguments(diffTool)
+        guard let tool = argv.first else { return }
+        guard let path = tool.hasPrefix("/") ? tool : ToolPath.find(tool) else {
+            actionError = "Diff tool failed: can't find \(tool)."
+            return
+        }
+        let args = Array(argv.dropFirst()) + [session.worktreePath]
+        Task {
+            do {
+                try await withoutBlockingTheUI { _ = try ToolPath.run(path, args) }
+            } catch {
+                failed("Diff tool", error)
             }
         }
     }

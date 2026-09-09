@@ -766,6 +766,8 @@ private struct SessionRow: View {
         .contextMenu {
             Button("Review Changes") { app.review(session) }
                 .disabled(!app.canReview(session))
+            Button("Open in Diff Tool") { app.openDiffTool(session) }
+                .disabled(!app.canOpenDiffTool(session))
             Button("Edit…") { app.sheet = .edit(session) }
             Button("Tags…") { app.sheet = .tags(session) }
             Button("Copy Path") {
@@ -952,6 +954,14 @@ private struct SessionInfo: View {
                         }
                         .disabled(!app.canReview(session))
                         .help("Open this worktree's diff in a new tmux window (⌘G)")
+
+                        Button {
+                            app.openDiffTool(session)
+                        } label: {
+                            Label("Diff Tool", systemImage: "square.split.2x1")
+                        }
+                        .disabled(!app.canOpenDiffTool(session))
+                        .help("Open this worktree in the diff tool from Settings (⌘D)")
                     }
                     if ToolPath.find("tmux") == nil {
                         Text("Can't find a tmux binary to attach with.")
