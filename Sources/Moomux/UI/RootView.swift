@@ -640,12 +640,14 @@ private struct SessionList: View {
         @Bindable var app = app
         List(selection: $app.selectedSessionID) {
             ForEach(app.sessionsByProject, id: \.project) { group in
-                Section(isExpanded: Binding(
-                    get: { app.projectExpanded(group.project) },
-                    set: { app.setProject(group.project, expanded: $0) }
-                )) {
-                    ForEach(group.sessions) { session in
-                        SessionRow(session: session).tag(session.id)
+                // Not `Section(isExpanded:)`: its own disclosure chevron sits
+                // on the trailing edge, only appears on hover, and animates
+                // badly. `ProjectHeader` draws and owns the one chevron.
+                Section {
+                    if app.projectExpanded(group.project) {
+                        ForEach(group.sessions) { session in
+                            SessionRow(session: session).tag(session.id)
+                        }
                     }
                 } header: {
                     ProjectHeader(name: group.project, hidden: group.sessions.count)
@@ -696,10 +698,8 @@ private struct ProjectHeader: View {
     let hidden: Int
 
     var body: some View {
-        // The sidebar's own disclosure affordance only appears on hover, so a
-        // collapsed project reads as an empty one. Draw the chevron and the
-        // count of what is hidden ourselves; the click that toggles it is
-        // still the List's.
+        // The header is not a selectable row, so a tap gesture here does not
+        // steal the List's selection the way one on a row would.
         let expanded = app.projectExpanded(name)
         HStack(spacing: 4) {
             Image(systemName: "chevron.right")
@@ -714,8 +714,13 @@ private struct ProjectHeader: View {
                     .background(Capsule().fill(.quaternary))
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { app.setProject(name, expanded: !expanded) }
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
         .accessibilityLabel(expanded ? name : "\(name), collapsed, \(hidden) sessions")
+        .accessibilityAction { app.setProject(name, expanded: !expanded) }
     }
 }
 
