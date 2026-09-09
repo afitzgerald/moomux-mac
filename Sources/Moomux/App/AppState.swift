@@ -503,13 +503,40 @@ public final class AppState {
         config?.projects[project]?.emoji
     }
 
+    /// Sidebar sections the user has collapsed. Client-local, like `diffTool`:
+    /// the core serves no such field, and which sections a Mac window has
+    /// folded away is nothing the TUI could use.
+    public var collapsedProjects: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: collapsedProjectsKey) ?? []) {
+        didSet {
+            UserDefaults.standard.set(collapsedProjects.sorted(), forKey: Self.collapsedProjectsKey)
+        }
+    }
+
+    static let collapsedProjectsKey = "collapsedProjects"
+
+    /// A search must never be answered by a section the user cannot see, so
+    /// collapsing is ignored while there is a query — same reason search
+    /// matches archived sessions whatever the Archived toggle says.
+    public func projectExpanded(_ name: String) -> Bool {
+        searching ? true : !collapsedProjects.contains(name)
+    }
+
+    public func setProject(_ name: String, expanded: Bool) {
+        if expanded { collapsedProjects.remove(name) } else { collapsedProjects.insert(name) }
+    }
+
     /// Moves the selection to the next/previous row in sidebar order,
     /// wrapping. The Session menu's replacement for the sidebar `List`'s own
     /// arrow-key navigation, which stops reaching the list the instant a
     /// terminal pane takes first responder — which it does deliberately, so
     /// typing works without clicking first (`PaneTerminalView.viewDidMoveToWindow`).
     public func selectAdjacentSession(by delta: Int) {
-        let ids = sessionsByProject.flatMap { $0.sessions.map(\.id) }
+        // Rows inside a collapsed section are not on screen; stepping the
+        // selection onto one would look like the keystroke did nothing.
+        let ids = sessionsByProject
+            .filter { projectExpanded($0.project) }
+            .flatMap { $0.sessions.map(\.id) }
         guard !ids.isEmpty else { return }
         guard let current = selectedSessionID, let index = ids.firstIndex(of: current) else {
             selectedSessionID = ids[0]
@@ -919,6 +946,43 @@ public final class AppState {
 
             // Manual reordering is off while the core sorts by last-opened.
             assert(app.canReorder, "no config yet must not disable reordering")
+        }
+
+        // Collapsing a project hides its rows, so ⌘↓/⌘↑ must step past them —
+        // a selection landing on a row nobody can see reads as a dead key.
+        MainActor.assumeIsolated {
+            // `collapsedProjects` persists, so put the real one back: a
+            // selfcheck must not fold away the user's own sidebar.
+            let saved = UserDefaults.standard.stringArray(forKey: collapsedProjectsKey)
+            defer { UserDefaults.standard.set(saved, forKey: collapsedProjectsKey) }
+
+            let app = AppState()
+            app.collapsedProjects = []
+            func row(_ project: String, _ name: String) -> Session {
+                try! Wire.decoder.decode(Session.self, from: Data(
+                    #"{"id":"\#(project):\#(name)","project":"\#(project)","name":"\#(name)"}"#.utf8))
+            }
+            app.sessions = [row("a", "one"), row("a", "two"), row("b", "three")]
+            assert(app.sessionsByProject.map(\.project) == ["a", "b"])
+
+            app.setProject("a", expanded: false)
+            assert(!app.projectExpanded("a") && app.projectExpanded("b"))
+            app.selectedSessionID = "b:three"
+            app.selectAdjacentSession(by: 1)
+            assert(app.selectedSessionID == "b:three", "the only visible row wraps to itself")
+
+            // A search must never be answered by a section the user cannot
+            // see, so the query overrides the collapse — and whitespace is not
+            // a query, exactly as `matchSessions` reads it.
+            app.searchQuery = "one"
+            assert(app.projectExpanded("a"))
+            app.searchQuery = "   "
+            assert(!app.projectExpanded("a"))
+            app.searchQuery = ""
+
+            app.setProject("a", expanded: true)
+            app.selectAdjacentSession(by: 1)
+            assert(app.selectedSessionID == "a:one", "expanded again: back in the rotation")
         }
 
         // The sidebar's git badges come off the snapshot now — no per-session

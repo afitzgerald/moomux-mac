@@ -640,10 +640,15 @@ private struct SessionList: View {
         @Bindable var app = app
         List(selection: $app.selectedSessionID) {
             ForEach(app.sessionsByProject, id: \.project) { group in
-                Section(header: ProjectHeader(name: group.project)) {
+                Section(isExpanded: Binding(
+                    get: { app.projectExpanded(group.project) },
+                    set: { app.setProject(group.project, expanded: $0) }
+                )) {
                     ForEach(group.sessions) { session in
                         SessionRow(session: session).tag(session.id)
                     }
+                } header: {
+                    ProjectHeader(name: group.project, hidden: group.sessions.count)
                 }
             }
         }
@@ -688,12 +693,29 @@ private struct FocusSearchOnRequest: ViewModifier {
 private struct ProjectHeader: View {
     @Environment(AppState.self) private var app
     let name: String
+    let hidden: Int
 
     var body: some View {
+        // The sidebar's own disclosure affordance only appears on hover, so a
+        // collapsed project reads as an empty one. Draw the chevron and the
+        // count of what is hidden ourselves; the click that toggles it is
+        // still the List's.
+        let expanded = app.projectExpanded(name)
         HStack(spacing: 4) {
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .rotationEffect(.degrees(expanded ? 90 : 0))
             if let emoji = app.emoji(for: name) { Text(emoji) }
             Text(name)
+            if !expanded {
+                Text("\(hidden)")
+                    .monospacedDigit()
+                    .padding(.horizontal, 5)
+                    .background(Capsule().fill(.quaternary))
+            }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(expanded ? name : "\(name), collapsed, \(hidden) sessions")
     }
 }
 
