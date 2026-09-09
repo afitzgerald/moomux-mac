@@ -66,7 +66,7 @@ enum Theme {
     static func pr(_ badge: PRInfo.Badge, _ palette: ThemePalette?) -> Color {
         switch badge {
         case .merged: return resolve(palette?.done) ?? .green
-        case .conflicts, .failing: return gitWarn(palette)
+        case .conflicts, .failing, .comments: return gitWarn(palette)
         // Pending is not a problem, so it stays secondary: warn here would
         // put an amber icon on every PR for the minutes its checks run.
         case .open, .closed, .pending: return .secondary
