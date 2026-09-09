@@ -9,7 +9,8 @@ Today it lists sessions, streams their live agent state, shows detail, banners a
 ones that start waiting on you, attaches a session's tmux inside the app as one plain `tmux attach`
 — reviving a parked one first if its tmux is gone — shows every live session at once as read-only
 snapshots,
-opens its diff for review in a tmux window of its own, and
+opens its diff for review in a tmux window of its own — or in whatever GUI diff tool
+Settings names (⌘D) — and
 creates, renames, retags, re-agents, archives, reorders, kills and deletes them. Creating one asks
 the same questions the TUI's dialog does — agent, model, thinking level, branch and base branch
 included — because the core serves the table those pickers are built from (`AgentOptions`). ⌘,
@@ -736,6 +737,12 @@ Decisions, not oversights. Don't "fix" these without being asked.
   created with an explicit `-base` diffs against the project default, and untracked files show as a
   `git status` listing rather than as patches — `git add -N` would get them into the diff and is not
   worth mutating a live worktree's index for.
+  **The escape hatch is one field**: Settings → Preferences → Diff tool takes a command, and ⌘D
+  runs it with the session's worktree appended as the last argument (`diffier`, `code --diff`).
+  Split on whitespace and run through `ToolPath`, not a shell — nothing to quote, and a GUI app's
+  `PATH` would not find `/usr/local/bin` on its own. It lives in `UserDefaults` rather than the
+  shared config because the core serves no such field and a launcher for a Mac app is nothing the
+  TUI could use — the TUI is growing its own.
 - **The session grid is snapshots, not live views, and that is the feature.** ⌘⇧G swaps the detail
   column for a tile per live session, each one a `tmux capture-pane` fed every five seconds into a
   libghostty surface on the host-managed `.inMemory` backend — no process, no pty, nothing to

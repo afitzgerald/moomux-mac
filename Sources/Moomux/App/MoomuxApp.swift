@@ -129,6 +129,11 @@ struct SessionCommands: Commands {
             Button("Review Changes") { if let s = selected { app.review(s) } }
                 .keyboardShortcut("g", modifiers: .command)
                 .disabled(selected.map { !app.canReview($0) } ?? true)
+            // Off unless Settings names a diff tool — an item that could only
+            // report "can't find" is worse than a disabled one.
+            Button("Open in Diff Tool") { if let s = selected { app.openDiffTool(s) } }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(selected.map { !app.canOpenDiffTool($0) } ?? true)
             Divider()
             Button("Edit Session…") { if let s = selected { app.sheet = .edit(s) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
