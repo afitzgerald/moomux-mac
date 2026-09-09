@@ -640,17 +640,22 @@ private struct SessionList: View {
         @Bindable var app = app
         List(selection: $app.selectedSessionID) {
             ForEach(app.sessionsByProject, id: \.project) { group in
-                // Not `Section(isExpanded:)`: its own disclosure chevron sits
-                // on the trailing edge, only appears on hover, and animates
-                // badly. `ProjectHeader` draws and owns the one chevron.
-                Section {
-                    if app.projectExpanded(group.project) {
-                        ForEach(group.sessions) { session in
-                            SessionRow(session: session).tag(session.id)
-                        }
-                    }
-                } header: {
-                    ProjectHeader(name: group.project, hidden: group.sessions.count)
+                // Not `Section`: a sidebar section keeps its *own* hidden
+                // disclosure state, a click on the header drives that as well
+                // as ours, and the two fall out of phase the moment a project
+                // is collapsed at launch — SwiftUI starts expanded, so the
+                // first click on a folded project expanded ours and collapsed
+                // its, and the rows stayed away. Plain rows have no such
+                // state, and they are what lets a collapsed project keep the
+                // attached session's row on screen. Both measured.
+                ProjectHeader(
+                    name: group.project,
+                    hidden: group.sessions.count - app.shownSessions(
+                        of: group.project, in: group.sessions
+                    ).count
+                )
+                ForEach(app.shownSessions(of: group.project, in: group.sessions)) { session in
+                    SessionRow(session: session).tag(session.id)
                 }
             }
         }
@@ -707,7 +712,7 @@ private struct ProjectHeader: View {
                 .rotationEffect(.degrees(expanded ? 90 : 0))
             if let emoji = app.emoji(for: name) { Text(emoji) }
             Text(name)
-            if !expanded {
+            if !expanded, hidden > 0 {
                 Text("\(hidden)")
                     .monospacedDigit()
                     .padding(.horizontal, 5)

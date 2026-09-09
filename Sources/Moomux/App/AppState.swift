@@ -535,6 +535,17 @@ public final class AppState {
         if expanded { collapsedProjects.remove(name) } else { collapsedProjects.insert(name) }
     }
 
+    /// The rows a project shows: all of them when expanded, and the selected
+    /// session's when collapsed — folding away the session whose terminal is
+    /// on screen reads as the collapse having lost it. Selected *and*
+    /// attached, not merely attached: a pane outlives switching away from it
+    /// (see `SessionDetail`), so every session ever opened would otherwise
+    /// pile up under a collapsed project.
+    public func shownSessions(of project: String, in sessions: [Session]) -> [Session] {
+        if projectExpanded(project) { return sessions }
+        return sessions.filter { $0.id == selectedSessionID && attachedSessions.contains($0.id) }
+    }
+
     /// Moves the selection to the next/previous row in sidebar order,
     /// wrapping. The Session menu's replacement for the sidebar `List`'s own
     /// arrow-key navigation, which stops reaching the list the instant a
@@ -544,8 +555,7 @@ public final class AppState {
         // Rows inside a collapsed section are not on screen; stepping the
         // selection onto one would look like the keystroke did nothing.
         let ids = sessionsByProject
-            .filter { projectExpanded($0.project) }
-            .flatMap { $0.sessions.map(\.id) }
+            .flatMap { shownSessions(of: $0.project, in: $0.sessions).map(\.id) }
         guard !ids.isEmpty else { return }
         guard let current = selectedSessionID, let index = ids.firstIndex(of: current) else {
             selectedSessionID = ids[0]
@@ -976,9 +986,26 @@ public final class AppState {
 
             app.setProject("a", expanded: false)
             assert(!app.projectExpanded("a") && app.projectExpanded("b"))
+            assert(app.shownSessions(of: "a", in: app.sessions).isEmpty)
             app.selectedSessionID = "b:three"
             app.selectAdjacentSession(by: 1)
             assert(app.selectedSessionID == "b:three", "the only visible row wraps to itself")
+
+            // The selected session's terminal is on screen, so its row stays
+            // whatever the collapse says — and ⌘↓ can still reach it.
+            app.views = ["a:two": view("a:two", state: "working")]
+            app.attach(row("a", "two"))
+            app.selectedSessionID = "a:two"
+            assert(app.shownSessions(of: "a", in: app.sessions).map(\.id) == ["a:two"])
+            // Still attached, but no longer what the right pane shows: a pane
+            // that outlived the switch away must not keep its row.
+            app.selectedSessionID = "b:three"
+            assert(app.shownSessions(of: "a", in: app.sessions).isEmpty)
+            app.selectedSessionID = "a:two"
+            app.selectAdjacentSession(by: 1)
+            assert(app.selectedSessionID == "b:three", "the pinned row is in the rotation")
+            app.detach(id: "a:two")
+            app.views = [:]
 
             // A search must never be answered by a section the user cannot
             // see, so the query overrides the collapse — and whitespace is not
