@@ -8,7 +8,7 @@ everything outside `macos/`.
 Today it lists sessions, streams their live agent state, shows detail, banners and dock-badges the
 ones that start waiting on you, attaches a session's tmux inside the app as one plain `tmux attach`
 — reviving a parked one first if its tmux is gone — shows every live session at once as read-only
-snapshots, hands a session to the user's terminal,
+snapshots,
 opens its diff for review in a tmux window of its own, and
 creates, renames, retags, re-agents, archives, reorders, kills and deletes them. Creating one asks
 the same questions the TUI's dialog does — agent, model, thinking level, branch and base branch
@@ -545,13 +545,18 @@ to fix in Go, not a reason to link the core.
 
 Decisions, not oversights. Don't "fix" these without being asked.
 
-- **Nothing this app does in a normal flow makes the core touch a terminal app.** The core's
-  `OpenSession` does two things — revive the tmux session and agent if they are gone, *and* open an
-  iTerm tab — which is right for the TUI and wrong here: Attach would have popped a window somewhere
-  else as a side effect. So the core grew `EnsureTmux`, `OpenSession` minus the terminal step, and
-  that is what `AppState.attach` calls when the session is parked. "Open in terminal" is the only
-  caller of `OpenSession` left, and it is **disabled** without a live tmux rather than reviving one:
-  it is a link out, not a second way to start an agent. Two consequences worth keeping straight —
+- **Nothing this app makes the core do touches a terminal app, and there is no "Open in
+  terminal".** The core's `OpenSession` does two things — revive the tmux session and agent if they
+  are gone, *and* open an iTerm tab — which is right for the TUI and wrong here: Attach would have
+  popped a window somewhere else as a side effect. So the core grew `EnsureTmux`, `OpenSession`
+  minus the terminal step, and that is what `AppState.attach` calls when the session is parked.
+  The link-out button that was `OpenSession`'s last caller is **gone**: which terminal to open is
+  decided from the *core's* environment variables (`internal/terminal.Detect`), and the core this
+  app talks to is normally a launchd/brew service with none of them — so it detected nothing,
+  opened nothing, and returned an attach hint that only rendered in the selected session's detail
+  pane. A dead button beats a button that is silently dead, and Attach is the answer here anyway.
+  (`moomux ui -socket` has the same bug for real; the fix belongs in the core.) Two consequences
+  worth keeping straight —
   the sidebar's auto-attach stays gated on `isAlive` (browsing must not relaunch agents; starting one
   back up is a button press), and `attach` only inserts into `attachedSessions` *after* the revive
   and the next snapshot, or `SessionTerminal` would run `tmux attach` against a session that isn't
@@ -606,10 +611,11 @@ Decisions, not oversights. Don't "fix" these without being asked.
   the alert re-renders that line in place when the status arrives is **not** measured — treat the
   first frame as what the user reads). A worktree nobody has checked must never read as clean — that is the one thing
   `demo()` pins.
-- **Every write the socket serves is wired up**, session and config alike, with two exceptions:
-  `SetCompactDetail`, which trims a detail panel this app does not have, and `SetSessionPrompt`,
+- **Every write the socket serves is wired up**, session and config alike, with three exceptions:
+  `SetCompactDetail`, which trims a detail panel this app does not have; `SetSessionPrompt`,
   which is now only what `CreateSession` calls internally — this app has no other moment that would
-  rewrite a session's first prompt. (`SetSessionStatusTitle`
+  rewrite a session's first prompt; and `OpenSession`, whose terminal step cannot work from a
+  daemonized core (see the "Open in terminal" bullet) — `EnsureTmux` is the half this app wants. (`SetSessionStatusTitle`
   and `StartFirstPrompt` are gone from the wire entirely — the core keeps tmux window titles in
   step itself, and the first prompt is part of the `CreateSession` transaction.) The other TUI-only
   settings (theme, appearance, auto-tmux) are here because they are one-line flags on a shared
