@@ -1018,10 +1018,6 @@ public final class AppState {
         }
     }
 
-    public func open(_ session: Session) {
-        mutate("Open") { try $0.openSession(id: session.id) }
-    }
-
     /// Reviewing a session's changes opens `git diff` in a new tmux **window**
     /// of that session, rather than rendering a patch natively — see the
     /// "Deliberately not done" note for why there is no patch viewer here.
@@ -1210,9 +1206,9 @@ public final class AppState {
     /// A parked session is revived first rather than refused. Recreating the
     /// tmux session and relaunching the agent is the core's job either way, so
     /// making the user press a different button for it was ceremony — but it is
-    /// `EnsureTmux` and not `OpenSession`, because nothing the app does in a
-    /// normal flow may make the core open a terminal window. That belongs to
-    /// the "Open in terminal" button alone.
+    /// `EnsureTmux` and not `OpenSession`, because nothing this app does may
+    /// make the core open a terminal window — the core is commonly a launchd
+    /// daemon with no terminal to open one in.
     public func attach(_ session: Session) {
         guard !isAlive(session) else {
             attachedSessions.insert(session.id)

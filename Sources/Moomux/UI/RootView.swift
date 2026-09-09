@@ -764,7 +764,6 @@ private struct SessionRow: View {
         // Closes over `session`, never over the selection: right-clicking an
         // unselected row has to act on the row you clicked.
         .contextMenu {
-            Button("Open in Terminal") { app.open(session) }
             Button("Review Changes") { app.review(session) }
                 .disabled(!app.canReview(session))
             Button("Edit…") { app.sheet = .edit(session) }
@@ -784,7 +783,7 @@ private struct SessionRow: View {
                 .disabled(!app.canReorder)
             Divider()
             // No confirmation: the worktree survives, the powersleep dot shows
-            // the result immediately, and "Open in Terminal" brings it back.
+            // the result immediately, and Attach brings it back.
             // Delete is the irreversible one, and the only thing that asks.
             Button("Kill tmux") { app.killTmux(session) }
                 .disabled(!app.isAlive(session))
@@ -928,16 +927,6 @@ private struct SessionInfo: View {
                         .disabled(ToolPath.find("tmux") == nil)
                         .help("Attach this tmux session inside the app, starting it if it isn't running")
 
-                        Button {
-                            app.open(session)
-                        } label: {
-                            Label("Open in terminal", systemImage: "arrow.up.forward.app")
-                        }
-                        // A link out and nothing else. Reviving a parked session
-                        // is Attach's job now, so this stays disabled rather
-                        // than quietly starting an agent in another app's window.
-                        .disabled(!app.isAlive(session))
-                        .help("Hand this session to your terminal app, as the TUI does")
 
                         // The Ticket/PR rows below already render the result;
                         // without this the detail pane is a dead end for the
@@ -1107,7 +1096,6 @@ struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(app.visibleSessions.filter { app.isAlive($0) }) { session in
                 Button {
-                    app.open(session)
                     app.selectedSessionID = session.id
                     NSApp.activate()
                     NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
