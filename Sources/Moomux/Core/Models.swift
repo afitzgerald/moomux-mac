@@ -357,14 +357,17 @@ public struct PRInfo: Decodable, Equatable, Sendable {
     public var mergeable: String
     /// PASSING, FAILING, PENDING, NONE
     public var ci: String
+    /// Open review threads nobody has answered. Only counted for OPEN PRs.
+    public var unresolved: Int
 
-    enum CodingKeys: String, CodingKey { case state, mergeable, ci }
+    enum CodingKeys: String, CodingKey { case state, mergeable, ci, unresolved }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? ""
         mergeable = try c.decodeIfPresent(String.self, forKey: .mergeable) ?? ""
         ci = try c.decodeIfPresent(String.self, forKey: .ci) ?? ""
+        unresolved = try c.decodeIfPresent(Int.self, forKey: .unresolved) ?? 0
     }
 
     /// A one-line summary, lower-cased the way the rest of the UI reads.
@@ -378,6 +381,9 @@ public struct PRInfo: Decodable, Equatable, Sendable {
         case "PENDING": parts.append("checks running")
         default: break
         }
+        if unresolved > 0 {
+            parts.append("\(unresolved) open comment" + (unresolved == 1 ? "" : "s"))
+        }
         // Only worth saying when it is a problem; MERGEABLE is the boring case.
         if mergeable == "CONFLICTING" { parts.append("conflicts") }
         return parts.joined(separator: " · ")
@@ -388,7 +394,7 @@ public struct PRInfo: Decodable, Equatable, Sendable {
     /// draws SF Symbols, so the mapping — not the glyph — is what the two
     /// front ends share.
     public enum Badge: Sendable {
-        case open, merged, closed, conflicts, failing, pending
+        case open, merged, closed, conflicts, failing, comments, pending
 
         public var symbol: String {
             switch self {
@@ -397,6 +403,7 @@ public struct PRInfo: Decodable, Equatable, Sendable {
             case .closed: return "nosign"
             case .conflicts: return "exclamationmark.triangle.fill"
             case .failing: return "xmark.octagon.fill"
+            case .comments: return "bubble.left.fill"
             case .pending: return "clock"
             }
         }
@@ -408,6 +415,7 @@ public struct PRInfo: Decodable, Equatable, Sendable {
             case .closed: return "Pull request closed"
             case .conflicts: return "Pull request has conflicts"
             case .failing: return "Pull request checks failing"
+            case .comments: return "Pull request has unresolved review comments"
             case .pending: return "Pull request checks running"
             }
         }
@@ -424,6 +432,8 @@ public struct PRInfo: Decodable, Equatable, Sendable {
         }
         if info.mergeable == "CONFLICTING" { return .conflicts }
         if info.ci == "FAILING" { return .failing }
+        // Unlike CI, nothing clears an open review thread on its own.
+        if info.unresolved > 0 { return .comments }
         // The one place this app says more than the TUI's prGlyph, which has
         // no pending glyph: a PR whose checks are still running is not yet
         // worth walking over to.
@@ -853,6 +863,20 @@ public enum Wire {
         let failing = try! decoder.decode(
             PRInfo.self, from: Data(#"{"state":"OPEN","mergeable":"MERGEABLE","ci":"FAILING"}"#.utf8))
         assert(PRInfo.badge(failing) == .failing)
+        let commented = try! decoder.decode(
+            PRInfo.self,
+            from: Data(#"{"state":"OPEN","mergeable":"MERGEABLE","ci":"PASSING","unresolved":2}"#.utf8))
+        assert(PRInfo.badge(commented) == .comments)
+        assert(commented.summary == "open · checks passing · 2 open comments", commented.summary)
+        let failingCommented = try! decoder.decode(
+            PRInfo.self,
+            from: Data(#"{"state":"OPEN","mergeable":"MERGEABLE","ci":"FAILING","unresolved":2}"#.utf8))
+        assert(PRInfo.badge(failingCommented) == .failing, "a red check outranks open comments")
+        let oneComment = try! decoder.decode(
+            PRInfo.self,
+            from: Data(#"{"state":"OPEN","mergeable":"MERGEABLE","ci":"NONE","unresolved":1}"#.utf8))
+        assert(oneComment.summary == "open · 1 open comment", oneComment.summary)
+
         let closed = try! decoder.decode(
             PRInfo.self, from: Data(#"{"state":"CLOSED","mergeable":"UNKNOWN","ci":"NONE"}"#.utf8))
         assert(PRInfo.badge(closed) == .closed)
