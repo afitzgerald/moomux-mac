@@ -269,7 +269,7 @@ public final class AppState {
     /// ⌘T, ⌘N and ⌘W would have gone the same way, all of them actions this app
     /// either owns or does not have.
     ///
-    /// So: `keybind = clear` drops the lot, then the three a terminal is
+    /// So: `keybind = clear` drops the lot, then the handful a terminal is
     /// genuinely expected to answer are put back. Rendered *after* the user's
     /// own config, so a `keybind` they set is cleared too — deliberate, since
     /// the alternative is a menu item that silently does nothing depending on
@@ -286,6 +286,15 @@ public final class AppState {
         builder.withCustom("keybind", "super+c=copy_to_clipboard")
         builder.withCustom("keybind", "super+v=paste_from_clipboard")
         builder.withCustom("keybind", "super+a=select_all")
+        // Zoom, ghostty's own defaults put back verbatim. A fixed pane font on
+        // a large display is unreadable, and this is the one place the size can
+        // be changed at all — there is deliberately no font setting (the user's
+        // ghostty config owns it), so ⌘+/⌘-/⌘0 is the whole feature. ghostty
+        // re-derives the grid and the pty size from it, so tmux follows.
+        builder.withCustom("keybind", "super+equal=increase_font_size:1")
+        builder.withCustom("keybind", "super+plus=increase_font_size:1")
+        builder.withCustom("keybind", "super+minus=decrease_font_size:1")
+        builder.withCustom("keybind", "super+zero=reset_font_size")
     }
 
     /// Every ghostty config file that exists, in the order ghostty loads them.
