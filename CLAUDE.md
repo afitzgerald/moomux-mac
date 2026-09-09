@@ -88,7 +88,7 @@ swift Scripts/ui.swift key return            # return|tab|space|escape|up|down
 an empty list against SwiftUI windows. It is how a screen other than the empty state gets
 photographed at all.
 
-Two traps when checking by screenshot:
+Traps when checking by screenshot:
 
 - A **crash on launch is silent** through `open`. Confirm the process is still alive a few seconds
   later — and match *this worktree's* build, not any Moomux, since the installed app and other
@@ -102,6 +102,17 @@ Two traps when checking by screenshot:
   count of windows` returns 0 for a perfectly healthy app. Neither is evidence of a problem.
 - Other apps' menu-bar popovers float above ours and land in the shot. Retake rather than debug a
   layout that is not ours.
+- **`Scripts/ui.swift` needs Accessibility, and an agent running inside tmux usually does not have
+  it.** AX trust is inherited from the responsible process, which for a pane under `tmux` is the
+  **tmux server** — not the terminal that started it, and it is lost every time the server
+  restarts. Symptom: `dump` prints "Moomux has no window" for a perfectly healthy app, and
+  `osascript` says "not allowed assistive access". Check with
+  `swift -e 'import ApplicationServices; print(AXIsProcessTrusted())'` before believing the app is
+  broken, and grant tmux Accessibility in System Settings to get the driver back. Without it,
+  screenshots still work — `CGWindowListCopyWindowInfo` gives the window rect for
+  `screencapture -R` and `NSRunningApplication.activate` brings the build to the front, both
+  without AX — but nothing can be clicked or typed, so a screen that needs driving has to be
+  reached another way (a throwaway `MOOMUX_*` env hook in the build, reverted afterwards).
 
 ## Verifying a terminal change
 

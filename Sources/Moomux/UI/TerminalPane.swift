@@ -132,6 +132,15 @@ struct TerminalPane: NSViewRepresentable {
             // `terminalDidClose` never fires, `onExit` never runs, and the
             // session stays listed in `attachedSessions` with a dead client.
             // Same reasoning as sending `Dangerous` explicitly on a create.
+            //
+            // It is **not** sufficient, and measured so: this build of
+            // libghostty reports a child exit as
+            // `GHOSTTY_ACTION_SHOW_CHILD_EXITED`, which libghostty-spm does
+            // not handle, so ghostty writes "Process exited. Press any key to
+            // close the terminal." into the grid and keeps the surface
+            // whatever this says. `AppState.adopt` detaches off the snapshot
+            // for that reason; a keypress here is the only thing that gets a
+            // `terminalDidClose` out of a pane whose tmux is still alive.
             waitAfterCommand: false,
             // ~96ms, on the dependency's own advice for this exact workload:
             // ghostty's IO thread coalesces resizes on a 25ms trailing-only
