@@ -708,6 +708,18 @@ public final class AppState {
         let pruned = statuses.filter { live.contains($0.key) }
         if pruned.count != statuses.count { statuses = pruned }
         for id in attachedSessions where !live.contains(id) { detach(id: id) }
+        // tmux went away under an attached pane — `/kill`, `moomux park`, a
+        // kill from the TUI. libghostty does **not** close the surface when
+        // its child exits: measured, with `waitAfterCommand: false` on the
+        // surface *and* in the pane config, this build reports the exit as
+        // `GHOSTTY_ACTION_SHOW_CHILD_EXITED`, which libghostty-spm does not
+        // handle, so ghostty writes "Process exited. Press any key to close
+        // the terminal." into the grid and keeps the surface — no
+        // `close_surface_cb`, so no `terminalDidClose`. The snapshot already
+        // knows tmux is gone; detach off that rather than off a callback that
+        // never comes. `.parked` exactly and never `!isAlive`: unknown means
+        // "no snapshot yet", which must not tear a live pane down.
+        for id in attachedSessions where views[id]?.state == .parked { detach(id: id) }
         updateDockBadge()  // needsInputCount filters visibleSessions
     }
 
@@ -783,7 +795,9 @@ public final class AppState {
     /// `nil` rather than "0" — a zero badge is still a badge.
     private func updateDockBadge() {
         let count = needsInputCount
-        NSApp.dockTile.badgeLabel = count == 0 ? nil : "\(count)"
+        // `NSApp?`: there is no application object under `--selftest`, and
+        // `demo()` drives the snapshot path that lands here.
+        NSApp?.dockTile.badgeLabel = count == 0 ? nil : "\(count)"
     }
 
     nonisolated static func demo() {
@@ -853,6 +867,23 @@ public final class AppState {
             assert(app.prompt(for: s) == "recovered")
             app.views = [s.id: view(s.id, state: "working")]
             assert(app.prompt(for: s).isEmpty)
+
+            // A pane whose tmux was killed under it has to be let go of: the
+            // surface never tells us, so the snapshot is the only signal.
+            app.attach(s)
+            assert(app.attachedSessions.contains(s.id), "live: attach is immediate")
+            app.adopt(sessions: [s])
+            assert(app.attachedSessions.contains(s.id), "still live, still attached")
+            app.views = [s.id: view(s.id, state: "parked")]
+            app.adopt(sessions: [s])
+            assert(!app.attachedSessions.contains(s.id), "tmux gone: pane goes with it")
+            // Unknown is "no snapshot yet", not "tmux is gone", so a
+            // snapshot that has lost the view must leave the pane alone.
+            app.views = [s.id: view(s.id, state: "working")]
+            app.attach(s)
+            app.views = [:]
+            app.adopt(sessions: [s])
+            assert(app.attachedSessions.contains(s.id), "unknown is not parked")
         }
 
         // The agent table's fallbacks, which decide what every picker in the
