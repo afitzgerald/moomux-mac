@@ -769,6 +769,11 @@ private struct SessionRow: View {
                 .disabled(!app.canReview(session))
             Button("Edit…") { app.sheet = .edit(session) }
             Button("Tags…") { app.sheet = .tags(session) }
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(session.worktreePath, forType: .string)
+            }
+            .disabled(session.worktreePath.isEmpty)
             Divider()
             Button(session.archived ? "Unarchive" : "Archive") {
                 app.setArchived(session, !session.archived)
