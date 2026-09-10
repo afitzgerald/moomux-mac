@@ -176,6 +176,11 @@ public struct ProjectForm: Equatable, Sendable {
     public var noWorktree = false
     /// Empty means "auto" — the core picks a deterministic glyph.
     public var emoji = ""
+    /// Display state the form does not edit but must not drop: `UpdateProject`
+    /// replaces the whole project record, so a save that left these out would
+    /// silently delete the project's folders and un-collapse it.
+    var folders: [String: FolderMeta]?
+    var collapsed = false
     /// nil for a new project; the name being edited otherwise. Editing cannot
     /// change the name (the core keys projects by it), so the field is
     /// read-only there, and it cannot change the kind either.
@@ -195,6 +200,8 @@ public struct ProjectForm: Equatable, Sendable {
         dangerous = p.dangerous
         noWorktree = p.noWorktree
         emoji = p.emoji ?? ""
+        folders = p.folders
+        collapsed = p.collapsed
     }
 
     /// The `config.Project` to send. `kind` is never set from here: the core
@@ -208,7 +215,9 @@ public struct ProjectForm: Equatable, Sendable {
                 dangerous: dangerous,
                 promptAgent: askAgent,
                 noWorktree: noWorktree,
-                emoji: emoji.trimmed.nilIfEmpty)
+                emoji: emoji.trimmed.nilIfEmpty,
+                folders: folders,
+                collapsed: collapsed)
     }
 
     /// nil when the form is submittable, otherwise why it isn't. The strings
@@ -250,7 +259,8 @@ public struct ProjectForm: Equatable, Sendable {
         // that are easy to lose.
         let stored = Project(kind: "git", repo: "/src/x", branchPrefix: "alan/",
                              baseBranch: "develop", agent: "codex", dangerous: true,
-                             promptAgent: true, noWorktree: true, emoji: "🐮")
+                             promptAgent: true, noWorktree: true, emoji: "🐮",
+                             folders: ["wip": FolderMeta(collapsed: true)], collapsed: true)
         let edit = ProjectForm(editing: "x", stored)
         assert(edit.editing == "x")
         assert(edit.askAgent && edit.dangerous && edit.noWorktree)
