@@ -72,6 +72,10 @@ public struct Session: Decodable, Identifiable, Hashable, Sendable {
     public var prompt: String?
     public var archived: Bool
     public var lastOpened: Date
+    /// The folder this session is filed under within its project, "" for a
+    /// loose one. Membership lives here; the folder's own display state lives
+    /// in `Project.folders` — see `Row`.
+    public var folder: String
 
     /// The agent actually used. Sessions created before moomux had a picker
     /// have no `agent` at all, and the Go side defaults them the same way.
@@ -83,7 +87,7 @@ public struct Session: Decodable, Identifiable, Hashable, Sendable {
     public var hasBeenOpened: Bool { lastOpened > Wire.goZeroTimeCutoff }
 
     enum CodingKeys: String, CodingKey {
-        case id, project, name, branch, agent, dangerous, ticket, pr, prompt, archived
+        case id, project, name, branch, agent, dangerous, ticket, pr, prompt, archived, folder
         case worktreePath = "worktree_path"
         case tmuxSession = "tmux_session"
         case createdAt = "created_at"
@@ -106,6 +110,7 @@ public struct Session: Decodable, Identifiable, Hashable, Sendable {
         prompt = try c.decodeIfPresent(String.self, forKey: .prompt)
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         lastOpened = try c.decodeIfPresent(Date.self, forKey: .lastOpened) ?? .distantPast
+        folder = try c.decodeIfPresent(String.self, forKey: .folder) ?? ""
     }
 }
 
@@ -130,6 +135,17 @@ public struct Project: Codable, Hashable, Sendable {
     public var promptAgent: Bool
     public var noWorktree: Bool
     public var emoji: String?
+    /// Display state for this project's session folders, keyed by name (the
+    /// name *is* the id). Membership is on the session, not here.
+    ///
+    /// Carried in both directions for one reason: `UpdateProject` replaces the
+    /// whole project record, so a project edited from this app that did not
+    /// send its folders back would silently lose them.
+    public var folders: [String: FolderMeta]?
+    /// Whether the sidebar's group for this project is folded away. Config, not
+    /// a local preference: the core serves it so the choice survives a restart
+    /// and is the same in every front end.
+    public var collapsed: Bool
 
     public var isPlain: Bool { kind == "plain" }
     public var usesWorktree: Bool { !isPlain && !noWorktree }
@@ -138,7 +154,8 @@ public struct Project: Codable, Hashable, Sendable {
 
     public init(kind: String? = nil, repo: String = "", branchPrefix: String? = nil,
                 baseBranch: String? = nil, agent: String? = nil, dangerous: Bool = false,
-                promptAgent: Bool = false, noWorktree: Bool = false, emoji: String? = nil) {
+                promptAgent: Bool = false, noWorktree: Bool = false, emoji: String? = nil,
+                folders: [String: FolderMeta]? = nil, collapsed: Bool = false) {
         self.kind = kind
         self.repo = repo
         self.branchPrefix = branchPrefix
@@ -148,10 +165,12 @@ public struct Project: Codable, Hashable, Sendable {
         self.promptAgent = promptAgent
         self.noWorktree = noWorktree
         self.emoji = emoji
+        self.folders = folders
+        self.collapsed = collapsed
     }
 
     enum CodingKeys: String, CodingKey {
-        case kind, repo, agent, dangerous, emoji
+        case kind, repo, agent, dangerous, emoji, folders, collapsed
         case branchPrefix = "branch_prefix"
         case baseBranch = "base_branch"
         case promptAgent = "prompt_agent"
@@ -169,6 +188,8 @@ public struct Project: Codable, Hashable, Sendable {
         promptAgent = try c.decodeIfPresent(Bool.self, forKey: .promptAgent) ?? false
         noWorktree = try c.decodeIfPresent(Bool.self, forKey: .noWorktree) ?? false
         emoji = try c.decodeIfPresent(String.self, forKey: .emoji)
+        folders = try c.decodeIfPresent([String: FolderMeta].self, forKey: .folders)
+        collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -182,6 +203,24 @@ public struct Project: Codable, Hashable, Sendable {
         try c.encode(promptAgent, forKey: .promptAgent)
         try c.encode(noWorktree, forKey: .noWorktree)
         try c.encodeIfPresent(emoji, forKey: .emoji)
+        try c.encodeIfPresent(folders, forKey: .folders)
+        try c.encode(collapsed, forKey: .collapsed)
+    }
+}
+
+/// `config.FolderMeta` — a folder's display state, and deliberately not its
+/// position: a folder sits wherever its first member sits (`sessionview.BuildRows`),
+/// so there is no order here to drift out of step with the sessions'.
+public struct FolderMeta: Codable, Hashable, Sendable {
+    public var collapsed: Bool
+
+    public init(collapsed: Bool = false) { self.collapsed = collapsed }
+
+    enum CodingKeys: String, CodingKey { case collapsed }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
     }
 }
 
@@ -493,12 +532,67 @@ public struct SessionView: Decodable, Equatable, Sendable {
 /// the whole map is replaced rather than merged. (The old path-keyed
 /// `watcher.Snapshot` had to be merged, because each sub-watcher reported only
 /// its own agent's paths. The core does that join now.)
+/// `sessionview.Row` — one line of a project's session list as the core lays
+/// it out: a folder header (`id` empty) or a session.
+///
+/// The grouping is derived once, in the core, for the same reason `sessions`
+/// arrives sorted: a second front end computing it in its own language is a
+/// second chance to disagree about what a project looks like. Clients walk
+/// these and render.
+public struct Row: Decodable, Hashable, Sendable {
+    /// The session this row draws; empty on a folder header.
+    public var id: String
+    /// The folder this row is the header for, or the one the session is filed
+    /// under. Empty on a loose session.
+    public var folder: String
+    /// A header's state. Its members are still here, marked `hidden`.
+    public var collapsed: Bool
+    /// A member of a collapsed folder. Present rather than dropped because it
+    /// still holds a position: a manual reorder sends the project's *whole*
+    /// order back, or the rows left out keep stale `Order` values.
+    public var hidden: Bool
+    /// A header's member counts, one per view a client can be filtered to.
+    public var count: Int
+    public var archivedCount: Int
+
+    public var isFolder: Bool { id.isEmpty }
+
+    public init(id: String = "", folder: String = "", collapsed: Bool = false,
+                hidden: Bool = false, count: Int = 0, archivedCount: Int = 0) {
+        self.id = id
+        self.folder = folder
+        self.collapsed = collapsed
+        self.hidden = hidden
+        self.count = count
+        self.archivedCount = archivedCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, folder, collapsed, hidden, count
+        case archivedCount = "archived_count"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        folder = try c.decodeIfPresent(String.self, forKey: .folder) ?? ""
+        collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        count = try c.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        archivedCount = try c.decodeIfPresent(Int.self, forKey: .archivedCount) ?? 0
+    }
+}
+
 public struct Snapshot: Decodable, Sendable {
     /// Already sorted by the core, live-first tiebreak included. A client
     /// filters this and renders it; it does not sort.
     public var sessions: [Session]
     /// Session id → its derived view.
     public var views: [String: SessionView]
+    /// Project name → its sessions laid out as display rows, folder headers
+    /// spliced in. Absent from a core older than folders, which is what the
+    /// caller's fallback (one loose row per session) is for.
+    public var rows: [String: [Row]]
     public var pollTime: Date
     public var err: String?
     /// False when the snapshot carried no `views` key at all: a core older
@@ -511,7 +605,7 @@ public struct Snapshot: Decodable, Sendable {
     public var derived: Bool
 
     enum CodingKeys: String, CodingKey {
-        case sessions, views, err
+        case sessions, views, rows, err
         case pollTime = "poll_time"
     }
 
@@ -519,6 +613,7 @@ public struct Snapshot: Decodable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         sessions = try c.decodeIfPresent([Session].self, forKey: .sessions) ?? []
         views = try c.decodeIfPresent([String: SessionView].self, forKey: .views) ?? [:]
+        rows = try c.decodeIfPresent([String: [Row]].self, forKey: .rows) ?? [:]
         pollTime = try c.decodeIfPresent(Date.self, forKey: .pollTime) ?? Date()
         err = try c.decodeIfPresent(String.self, forKey: .err)
         // Present-but-null counts: a core with no sessions at all sends
@@ -794,8 +889,18 @@ public enum Wire {
         let sent = String(decoding: try! out.encode(
             Project(repo: "/src/x", baseBranch: "main", agent: "codex", dangerous: true)),
             as: UTF8.self)
-        assert(sent == #"{"agent":"codex","base_branch":"main","dangerous":true,"#
+        assert(sent == #"{"agent":"codex","base_branch":"main","collapsed":false,"dangerous":true,"#
                + #""no_worktree":false,"prompt_agent":false,"repo":"/src/x"}"#, sent)
+        // Folders and the collapse flag ride along because UpdateProject
+        // replaces the whole record: a save that dropped them would delete the
+        // project's folders. `folders` is absent when there are none, the same
+        // as every other unset optional.
+        assert(!sent.contains("folders"), "no folders means no key")
+        let withFolders = String(decoding: try! out.encode(
+            Project(repo: "/x", folders: ["wip": FolderMeta(collapsed: true)], collapsed: true)),
+            as: UTF8.self)
+        assert(withFolders.contains(#""folders":{"wip":{"collapsed":true}}"#), withFolders)
+        assert(withFolders.contains(#""collapsed":true"#), withFolders)
         assert(!sent.contains("null"), "an unset field must vanish, never encode as null")
         assert(!sent.contains("kind"), "kind is the core's to decide, not ours to send")
 

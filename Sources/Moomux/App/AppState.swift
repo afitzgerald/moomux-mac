@@ -33,6 +33,11 @@ public final class AppState {
     /// and PR status. Replaced wholesale on every snapshot — it is absolute
     /// state, not a delta, and no longer a per-agent partial to merge.
     public private(set) var views: [Session.ID: SessionView] = [:]
+    /// Project name → its sessions laid out as display rows, folder headers
+    /// spliced in — `sessionview.Rows`, derived once in the core. Empty until
+    /// the first snapshot, and empty from a core older than folders; both are
+    /// what `layout(of:)`'s fallback covers.
+    public private(set) var rows: [String: [Row]] = [:]
     public private(set) var config: Config?
     /// Which agents the core can launch, and what to offer in a model or
     /// thinking-level picker for each. Fetched once — it is a static table in
@@ -102,6 +107,11 @@ public final class AppState {
         /// gain from splitting them into two sheets and two shortcuts.
         case edit(Session)
         case tags(Session)
+        /// A new folder in a project — and, when it was opened from a session's
+        /// own menu, the session to file into it. `SetSessionFolder` creates a
+        /// folder on first use, so that is one call rather than two.
+        case newFolder(project: String, assign: Session?)
+        case renameFolder(project: String, name: String)
         /// Settings *and* project management, on two tabs.
         ///
         /// The project add/edit form is deliberately not a case here: it is
@@ -512,27 +522,29 @@ public final class AppState {
         config?.projects[project]?.emoji
     }
 
-    /// Sidebar sections the user has collapsed. Client-local, like `diffTool`:
-    /// the core serves no such field, and which sections a Mac window has
-    /// folded away is nothing the TUI could use.
-    public var collapsedProjects: Set<String> =
-        Set(UserDefaults.standard.stringArray(forKey: collapsedProjectsKey) ?? []) {
-        didSet {
-            UserDefaults.standard.set(collapsedProjects.sorted(), forKey: Self.collapsedProjectsKey)
-        }
-    }
-
-    static let collapsedProjectsKey = "collapsedProjects"
-
     /// A search must never be answered by a section the user cannot see, so
     /// collapsing is ignored while there is a query — same reason search
     /// matches archived sessions whatever the Archived toggle says.
     public func projectExpanded(_ name: String) -> Bool {
-        searching ? true : !collapsedProjects.contains(name)
+        searching ? true : config?.projects[name]?.collapsed != true
     }
 
+    /// Collapse is config, not a local preference — `SetProjectCollapsed`
+    /// exists precisely for a front end that renders projects as a tree, so the
+    /// choice survives a restart and reads the same everywhere. Applied here
+    /// first because the round trip is visible on a chevron.
     public func setProject(_ name: String, expanded: Bool) {
-        if expanded { collapsedProjects.remove(name) } else { collapsedProjects.insert(name) }
+        applyProjectCollapsed(name, !expanded)
+        mutate(expanded ? "Expand" : "Collapse") {
+            try $0.setProjectCollapsed(project: name, !expanded)
+            return nil
+        }
+    }
+
+    /// The optimistic half of `setProject`, on its own so the checks can drive
+    /// it without a socket.
+    func applyProjectCollapsed(_ name: String, _ collapsed: Bool) {
+        config?.projects[name]?.collapsed = collapsed
     }
 
     /// The rows a project shows: all of them when expanded, and the selected
@@ -546,6 +558,39 @@ public final class AppState {
         return sessions.filter { $0.id == selectedSessionID && attachedSessions.contains($0.id) }
     }
 
+    /// The core's layout for a project, or one loose row per session when it
+    /// has not sent one — an older core, or the pull path, which answers with
+    /// sessions and no rows.
+    public func layout(of project: String, in sessions: [Session]) -> [Row] {
+        rows[project] ?? sessions.map { Row(id: $0.id) }
+    }
+
+    /// What the sidebar draws under a project header: the core's row layout,
+    /// filtered to this window's view. A collapsed project keeps only the
+    /// pinned row, as it always did.
+    public func sidebarRows(of project: String, in sessions: [Session]) -> [Layout.SidebarRow] {
+        let shown = shownSessions(of: project, in: sessions)
+        guard projectExpanded(project) else { return shown.map { .session($0, folder: "") } }
+        return Layout.rows(layout(of: project, in: allSessions(of: project)), shown: shown,
+                           searching: searching)
+    }
+
+    /// Every session of a project, filtered by nothing — what a reorder has to
+    /// renumber, and the fallback layout has to cover.
+    private func allSessions(of project: String) -> [Session] {
+        sessions.filter { $0.project == project }
+    }
+
+    /// The project's folder names, in the order they are drawn (a folder sits
+    /// wherever its first member does), for the "file this session under…" menu.
+    public func folders(of project: String) -> [String] {
+        let named = layout(of: project, in: allSessions(of: project))
+            .filter(\.isFolder).map(\.folder)
+        guard named.isEmpty else { return named }
+        // No layout yet (an older core, or the pull path): config still knows.
+        return (config?.projects[project]?.folders?.keys).map { $0.sorted() } ?? []
+    }
+
     /// Moves the selection to the next/previous row in sidebar order,
     /// wrapping. The Session menu's replacement for the sidebar `List`'s own
     /// arrow-key navigation, which stops reaching the list the instant a
@@ -555,7 +600,7 @@ public final class AppState {
         // Rows inside a collapsed section are not on screen; stepping the
         // selection onto one would look like the keystroke did nothing.
         let ids = sessionsByProject
-            .flatMap { shownSessions(of: $0.project, in: $0.sessions).map(\.id) }
+            .flatMap { sidebarRows(of: $0.project, in: $0.sessions).compactMap { $0.session?.id } }
         guard !ids.isEmpty else { return }
         guard let current = selectedSessionID, let index = ids.firstIndex(of: current) else {
             selectedSessionID = ids[0]
@@ -808,6 +853,7 @@ public final class AppState {
                         views = snapshot.views
                         notifier?.report(previous: previous, current: views)
                     }
+                    if snapshot.rows != rows { rows = snapshot.rows }
                     adopt(sessions: snapshot.sessions)
                     if let err = snapshot.err, err == pendingWatcherError {
                         set(statusError: err)
@@ -970,13 +1016,12 @@ public final class AppState {
         // Collapsing a project hides its rows, so ⌘↓/⌘↑ must step past them —
         // a selection landing on a row nobody can see reads as a dead key.
         MainActor.assumeIsolated {
-            // `collapsedProjects` persists, so put the real one back: a
-            // selfcheck must not fold away the user's own sidebar.
-            let saved = UserDefaults.standard.stringArray(forKey: collapsedProjectsKey)
-            defer { UserDefaults.standard.set(saved, forKey: collapsedProjectsKey) }
-
             let app = AppState()
-            app.collapsedProjects = []
+            // Collapse lives in config now, and `setProject` would send it to a
+            // socket — the checks drive the optimistic half directly, over a
+            // config decoded here rather than the user's own.
+            app.config = try! Wire.decoder.decode(Config.self, from: Data(
+                #"{"projects":{"a":{"repo":"/a"},"b":{"repo":"/b"}},"order":["a","b"]}"#.utf8))
             func row(_ project: String, _ name: String) -> Session {
                 try! Wire.decoder.decode(Session.self, from: Data(
                     #"{"id":"\#(project):\#(name)","project":"\#(project)","name":"\#(name)"}"#.utf8))
@@ -984,7 +1029,7 @@ public final class AppState {
             app.sessions = [row("a", "one"), row("a", "two"), row("b", "three")]
             assert(app.sessionsByProject.map(\.project) == ["a", "b"])
 
-            app.setProject("a", expanded: false)
+            app.applyProjectCollapsed("a", true)
             assert(!app.projectExpanded("a") && app.projectExpanded("b"))
             assert(app.shownSessions(of: "a", in: app.sessions).isEmpty)
             app.selectedSessionID = "b:three"
@@ -1016,9 +1061,27 @@ public final class AppState {
             assert(!app.projectExpanded("a"))
             app.searchQuery = ""
 
-            app.setProject("a", expanded: true)
+            app.applyProjectCollapsed("a", false)
             app.selectAdjacentSession(by: 1)
             assert(app.selectedSessionID == "a:one", "expanded again: back in the rotation")
+
+            // With the core's layout in hand the sidebar draws its folders, and
+            // ⌘↓ steps past the members a collapsed one is hiding.
+            app.rows = ["a": [Row(folder: "wip", collapsed: true, count: 1),
+                              Row(id: "a:one", folder: "wip", hidden: true),
+                              Row(id: "a:two")]]
+            let drawn = app.sidebarRows(of: "a", in: app.sessions.filter { $0.project == "a" })
+            assert(drawn.map(\.id) == ["folder:wip", "a:two"], "\(drawn.map(\.id))")
+            assert(app.folders(of: "a") == ["wip"])
+            app.selectedSessionID = "a:two"
+            app.selectAdjacentSession(by: 1)
+            assert(app.selectedSessionID == "b:three", "a hidden member is not in the rotation")
+
+            // No layout from the core (an older one, or the pull path) still
+            // lists and reorders — one loose row per session.
+            app.rows = [:]
+            assert(app.sidebarRows(of: "a", in: app.sessions.filter { $0.project == "a" })
+                .map(\.id) == ["a:one", "a:two"])
         }
 
         // The sidebar's git badges come off the snapshot now — no per-session
@@ -1294,8 +1357,51 @@ public final class AppState {
         }
     }
 
+    /// Sends the project's whole resulting order, worked out from the layout
+    /// this window is displaying — see `MoomuxClient.reorderSessions`. A move
+    /// with nowhere to go is silence, the same no-op `MoveSession` was.
     public func move(_ session: Session, by delta: Int) {
-        mutate("Move") { try $0.move(id: session.id, delta: delta); return nil }
+        let shown = Set(listedSessions.map(\.id))
+        guard let order = Layout.reorder(
+            layout(of: session.project, in: allSessions(of: session.project)),
+            id: session.id, delta: delta, skip: { !shown.contains($0) }
+        ) else { return }
+        mutate("Move") { try $0.reorderSessions(order); return nil }
+    }
+
+    // MARK: Folders
+
+    /// Files a session under `folder`, creating it on first use; an empty name
+    /// puts the session back at the top level.
+    public func setFolder(_ session: Session, to folder: String) {
+        mutate(folder.isEmpty ? "Remove from folder" : "Move to folder") {
+            try $0.setSessionFolder(id: session.id, folder: folder)
+            return nil
+        }
+    }
+
+    public func createFolder(project: String, name: String) {
+        mutate("New folder") { try $0.createFolder(project: project, name: name); return nil }
+    }
+
+    public func renameFolder(project: String, from old: String, to new: String) {
+        mutate("Rename folder") {
+            try $0.renameFolder(project: project, from: old, to: new)
+            return nil
+        }
+    }
+
+    /// Deletes the folder only — every member is filed back at the top level,
+    /// which is why this asks nothing.
+    public func deleteFolder(project: String, name: String) {
+        mutate("Delete folder") { try $0.deleteFolder(project: project, name: name); return nil }
+    }
+
+    public func setFolder(project: String, name: String, collapsed: Bool) {
+        mutate(collapsed ? "Collapse" : "Expand") {
+            try $0.setFolderCollapsed(project: project, name: name, collapsed)
+            return nil
+        }
     }
 
     // MARK: Projects

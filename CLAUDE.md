@@ -11,7 +11,11 @@ ones that start waiting on you, attaches a session's tmux inside the app as one 
 snapshots,
 opens its diff for review in a tmux window of its own — or in whatever GUI diff tool
 Settings names (⌘D) — and
-creates, renames, retags, re-agents, archives, reorders, kills and deletes them. Creating one asks
+creates, renames, retags, re-agents, archives, reorders, kills and deletes them. Sessions file into
+per-project folders — the core's own (`SetSessionFolder`, `CreateFolder`, `RenameFolder`,
+`DeleteFolder`, `SetFolderCollapsed`), laid out by the core as `Snapshot.Rows` and rendered here —
+and both a folder and a whole project fold away, the project's state through `SetProjectCollapsed`
+so it survives a restart and reads the same in every front end. Creating one asks
 the same questions the TUI's dialog does — agent, model, thinking level, branch and base branch
 included — because the core serves the table those pickers are built from (`AgentOptions`). ⌘,
 manages projects (add, edit, remove, reorder, and the "that path isn't a git repo" choice) and the
@@ -310,6 +314,17 @@ to fix in Go, not a reason to link the core.
   A "Remove" in an alert over a pane whose button is also "Remove" gets the pane's, behind the
   alert, and the stray click dismisses the alert — so the action silently never runs. Click an
   alert's button by coordinate (`find` prints them) rather than by label.
+- **`UpdateProject` replaces the whole project record**, so anything this app does not send back
+  is deleted — which now includes `folders` and `collapsed`. `ProjectForm` carries both through
+  untouched for exactly that reason (`Project`'s round-trip assert in `ProjectForm.demo` is the
+  check), the same way `kind` is restored by the core.
+- **A manual reorder sends the project's whole order, not a delta.** `MoveSession` still exists on
+  the wire as a deprecated shim kept for this app alone; `ReorderSessions` takes the order the
+  client is displaying, because the core re-deriving it from a list the client filters differently
+  is what made shift+↑↓ swap the wrong pair. `Layout.reorder` is `sessionview.Reorder` ported —
+  whole blocks move, a folder member moves among its siblings, and every id comes back including
+  the hidden ones (`Store.Reorder` numbers what it is handed 1..N, so anything left out keeps a
+  stale `Order` that interleaves with the renumbered ones).
 - **`session.CreateRequest` has no json tags**, so it is the one thing this app *sends* that Go
   decodes off its own Go field names — `Project`, `BaseBranch`, `AutoSubmit`, `PR`. Everything else
   on the wire, `prstatus.Info` included, is snake_case. A key that stops matching is silent on both
