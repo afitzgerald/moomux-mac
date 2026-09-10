@@ -66,7 +66,7 @@ enum Theme {
     static func pr(_ badge: PRInfo.Badge, _ palette: ThemePalette?) -> Color {
         switch badge {
         case .merged: return resolve(palette?.done) ?? .green
-        case .conflicts, .failing: return gitWarn(palette)
+        case .conflicts, .failing, .comments: return gitWarn(palette)
         // Pending is not a problem, so it stays secondary: warn here would
         // put an amber icon on every PR for the minutes its checks run.
         case .open, .closed, .pending: return .secondary
@@ -238,6 +238,23 @@ struct RootView: View {
                                labels: ["Ticket", "PR"],
                                values: [session.ticket ?? "", session.pr ?? ""]) {
                     app.setTags(session, ticket: $0[0], pr: $0[1])
+                }
+            case let .newFolder(project, assign):
+                TextFieldSheet(title: "New folder in “\(project)”",
+                               labels: ["Name"], values: [""]) { values in
+                    let name = values[0].trimmed
+                    // Filing a session into it *is* the create: SetSessionFolder
+                    // makes a folder on first use, so this stays one call.
+                    if let session = assign {
+                        app.setFolder(session, to: name)
+                    } else {
+                        app.createFolder(project: project, name: name)
+                    }
+                }
+            case let .renameFolder(project, name):
+                TextFieldSheet(title: "Rename “\(name)”",
+                               labels: ["Name"], values: [name]) { values in
+                    app.renameFolder(project: project, from: name, to: values[0].trimmed)
                 }
             case .settings:
                 SettingsSheet()
@@ -640,21 +657,39 @@ private struct SessionList: View {
         @Bindable var app = app
         List(selection: $app.selectedSessionID) {
             ForEach(app.sessionsByProject, id: \.project) { group in
-                // Not `Section(isExpanded:)`: its own disclosure chevron sits
-                // on the trailing edge, only appears on hover, and animates
-                // badly. `ProjectHeader` draws and owns the one chevron.
-                Section {
-                    if app.projectExpanded(group.project) {
-                        ForEach(group.sessions) { session in
-                            SessionRow(session: session).tag(session.id)
-                        }
+                // Not `Section`: a sidebar section keeps its *own* hidden
+                // disclosure state, a click on the header drives that as well
+                // as ours, and the two fall out of phase the moment a project
+                // is collapsed at launch — SwiftUI starts expanded, so the
+                // first click on a folded project expanded ours and collapsed
+                // its, and the rows stayed away. Plain rows have no such
+                // state, and they are what lets a collapsed project keep the
+                // attached session's row on screen. Both measured.
+                ProjectHeader(
+                    name: group.project,
+                    hidden: group.sessions.count - app.shownSessions(
+                        of: group.project, in: group.sessions
+                    ).count
+                )
+                // Untagged, but the List will still "select" it: a click in
+                // the row's leading inset misses the header's own
+                // `contentShape`, falls through, highlights the row and nils
+                // the session selection. Two outcomes for one row, and one of
+                // them threw away state.
+                .selectionDisabled()
+                // The core lays the rows out (`sessionview.Rows`); this walks
+                // them. A folder header is a plain row for the same reason a
+                // project header is — a selectable row would take the List's
+                // selection, and there is no session behind it.
+                ForEach(app.sidebarRows(of: group.project, in: group.sessions)) { row in
+                    switch row {
+                    case let .folder(name, collapsed, count):
+                        FolderHeader(project: group.project, name: name,
+                                     collapsed: collapsed, count: count)
+                            .selectionDisabled()
+                    case let .session(session, folder):
+                        SessionRow(session: session, indented: !folder.isEmpty).tag(session.id)
                     }
-                } header: {
-                    ProjectHeader(name: group.project, hidden: group.sessions.count)
-                        // A header is still a List row: a click in its leading
-                        // inset misses ProjectHeader's own shape, "selects" the
-                        // untagged header and nils the session selection.
-                        .selectionDisabled()
                 }
             }
         }
@@ -711,7 +746,7 @@ private struct ProjectHeader: View {
                 .rotationEffect(.degrees(expanded ? 90 : 0))
             if let emoji = app.emoji(for: name) { Text(emoji) }
             Text(name)
-            if !expanded {
+            if !expanded, hidden > 0 {
                 Text("\(hidden)")
                     .monospacedDigit()
                     .padding(.horizontal, 5)
@@ -721,6 +756,9 @@ private struct ProjectHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setProject(name, expanded: !expanded) }
+        .contextMenu {
+            Button("New Folder…") { app.sheet = .newFolder(project: name, assign: nil) }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(expanded ? name : "\(name), collapsed, \(hidden) sessions")
@@ -728,9 +766,52 @@ private struct ProjectHeader: View {
     }
 }
 
+/// A folder header — the same plain-row shape as `ProjectHeader`, one level in.
+private struct FolderHeader: View {
+    @Environment(AppState.self) private var app
+    let project: String
+    let name: String
+    let collapsed: Bool
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .rotationEffect(.degrees(collapsed ? 0 : 90))
+            Image(systemName: collapsed ? "folder.fill" : "folder")
+                .foregroundStyle(.secondary)
+            Text(name)
+            if collapsed, count > 0 {
+                Text("\(count)")
+                    .monospacedDigit()
+                    .padding(.horizontal, 5)
+                    .background(Capsule().fill(.quaternary))
+            }
+        }
+        .padding(.leading, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { app.setFolder(project: project, name: name, collapsed: !collapsed) }
+        .contextMenu {
+            Button("Rename…") { app.sheet = .renameFolder(project: project, name: name) }
+            // No confirmation: deleting a folder files its members back at the
+            // top level and removes nothing.
+            Button("Delete") { app.deleteFolder(project: project, name: name) }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(collapsed ? "\(name), collapsed, \(count) sessions" : name)
+        .accessibilityAction { app.setFolder(project: project, name: name, collapsed: !collapsed) }
+    }
+}
+
 private struct SessionRow: View {
     @Environment(AppState.self) private var app
     let session: Session
+    /// Set for a session inside a folder — straight off its row, so nothing
+    /// here has to join back to the folder to know.
+    var indented = false
 
     var body: some View {
         let state = app.state(for: session)
@@ -792,6 +873,7 @@ private struct SessionRow: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, indented ? 12 : 0)
         // Closes over `session`, never over the selection: right-clicking an
         // unselected row has to act on the row you clicked.
         .contextMenu {
@@ -809,6 +891,20 @@ private struct SessionRow: View {
             Divider()
             Button(session.archived ? "Unarchive" : "Archive") {
                 app.setArchived(session, !session.archived)
+            }
+            Menu("Folder") {
+                Button("None") { app.setFolder(session, to: "") }
+                    .disabled(session.folder.isEmpty)
+                let folders = app.folders(of: session.project)
+                if !folders.isEmpty { Divider() }
+                ForEach(folders, id: \.self) { name in
+                    Button(name) { app.setFolder(session, to: name) }
+                        .disabled(name == session.folder)
+                }
+                Divider()
+                Button("New Folder…") {
+                    app.sheet = .newFolder(project: session.project, assign: session)
+                }
             }
             Button("Move Up") { app.move(session, by: -1) }
                 .disabled(!app.canReorder)
@@ -1102,22 +1198,26 @@ private struct ConnectionBadge: View {
         // tens of seconds of nothing visible happening otherwise. Here rather
         // than in the sheet so every action gets it for free.
         if let busy = app.busy {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("\(busy)…").foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text(busy).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
+            .padding(.horizontal, 4)
+            .fixedSize()
         } else {
             switch app.connection {
             case .connecting:
-                Text("connecting…").foregroundStyle(.secondary)
+                Text("Connecting").font(.subheadline).foregroundStyle(.secondary)
             case .connected:
                 if let error = app.statusError {
                     Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.subheadline)
                         .foregroundStyle(.orange)
                         .lineLimit(1)
                 }
             case let .down(message):
                 Label(message, systemImage: "bolt.horizontal.circle")
+                    .font(.subheadline)
                     .foregroundStyle(.orange)
                     .lineLimit(1)
                     .help("Is `moomux serve` running?")

@@ -20,6 +20,7 @@ enum SelfTest {
         Wire.demo()
         MoomuxClient.demo()
         ToolPath.demo()
+        Layout.demo()
         AppState.demo()
         NewSessionForm.demo()
         ProjectForm.demo()
