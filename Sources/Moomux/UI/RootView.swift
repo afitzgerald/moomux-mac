@@ -671,6 +671,12 @@ private struct SessionList: View {
                         of: group.project, in: group.sessions
                     ).count
                 )
+                // Untagged, but the List will still "select" it: a click in
+                // the row's leading inset misses the header's own
+                // `contentShape`, falls through, highlights the row and nils
+                // the session selection. Two outcomes for one row, and one of
+                // them threw away state.
+                .selectionDisabled()
                 // The core lays the rows out (`sessionview.Rows`); this walks
                 // them. A folder header is a plain row for the same reason a
                 // project header is — a selectable row would take the List's
@@ -680,6 +686,7 @@ private struct SessionList: View {
                     case let .folder(name, collapsed, count):
                         FolderHeader(project: group.project, name: name,
                                      collapsed: collapsed, count: count)
+                            .selectionDisabled()
                     case let .session(session, folder):
                         SessionRow(session: session, indented: !folder.isEmpty).tag(session.id)
                     }
