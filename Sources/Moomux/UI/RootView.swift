@@ -1103,22 +1103,26 @@ private struct ConnectionBadge: View {
         // tens of seconds of nothing visible happening otherwise. Here rather
         // than in the sheet so every action gets it for free.
         if let busy = app.busy {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("\(busy)…").foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text(busy).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
+            .padding(.horizontal, 4)
+            .fixedSize()
         } else {
             switch app.connection {
             case .connecting:
-                Text("connecting…").foregroundStyle(.secondary)
+                Text("Connecting").font(.subheadline).foregroundStyle(.secondary)
             case .connected:
                 if let error = app.statusError {
                     Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.subheadline)
                         .foregroundStyle(.orange)
                         .lineLimit(1)
                 }
             case let .down(message):
                 Label(message, systemImage: "bolt.horizontal.circle")
+                    .font(.subheadline)
                     .foregroundStyle(.orange)
                     .lineLimit(1)
                     .help("Is `moomux serve` running?")
