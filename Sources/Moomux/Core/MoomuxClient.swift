@@ -61,7 +61,14 @@ public final class MoomuxClient: Sendable {
     /// anything about it is a different message.
     struct Args: Encodable {
         var id: String?
+        /// `ReorderSessions`' fully-resolved final order.
+        var ids: [String]?
         var name: String?
+        /// `RenameFolder`'s target name — `name` carries the old one there,
+        /// same as every other folder method's single folder-name parameter.
+        var newName: String?
+        /// The project a folder method acts on.
+        var project: String?
         var agent: String?
         var ticket: String?
         var pr: String?
@@ -81,7 +88,9 @@ public final class MoomuxClient: Sendable {
         // name. A missing entry here would be invisible in both directions —
         // Go ignores the unknown key and uses the zero value.
         enum CodingKeys: String, CodingKey {
-            case id, name, agent, ticket, pr, delta, dangerous, on, theme, appearance, req, proj
+            case id, ids, name, agent, ticket, pr, delta, dangerous, on, theme, appearance, req, proj
+            case newName = "new_name"
+            case project
         }
     }
 
@@ -288,10 +297,54 @@ public final class MoomuxClient: Sendable {
         try call("SetSessionAgent", Args(id: id, agent: agent, dangerous: dangerous))
     }
 
-    /// ±1, within the project group. A move off either end is a no-op on the Go
-    /// side rather than an error.
-    public func move(id: String, delta: Int) throws {
-        try call("MoveSession", Args(id: id, delta: delta))
+    /// The project's whole session order, as this app is displaying it —
+    /// hidden and archived rows included.
+    ///
+    /// Not a session plus a delta (`MoveSession`, which the core keeps only as
+    /// a deprecated shim for this app): the core would have to re-derive the
+    /// sibling order from a list a client may be filtering differently, and two
+    /// quick moves could complete out of order and revert one another. Ids left
+    /// out keep a stale `Order` that then interleaves with the renumbered ones,
+    /// which is why `Layout.reorder` returns the whole project.
+    public func reorderSessions(_ ids: [String]) throws {
+        try call("ReorderSessions", Args(ids: ids))
+    }
+
+    // MARK: - Folders
+    //
+    // The split the core makes: a folder's display state lives in config under
+    // `Project.folders`, its membership on each session. So a rename or a
+    // delete rewrites both, and `SetSessionFolder` is the one session mutator
+    // that also creates a folder.
+
+    /// An empty `folder` files the session back at the top level. A name that
+    /// does not exist yet is created by this call.
+    public func setSessionFolder(id: String, folder: String) throws {
+        try call("SetSessionFolder", Args(id: id, name: folder))
+    }
+
+    public func createFolder(project: String, name: String) throws {
+        try call("CreateFolder", Args(name: name, project: project))
+    }
+
+    public func renameFolder(project: String, from old: String, to new: String) throws {
+        try call("RenameFolder", Args(name: old, newName: new, project: project))
+    }
+
+    /// Deletes the folder and files every member back at the top level; no
+    /// session is removed.
+    public func deleteFolder(project: String, name: String) throws {
+        try call("DeleteFolder", Args(name: name, project: project))
+    }
+
+    public func setFolderCollapsed(project: String, name: String, _ on: Bool) throws {
+        try call("SetFolderCollapsed", Args(name: name, project: project, on: on))
+    }
+
+    /// Whether the project's own sidebar group is folded away. Display state,
+    /// but config: the choice survives a restart and every front end sees it.
+    public func setProjectCollapsed(project: String, _ on: Bool) throws {
+        try call("SetProjectCollapsed", Args(project: project, on: on))
     }
 
     // MARK: - Projects
@@ -512,8 +565,26 @@ public final class MoomuxClient: Sendable {
                 name: "site", proj: Project(repo: "/src/site", baseBranch: "main")))),
             as: UTF8.self)
         assert(addProject == #"{"args":{"name":"site","proj":{"base_branch":"main","#
-               + #""dangerous":false,"no_worktree":false,"prompt_agent":false,"#
-               + #""repo":"/src/site"}},"method":"AddProject"}"#, addProject)
+               + #""collapsed":false,"dangerous":false,"no_worktree":false,"#
+               + #""prompt_agent":false,"repo":"/src/site"}},"method":"AddProject"}"#, addProject)
+
+        // The two folder args: a rename carries the old name in `name` and the
+        // new one in `new_name`, and every folder method names its project.
+        // The keys are snake_case on the wire; a mismatch here is silent on
+        // both sides — Go ignores the unknown key and uses the zero value.
+        let rename = String(
+            decoding: try! encoder.encode(Request(method: "RenameFolder", args: Args(
+                name: "wip", newName: "done", project: "moomux"))),
+            as: UTF8.self)
+        assert(rename == #"{"args":{"name":"wip","new_name":"done","project":"moomux"},"#
+               + #""method":"RenameFolder"}"#, rename)
+
+        // A reorder sends the project's whole resulting order, not a delta.
+        let order = String(
+            decoding: try! encoder.encode(
+                Request(method: "ReorderSessions", args: Args(ids: ["a", "b"]))),
+            as: UTF8.self)
+        assert(order == #"{"args":{"ids":["a","b"]},"method":"ReorderSessions"}"#, order)
 
         // The theme call is the only one sending both of these, and clearing
         // the appearance override means sending "" rather than dropping it.
