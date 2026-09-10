@@ -239,6 +239,23 @@ struct RootView: View {
                                values: [session.ticket ?? "", session.pr ?? ""]) {
                     app.setTags(session, ticket: $0[0], pr: $0[1])
                 }
+            case let .newFolder(project, assign):
+                TextFieldSheet(title: "New folder in “\(project)”",
+                               labels: ["Name"], values: [""]) { values in
+                    let name = values[0].trimmed
+                    // Filing a session into it *is* the create: SetSessionFolder
+                    // makes a folder on first use, so this stays one call.
+                    if let session = assign {
+                        app.setFolder(session, to: name)
+                    } else {
+                        app.createFolder(project: project, name: name)
+                    }
+                }
+            case let .renameFolder(project, name):
+                TextFieldSheet(title: "Rename “\(name)”",
+                               labels: ["Name"], values: [name]) { values in
+                    app.renameFolder(project: project, from: name, to: values[0].trimmed)
+                }
             case .settings:
                 SettingsSheet()
             }
@@ -654,8 +671,18 @@ private struct SessionList: View {
                         of: group.project, in: group.sessions
                     ).count
                 )
-                ForEach(app.shownSessions(of: group.project, in: group.sessions)) { session in
-                    SessionRow(session: session).tag(session.id)
+                // The core lays the rows out (`sessionview.Rows`); this walks
+                // them. A folder header is a plain row for the same reason a
+                // project header is — a selectable row would take the List's
+                // selection, and there is no session behind it.
+                ForEach(app.sidebarRows(of: group.project, in: group.sessions)) { row in
+                    switch row {
+                    case let .folder(name, collapsed, count):
+                        FolderHeader(project: group.project, name: name,
+                                     collapsed: collapsed, count: count)
+                    case let .session(session, folder):
+                        SessionRow(session: session, indented: !folder.isEmpty).tag(session.id)
+                    }
                 }
             }
         }
@@ -722,6 +749,9 @@ private struct ProjectHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setProject(name, expanded: !expanded) }
+        .contextMenu {
+            Button("New Folder…") { app.sheet = .newFolder(project: name, assign: nil) }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(expanded ? name : "\(name), collapsed, \(hidden) sessions")
@@ -729,9 +759,52 @@ private struct ProjectHeader: View {
     }
 }
 
+/// A folder header — the same plain-row shape as `ProjectHeader`, one level in.
+private struct FolderHeader: View {
+    @Environment(AppState.self) private var app
+    let project: String
+    let name: String
+    let collapsed: Bool
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .rotationEffect(.degrees(collapsed ? 0 : 90))
+            Image(systemName: collapsed ? "folder.fill" : "folder")
+                .foregroundStyle(.secondary)
+            Text(name)
+            if collapsed, count > 0 {
+                Text("\(count)")
+                    .monospacedDigit()
+                    .padding(.horizontal, 5)
+                    .background(Capsule().fill(.quaternary))
+            }
+        }
+        .padding(.leading, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { app.setFolder(project: project, name: name, collapsed: !collapsed) }
+        .contextMenu {
+            Button("Rename…") { app.sheet = .renameFolder(project: project, name: name) }
+            // No confirmation: deleting a folder files its members back at the
+            // top level and removes nothing.
+            Button("Delete") { app.deleteFolder(project: project, name: name) }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(collapsed ? "\(name), collapsed, \(count) sessions" : name)
+        .accessibilityAction { app.setFolder(project: project, name: name, collapsed: !collapsed) }
+    }
+}
+
 private struct SessionRow: View {
     @Environment(AppState.self) private var app
     let session: Session
+    /// Set for a session inside a folder — straight off its row, so nothing
+    /// here has to join back to the folder to know.
+    var indented = false
 
     var body: some View {
         let state = app.state(for: session)
@@ -793,6 +866,7 @@ private struct SessionRow: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, indented ? 12 : 0)
         // Closes over `session`, never over the selection: right-clicking an
         // unselected row has to act on the row you clicked.
         .contextMenu {
@@ -810,6 +884,20 @@ private struct SessionRow: View {
             Divider()
             Button(session.archived ? "Unarchive" : "Archive") {
                 app.setArchived(session, !session.archived)
+            }
+            Menu("Folder") {
+                Button("None") { app.setFolder(session, to: "") }
+                    .disabled(session.folder.isEmpty)
+                let folders = app.folders(of: session.project)
+                if !folders.isEmpty { Divider() }
+                ForEach(folders, id: \.self) { name in
+                    Button(name) { app.setFolder(session, to: name) }
+                        .disabled(name == session.folder)
+                }
+                Divider()
+                Button("New Folder…") {
+                    app.sheet = .newFolder(project: session.project, assign: session)
+                }
             }
             Button("Move Up") { app.move(session, by: -1) }
                 .disabled(!app.canReorder)
