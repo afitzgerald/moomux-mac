@@ -651,6 +651,10 @@ private struct SessionList: View {
                     }
                 } header: {
                     ProjectHeader(name: group.project, hidden: group.sessions.count)
+                        // A header is still a List row: a click in its leading
+                        // inset misses ProjectHeader's own shape, "selects" the
+                        // untagged header and nils the session selection.
+                        .selectionDisabled()
                 }
             }
         }
