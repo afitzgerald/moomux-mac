@@ -1213,13 +1213,26 @@ public final class AppState {
                                 branch: existingBranch, baseBranch: baseBranch,
                                 ticket: ticket, pr: pr, model: model, thinking: thinking,
                                 prompt: prompt, autoSubmit: autoSubmit, dangerous: dangerous)
-        mutate("Creating session") { client in
-            if rememberAutoSubmit {
-                // Best effort, exactly as the TUI treats it: remembering a
-                // toggle is not worth failing a session creation over.
-                try? client.setAutoSubmitDefault(autoSubmit)
+        // Not `mutate`: that discards the created `Session`, and selecting it
+        // needs the id `createSession` hands back.
+        Task {
+            busy = "Creating session"
+            defer { busy = nil }
+            do {
+                let (session, hint) = try await withoutBlockingTheUI { [client] in
+                    if rememberAutoSubmit {
+                        // Best effort, exactly as the TUI treats it: remembering a
+                        // toggle is not worth failing a session creation over.
+                        try? client.setAutoSubmitDefault(autoSubmit)
+                    }
+                    return try client.createSession(req)
+                }
+                if !hint.isEmpty { self.hint = hint }
+                await refresh()
+                if autoFocusNewSession { selectedSessionID = session.id }
+            } catch {
+                failed("Creating session", error)
             }
-            return try client.createSession(req).1
         }
     }
 
@@ -1280,6 +1293,17 @@ public final class AppState {
     }
 
     static let diffToolKey = "diffTool"
+
+    /// Whether creating a session selects it in the sidebar right away, rather
+    /// than leaving the current selection alone. `UserDefaults` for the same
+    /// reason as `diffTool` — this app's own front-end behavior, nothing the
+    /// core or the TUI has any use for.
+    public var autoFocusNewSession: Bool = UserDefaults.standard.object(forKey: autoFocusNewSessionKey) as? Bool
+        ?? true {
+        didSet { UserDefaults.standard.set(autoFocusNewSession, forKey: Self.autoFocusNewSessionKey) }
+    }
+
+    static let autoFocusNewSessionKey = "autoFocusNewSession"
 
     /// Point size for the sidebar's session rows; project and folder headers
     /// draw 2pt larger (`headerFontSize`). `UserDefaults` for the same reason

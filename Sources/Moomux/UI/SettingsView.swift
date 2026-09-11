@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Settings and project management: the two write surfaces that are about the
@@ -386,10 +387,13 @@ private struct GeneralPane: View {
 
     var body: some View {
         Form {
-            if cfg == nil {
-                NotConnectedSection()
-            } else {
-                Section("Sessions") {
+            // One notice for the pane, and the core-backed rows simply absent
+            // beneath it — repeating it in every section it applies to is
+            // noisier than saying it once.
+            if cfg == nil { NotConnectedSection() }
+
+            Section("Sessions") {
+                if cfg != nil {
                     Toggle("Sort sessions by last opened", isOn: Binding(
                         get: { cfg?.sortRecentFirst ?? false },
                         set: { app.setSortRecentFirst($0) }))
@@ -399,7 +403,15 @@ private struct GeneralPane: View {
                         set: { app.setAutoSubmitDefault($0) }))
                         .help("The starting state of the new-session form's send toggle, here and in the TUI")
                 }
+                // This app's own (`UserDefaults`), so it stays usable with no
+                // core — which is why the gate above is per row and not over
+                // the whole section.
+                Toggle("Select a new session as soon as it's created", isOn: Binding(
+                    get: { app.autoFocusNewSession }, set: { app.autoFocusNewSession = $0 }))
+                    .help("Off leaves the sidebar selection where it was")
+            }
 
+            if cfg != nil {
                 Section {
                     Toggle("Relaunch the TUI inside tmux", isOn: Binding(
                         get: { cfg?.autoTmux ?? false },
@@ -414,9 +426,27 @@ private struct GeneralPane: View {
                 }
             }
 
+            // Not ours to fix: macOS leaves pop-up buttons and switches out of
+            // the Tab chain unless Full Keyboard Access is on, so Tab in the New
+            // Session sheet skips Agent, Model and Thinking entirely and looks
+            // like a bug in the form.
+            Section {
+                Button("Open Keyboard settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            } header: {
+                Text("Keyboard")
+            } footer: {
+                Text("Tab skips the pop-up menus and switches until macOS's Full Keyboard Access "
+                     + "is on (Keyboard → Keyboard navigation). With it on, Tab reaches them and "
+                     + "Space opens a menu or flips a switch.")
+                .font(.caption)
+            }
+
             // This app's own, not the shared config: the core serves no such
             // field, and a launcher for a Mac app is nothing the TUI could use.
-            // So it stays readable with no core, outside the gate above.
             Section {
                 // The worktree path is appended, so type the command as you
                 // would in a shell minus the directory.
@@ -447,6 +477,8 @@ private struct AppearancePane: View {
 
     var body: some View {
         Form {
+            if cfg == nil { NotConnectedSection() }
+
             Section {
                 Picker("Font", selection: Binding(
                     get: { app.listFontFamily }, set: { app.listFontFamily = $0 })) {
@@ -465,9 +497,7 @@ private struct AppearancePane: View {
                 .font(.caption)
             }
 
-            if cfg == nil {
-                NotConnectedSection()
-            } else {
+            if cfg != nil {
                 Section {
                     // `app.themeNames` is the served list, so this app and the
                     // TUI offer the same palettes and render the same colors

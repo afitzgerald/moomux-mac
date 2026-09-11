@@ -301,6 +301,14 @@ to fix in Go, not a reason to link the core.
 
 ## Things that will bite you
 
+- **Tab does not reach a `Picker` or a `Toggle` unless the user has Full Keyboard Access on.**
+  macOS keeps pop-up buttons and switches out of the Tab chain by default (System Settings →
+  Keyboard → Keyboard navigation; ⌃F7 toggles it), so in the New Session sheet Tab runs Name →
+  branch → prompt → Ticket → PR and then straight to Cancel/Create, skipping Agent, Model,
+  Thinking and both switches. It reads exactly like the form being half-wired. Nothing to fix in
+  SwiftUI — `@FocusState` on a `Picker` does not put it in the chain either. Settings →
+  General → Keyboard says so in a footnote and links to the Keyboard pane.
+
 - **A tap gesture on a `List` row's content beats the `List`'s own selection.** A
   `.onTapGesture(count: 2)` added to a project row for double-click-to-edit stopped single clicks
   selecting it at all, which left Edit and Remove permanently disabled with no hint why. Removed;
