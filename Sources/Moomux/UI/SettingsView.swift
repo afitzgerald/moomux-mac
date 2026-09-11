@@ -10,14 +10,39 @@ import SwiftUI
 struct SettingsSheet: View {
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
-    @State private var tab = Tab.projects
+    @State private var pane: Pane? = .projects
     /// The project form, presented *from here* rather than through
     /// `app.sheet`: this view is already what that modifier is showing, and one
     /// `.sheet(item:)` presents one thing. Its own state, because it is the
     /// only surface that opens it.
     @State private var editingProject: ProjectTarget?
 
-    enum Tab: Hashable { case projects, preferences, terminal }
+    /// One category per sidebar row. Four is already more than a segmented
+    /// picker wants to carry, and the alternative was a single "Preferences"
+    /// pane holding everything that wasn't a project.
+    enum Pane: String, CaseIterable, Identifiable {
+        case projects, general, appearance, terminal
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .projects: "Projects"
+            case .general: "General"
+            case .appearance: "Appearance"
+            case .terminal: "Terminal"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .projects: "folder"
+            case .general: "gearshape"
+            case .appearance: "paintbrush"
+            case .terminal: "apple.terminal"
+            }
+        }
+
+    }
 
     /// nil `name` is "add"; a name is "edit that one". A wrapper because
     /// `.sheet(item:)` wants something `Identifiable` and `String?` isn't.
@@ -27,30 +52,21 @@ struct SettingsSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("", selection: $tab) {
-                Text("Projects").tag(Tab.projects)
-                Text("Preferences").tag(Tab.preferences)
-                Text("Terminal").tag(Tab.terminal)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
-            // Terminal is client-local (UserDefaults, not the core's
-            // config.toml) and renders with no core connection at all; the
-            // other two tabs write to the core and need one.
-            if tab == .terminal {
-                TerminalPreferencesPane()
-            } else if app.config == nil {
-                ContentUnavailableView {
-                    Label("Not connected", systemImage: "bolt.horizontal.circle")
-                } description: {
-                    Text("Settings and projects come from the core — start `moomux serve`.")
+        VStack(spacing: 0) {
+            // An `HStack` and not a `NavigationSplitView`: nested inside this
+            // sheet — which is itself presented from `RootView`'s split view —
+            // both columns' `List`s render completely empty, the projects list
+            // included. Measured, twice. Two columns by hand cost nothing here;
+            // there is no navigation stack to push onto and nothing to collapse.
+            HStack(spacing: 0) {
+                List(Pane.allCases, selection: $pane) { p in
+                    Label(p.title, systemImage: p.symbol).tag(p)
                 }
-            } else if tab == .projects {
-                ProjectsPane(editing: $editingProject)
-            } else {
-                PreferencesPane()
+                .listStyle(.sidebar)
+                .frame(width: 160)
+                Divider()
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             // Inline, not an alert. `RootView`'s "Couldn't do that" alert is
@@ -60,6 +76,7 @@ struct SettingsSheet: View {
             // A second `.alert` on the same state would race the first for the
             // presentation; a row cannot.
             if let error = app.actionError {
+                Divider()
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                     Text(error)
@@ -74,16 +91,19 @@ struct SettingsSheet: View {
                     .buttonStyle(.borderless)
                     .help("Dismiss")
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
 
+            Divider()
             HStack {
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
+            .padding(12)
         }
-        .padding(20)
-        .frame(width: 520, height: 460)
+        .frame(width: 660, height: 480)
         // The row above already showed it. Left set, `RootView`'s deferred
         // alert fires the moment this sheet closes and says the same thing a
         // second time — measured, and it reads as the action having failed
@@ -118,6 +138,31 @@ struct SettingsSheet: View {
         } message: { name in
             Text("Drops “\(name)” from moomux's config. The repository and everything in it "
                  + "stays on disk. Sessions have to be deleted first.")
+        }
+    }
+}
+
+extension SettingsSheet {
+    @ViewBuilder
+    private var detail: some View {
+        // Only Projects is useless without a core. General and Appearance each
+        // own client-local controls (the diff tool, the session list's font)
+        // beside their core-backed ones, so they gate the *section* rather than
+        // taking the whole pane over — see `NotConnectedSection`.
+        switch pane ?? .projects {
+        case .projects:
+            if app.config == nil {
+                ContentUnavailableView {
+                    Label("Not connected", systemImage: "bolt.horizontal.circle")
+                } description: {
+                    Text("Projects come from the core — start `moomux serve`.")
+                }
+            } else {
+                ProjectsPane(editing: $editingProject).padding(16)
+            }
+        case .general: GeneralPane()
+        case .appearance: AppearancePane()
+        case .terminal: TerminalPreferencesPane()
         }
     }
 }
@@ -311,76 +356,150 @@ struct ProjectSheet: View {
     }
 }
 
-// MARK: - Preferences
+// MARK: - General
 
-/// The config flags the core persists. Two of them change what this app does;
-/// the other three are the TUI's, and are here because it is one config file
-/// and a front end that can edit projects but not these would be an odd place
-/// to stop. Each toggle is one socket write, and the poll loop is what puts
-/// the new value back on screen.
-private struct PreferencesPane: View {
+/// Stands in for a pane's core-backed sections when there is no core, so the
+/// client-local controls beside them stay usable — a whole-pane
+/// `ContentUnavailableView` would take the session list's font down with the
+/// theme. Backticks are literal in a `Text`, so the command is written plain.
+private struct NotConnectedSection: View {
+    var body: some View {
+        Section {
+            Label("Not connected", systemImage: "bolt.horizontal.circle")
+                .foregroundStyle(.secondary)
+        } footer: {
+            Text("These settings come from the core — start moomux serve.")
+                .font(.caption)
+        }
+    }
+}
+
+/// The core config flags that change behaviour rather than looks, plus the one
+/// local setting that does the same. Three of these are shared with the TUI —
+/// it is one config file, and a front end that could edit projects but not
+/// these would stop somewhere odd. Each control is one socket write, and the
+/// poll loop is what puts the new value back on screen.
+private struct GeneralPane: View {
     @Environment(AppState.self) private var app
 
     private var cfg: Config? { app.config }
 
     var body: some View {
         Form {
-            Toggle("Sort sessions by last opened", isOn: Binding(
-                get: { cfg?.sortRecentFirst ?? false },
-                set: { app.setSortRecentFirst($0) }))
-                .help("Turns manual reordering off — the next open would undo it")
-            Toggle("Send the first prompt by default", isOn: Binding(
-                get: { cfg?.autoSubmitDefault ?? false },
-                set: { app.setAutoSubmitDefault($0) }))
-                .help("The starting state of the new-session form's send toggle, here and in the TUI")
-            Toggle("Relaunch the TUI inside tmux", isOn: Binding(
-                get: { cfg?.autoTmux ?? false },
-                set: { app.setAutoTmux($0) }))
-                .help("`moomux` in a terminal puts itself in a dedicated tmux session on startup")
-            // `app.themeNames` is the served list, so this app and the TUI
-            // offer the same palettes and now render the same colors from
-            // them. It also keeps an unrecognized stored theme as a choice: a
-            // Picker whose selection matches no tag renders blank *and*
-            // writes nothing, so it would look like a bug and then be
-            // silently replaced by the first click on any other row here.
+            if cfg == nil {
+                NotConnectedSection()
+            } else {
+                Section("Sessions") {
+                    Toggle("Sort sessions by last opened", isOn: Binding(
+                        get: { cfg?.sortRecentFirst ?? false },
+                        set: { app.setSortRecentFirst($0) }))
+                        .help("Turns manual reordering off — the next open would undo it")
+                    Toggle("Send the first prompt by default", isOn: Binding(
+                        get: { cfg?.autoSubmitDefault ?? false },
+                        set: { app.setAutoSubmitDefault($0) }))
+                        .help("The starting state of the new-session form's send toggle, here and in the TUI")
+                }
+
+                Section {
+                    Toggle("Relaunch the TUI inside tmux", isOn: Binding(
+                        get: { cfg?.autoTmux ?? false },
+                        set: { app.setAutoTmux($0) }))
+                } header: {
+                    Text("Terminal UI")
+                } footer: {
+                    Text("moomux run in a terminal puts itself in a dedicated tmux session on "
+                         + "startup. Nothing to do with this app's panes — see the Terminal "
+                         + "pane for those.")
+                    .font(.caption)
+                }
+            }
+
             // This app's own, not the shared config: the core serves no such
-            // field. The worktree path is appended, so type the command as you
-            // would in a shell minus the directory.
-            TextField("Diff tool", text: Binding(
-                get: { app.diffTool }, set: { app.diffTool = $0 }),
-                prompt: Text("diffier"))
-                .help("⌘D runs this against the selected session's worktree — empty turns it off")
-            Stepper(value: Binding(get: { app.listFontSize }, set: { app.listFontSize = $0 }),
-                    in: 9...24, step: 1) {
-                Text("Session list text size: \(Int(app.listFontSize)) pt")
-            }
-            .help("Project and folder headers draw 2pt larger")
-            Picker("Session list font", selection: Binding(
-                get: { app.listFontFamily }, set: { app.listFontFamily = $0 })) {
-                Text("System").tag("")
-                ForEach(app.fontFamilies, id: \.self) { Text($0).tag($0) }
-            }
-            Picker("Theme", selection: Binding(
-                get: { cfg?.theme?.nilIfEmpty ?? "default" },
-                set: { app.setTheme($0, appearance: cfg?.appearance ?? "") })) {
-                ForEach(app.themeNames, id: \.self) { Text($0).tag($0) }
-            }
-            .help("Shared with the TUI — the session state colors here follow it too")
-            Picker("TUI appearance", selection: Binding(
-                get: { cfg?.appearance?.nilIfEmpty ?? "auto" },
-                set: { app.setTheme(cfg?.theme ?? "", appearance: $0 == "auto" ? "" : $0) })) {
-                Text("auto").tag("auto")
-                Text("light").tag("light")
-                Text("dark").tag("dark")
+            // field, and a launcher for a Mac app is nothing the TUI could use.
+            // So it stays readable with no core, outside the gate above.
+            Section {
+                // The worktree path is appended, so type the command as you
+                // would in a shell minus the directory.
+                TextField("Diff tool", text: Binding(
+                    get: { app.diffTool }, set: { app.diffTool = $0 }),
+                    prompt: Text("diffier"))
+            } header: {
+                Text("Tools")
+            } footer: {
+                Text("⌘D runs this against the selected session's worktree — code --diff, "
+                     + "diffier. Left empty, ⌘D opens the diff in a tmux window instead.")
+                .font(.caption)
             }
         }
         .formStyle(.grouped)
-        Text("Theme is shared: the core serves the palette both front ends draw from, so a "
-             + "session's state color is the same here and in the terminal UI. Appearance is the "
-             + "terminal UI's alone — this app follows the system.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Appearance
+
+/// How the two front ends look. The theme is the core's and shared with the
+/// TUI; the session list's font is this app's alone — which is why only the
+/// second half sits behind the core gate.
+private struct AppearancePane: View {
+    @Environment(AppState.self) private var app
+
+    private var cfg: Config? { app.config }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Font", selection: Binding(
+                    get: { app.listFontFamily }, set: { app.listFontFamily = $0 })) {
+                    Text("System").tag("")
+                    ForEach(app.fontFamilies, id: \.self) { Text($0).tag($0) }
+                }
+                Stepper(value: Binding(get: { app.listFontSize }, set: { app.listFontSize = $0 }),
+                        in: 9...24, step: 1) {
+                    Text("Text size: \(Int(app.listFontSize)) pt")
+                }
+            } header: {
+                Text("Session list")
+            } footer: {
+                Text("Project and folder headers draw 2pt larger. This app only — the TUI "
+                     + "renders in whatever font your terminal is set to.")
+                .font(.caption)
+            }
+
+            if cfg == nil {
+                NotConnectedSection()
+            } else {
+                Section {
+                    // `app.themeNames` is the served list, so this app and the
+                    // TUI offer the same palettes and render the same colors
+                    // from them. It also keeps an unrecognized stored theme as a
+                    // choice: a Picker whose selection matches no tag renders
+                    // blank *and* writes nothing, so it would look like a bug and
+                    // then be silently replaced by the first click on any other
+                    // row here.
+                    Picker("Theme", selection: Binding(
+                        get: { cfg?.theme?.nilIfEmpty ?? "default" },
+                        set: { app.setTheme($0, appearance: cfg?.appearance ?? "") })) {
+                        ForEach(app.themeNames, id: \.self) { Text($0).tag($0) }
+                    }
+                    Picker("TUI appearance", selection: Binding(
+                        get: { cfg?.appearance?.nilIfEmpty ?? "auto" },
+                        set: { app.setTheme(cfg?.theme ?? "", appearance: $0 == "auto" ? "" : $0) })) {
+                        Text("auto").tag("auto")
+                        Text("light").tag("light")
+                        Text("dark").tag("dark")
+                    }
+                } header: {
+                    Text("Theme")
+                } footer: {
+                    Text("Theme is shared: the core serves the palette both front ends draw "
+                         + "from, so a session's state color is the same here and in the "
+                         + "terminal UI. Appearance is the terminal UI's alone — this app "
+                         + "follows the system.")
+                    .font(.caption)
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 
@@ -409,62 +528,63 @@ private struct TerminalPreferencesPane: View {
 
     var body: some View {
         Form {
-            LabeledContent("Config") {
-                if configPaths.isEmpty {
-                    Text("No Ghostty config found \u{2014} using built-in defaults")
-                        .foregroundStyle(.secondary)
-                } else {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        ForEach(configPaths, id: \.self) { path in
-                            Text(short(path))
-                                .textSelection(.enabled)
+            Section {
+                LabeledContent("Config") {
+                    if configPaths.isEmpty {
+                        Text("No Ghostty config found \u{2014} using built-in defaults")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            ForEach(configPaths, id: \.self) { path in
+                                Text(short(path))
+                                    .textSelection(.enabled)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                if let last = configPaths.last {
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting(
+                            [URL(fileURLWithPath: last)])
+                    }
+                }
+                // The lines ghostty refused. libghostty rejects a config on
+                // **any** diagnostic — it does not load it minus the bad line — so
+                // `AppState` retries without them rather than letting one typo cost
+                // the whole config, and this is the only report that it happened.
+                let dropped = app.paneConfigDropped
+                if !dropped.isEmpty {
+                    LabeledContent("Ignored") {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            ForEach(dropped, id: \.self) { line in
+                                Text(line)
+                                    .textSelection(.enabled)
+                                    .foregroundStyle(.orange)
+                            }
+                            Text("Ghostty rejected these; the rest of the config loaded.")
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
-            }
-            if let last = configPaths.last {
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting(
-                        [URL(fileURLWithPath: last)])
+                // Whatever ghostty said when even the narrowed config would not
+                // load — a broken managed-config write, say. Verbatim, because
+                // there is nothing this app can do with it but show it.
+                if let issue = app.terminalController.lastConfigurationIssue {
+                    Text(issue)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            // The lines ghostty refused. libghostty rejects a config on
-            // **any** diagnostic — it does not load it minus the bad line — so
-            // `AppState` retries without them rather than letting one typo cost
-            // the whole config, and this is the only report that it happened.
-            let dropped = app.paneConfigDropped
-            if !dropped.isEmpty {
-                LabeledContent("Ignored") {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        ForEach(dropped, id: \.self) { line in
-                            Text(line)
-                                .textSelection(.enabled)
-                                .foregroundStyle(.orange)
-                        }
-                        Text("Ghostty rejected these; the rest of the config loaded.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            // Whatever ghostty said when even the narrowed config would not
-            // load — a broken managed-config write, say. Verbatim, because
-            // there is nothing this app can do with it but show it.
-            if let issue = app.terminalController.lastConfigurationIssue {
-                Text(issue)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+            } footer: {
+                Text("Panes render with Ghostty's engine and read Ghostty's own config, so they "
+                     + "look like your terminal does. Changes apply to panes opened after a "
+                     + "restart. Only Nerd Fonts carry the icons prompts and statuslines use.")
+                .font(.caption)
             }
         }
         .formStyle(.grouped)
-        Text("Panes render with Ghostty's engine and read Ghostty's own config, so they look "
-             + "like your terminal does. Changes apply to panes opened after a restart. Only "
-             + "Nerd Fonts carry the icons prompts and statuslines use.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
