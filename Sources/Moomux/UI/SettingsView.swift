@@ -338,6 +338,9 @@ private struct PreferencesPane: View {
                 get: { cfg?.autoTmux ?? false },
                 set: { app.setAutoTmux($0) }))
                 .help("`moomux` in a terminal puts itself in a dedicated tmux session on startup")
+            Toggle("Select a new session as soon as it's created", isOn: Binding(
+                get: { app.autoFocusNewSession }, set: { app.autoFocusNewSession = $0 }))
+                .help("This app's own setting — off leaves the sidebar selection where it was")
             // `app.themeNames` is the served list, so this app and the TUI
             // offer the same palettes and now render the same colors from
             // them. It also keeps an unrecognized stored theme as a choice: a
