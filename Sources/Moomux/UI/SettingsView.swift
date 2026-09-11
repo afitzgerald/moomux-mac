@@ -355,6 +355,11 @@ private struct PreferencesPane: View {
                 Text("Session list text size: \(Int(app.listFontSize)) pt")
             }
             .help("Project and folder headers draw 2pt larger")
+            Picker("Session list font", selection: Binding(
+                get: { app.listFontFamily }, set: { app.listFontFamily = $0 })) {
+                Text("System").tag("")
+                ForEach(app.fontFamilies, id: \.self) { Text($0).tag($0) }
+            }
             Picker("Theme", selection: Binding(
                 get: { cfg?.theme?.nilIfEmpty ?? "default" },
                 set: { app.setTheme($0, appearance: cfg?.appearance ?? "") })) {
