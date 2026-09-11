@@ -735,6 +735,7 @@ private struct ProjectHeader: View {
     @Environment(AppState.self) private var app
     let name: String
     let hidden: Int
+    @State private var targeted = false
 
     var body: some View {
         // The header is not a selectable row, so a tap gesture here does not
@@ -756,6 +757,10 @@ private struct ProjectHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setProject(name, expanded: !expanded) }
+        .dropDestination(for: String.self) { ids, _ in
+            app.drop(ids, into: "", project: name)
+        } isTargeted: { targeted = $0 }
+        .listRowBackground(targeted ? Color.accentColor.opacity(0.25) : nil)
         .contextMenu {
             Button("New Folder…") { app.sheet = .newFolder(project: name, assign: nil) }
         }
@@ -773,6 +778,7 @@ private struct FolderHeader: View {
     let name: String
     let collapsed: Bool
     let count: Int
+    @State private var targeted = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -793,6 +799,10 @@ private struct FolderHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setFolder(project: project, name: name, collapsed: !collapsed) }
+        .dropDestination(for: String.self) { ids, _ in
+            app.drop(ids, into: name, project: project)
+        } isTargeted: { targeted = $0 }
+        .listRowBackground(targeted ? Color.accentColor.opacity(0.25) : nil)
         .contextMenu {
             Button("Rename…") { app.sheet = .renameFolder(project: project, name: name) }
             // No confirmation: deleting a folder files its members back at the
@@ -874,6 +884,12 @@ private struct SessionRow: View {
         }
         .padding(.vertical, 2)
         .padding(.leading, indented ? 12 : 0)
+        // The payload is the session id as a plain string — no custom UTType,
+        // which would need an Info.plist declaration to be worth anything.
+        // The cost is that dragging a row into a text field types its id;
+        // `AppState.drop` ignores any string that is not a session of the
+        // project it landed on.
+        .draggable(session.id)
         // Closes over `session`, never over the selection: right-clicking an
         // unselected row has to act on the row you clicked.
         .contextMenu {

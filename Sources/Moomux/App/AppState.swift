@@ -1380,6 +1380,20 @@ public final class AppState {
         }
     }
 
+    /// A sidebar drop: the payload is a plain session id, so anything that
+    /// carries a string can land here — only an id this project owns is acted
+    /// on, and a session already in `folder` is left alone. Returns whether
+    /// the drop meant anything, which is what tells SwiftUI to accept it.
+    public func drop(_ ids: [String], into folder: String, project: String) -> Bool {
+        let moved = ids.compactMap(session(id:))
+            .filter { $0.project == project && $0.folder != folder }
+        // One `mutate` per session would race on `busy` and on `refresh`; the
+        // sidebar is single-select, so one drop is one session in practice.
+        guard let session = moved.first else { return false }
+        setFolder(session, to: folder)
+        return true
+    }
+
     public func createFolder(project: String, name: String) {
         mutate("New folder") { try $0.createFolder(project: project, name: name); return nil }
     }
