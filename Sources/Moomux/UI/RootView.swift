@@ -108,10 +108,23 @@ enum Theme {
 
     static let mono = Font.system(size: 12, design: .monospaced)
 
+    /// The sidebar's font. An empty or uninstalled family falls back to the
+    /// system font rather than to something arbitrary.
+    static func list(_ family: String, _ size: Double) -> Font {
+        guard !family.isEmpty, let font = NSFont(name: family, size: size) else {
+            return .system(size: size)
+        }
+        return Font(font)
+    }
+
     /// A regression here is silent by construction — a hex the parser rejects
     /// falls through to the SwiftUI semantic color and still renders something
     /// plausible — so the parser gets asserts rather than a screenshot.
     static func demo() {
+        assert(list("", 13) == .system(size: 13), "no family means the system font")
+        assert(list("No Such Family", 13) == .system(size: 13), "an uninstalled family falls back")
+        assert(list("Menlo", 13) != .system(size: 13), "an installed family is actually used")
+
         assert(nsColor("#076678") != nil)
         assert(nsColor("12") == nil, "an ANSI index is not hex")
         assert(nsColor("#12345") == nil && nsColor("#1234567") == nil, "six digits or nothing")
@@ -743,7 +756,7 @@ private struct ProjectHeader: View {
         let expanded = app.projectExpanded(name)
         HStack(spacing: 4) {
             Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
+                .font(.system(size: app.headerFontSize * 0.7, weight: .semibold))
                 .rotationEffect(.degrees(expanded ? 90 : 0))
             if let emoji = app.emoji(for: name) { Text(emoji) }
             Text(name)
@@ -754,7 +767,7 @@ private struct ProjectHeader: View {
                     .background(Capsule().fill(.quaternary))
             }
         }
-        .font(.system(size: app.headerFontSize))
+        .font(Theme.list(app.listFontFamily, app.headerFontSize))
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setProject(name, expanded: !expanded) }
@@ -784,7 +797,7 @@ private struct FolderHeader: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
+                .font(.system(size: app.headerFontSize * 0.7, weight: .semibold))
                 .rotationEffect(.degrees(collapsed ? 0 : 90))
             Image(systemName: collapsed ? "folder.fill" : "folder")
                 .foregroundStyle(.secondary)
@@ -796,8 +809,8 @@ private struct FolderHeader: View {
                     .background(Capsule().fill(.quaternary))
             }
         }
-        .font(.system(size: app.headerFontSize))
-        .padding(.leading, 12)
+        .font(Theme.list(app.listFontFamily, app.headerFontSize))
+        .padding(.leading, app.listFontSize)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setFolder(project: project, name: name, collapsed: !collapsed) }
@@ -827,77 +840,78 @@ private struct SessionRow: View {
 
     var body: some View {
         let state = app.state(for: session)
-        // Baseline rather than .top: a two-line row is taller than the icon, and
-        // .top would leave it floating a couple of points above the name.
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: state.symbol)
-                .foregroundStyle(Theme.color(state, app.palette))
-                .help(app.label(for: session))
-            VStack(alignment: .leading, spacing: 2) {
+        // The dot belongs to the name, so it lives on the name's own row and is
+        // centred on it — baseline-aligning it against a two-line VStack put it
+        // a point or two off the name, and more so the larger the font gets.
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Image(systemName: state.symbol)
+                    .foregroundStyle(Theme.color(state, app.palette))
+                    .help(app.label(for: session))
                 Text(session.name)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                // Second row, right aligned. Empty for a session with no tags
-                // and a clean worktree, and an empty HStack takes no height, so
-                // those rows stay single-line.
-                HStack(spacing: 10) {
-                    // `internal/tui/list.go` draws the tag icons before the git
-                    // ones, in this order. The PR icon carries its merge/CI
-                    // state the way `prGlyph` does — a merged or blocked PR is
-                    // exactly what you want to spot without opening the session.
-                    if let ticket = session.ticket, !ticket.isEmpty {
-                        TagIcon(symbol: "ticket", link: ticket, help: ticket)
-                            .foregroundStyle(.secondary)
+            }
+            // Second row, right aligned. Empty for a session with no tags
+            // and a clean worktree, and an empty HStack takes no height, so
+            // those rows stay single-line.
+            HStack(spacing: 10) {
+                // `internal/tui/list.go` draws the tag icons before the git
+                // ones, in this order. The PR icon carries its merge/CI
+                // state the way `prGlyph` does — a merged or blocked PR is
+                // exactly what you want to spot without opening the session.
+                if let ticket = session.ticket, !ticket.isEmpty {
+                    TagIcon(symbol: "ticket", link: ticket, help: ticket)
+                        .foregroundStyle(.secondary)
+                }
+                if let pr = session.pr, !pr.isEmpty {
+                    let info = app.views[session.id]?.pr
+                    let badge = PRInfo.badge(info)
+                    TagIcon(symbol: badge.symbol, link: pr,
+                            help: info?.summary.isEmpty == false ? "\(badge.help) — \(info!.summary)"
+                                                                : badge.help)
+                        .foregroundStyle(Theme.pr(badge, app.palette))
+                }
+                // `internal/tui/list.go`'s two git icons, in its order: ±
+                // for a dirty worktree, ↑ for commits that are not on the
+                // remote. Both can show at once — they are different work
+                // in different places, and collapsing them would hide one.
+                // SF Symbols rather than the literal glyphs so they weigh
+                // and align like the row's other icons; they draw the same
+                // ± and ↑. Counts stay in the detail panel's Changes row.
+                if let git = app.gitBadges(for: session) {
+                    if git.dirty {
+                        Image(systemName: "plusminus")
+                            .foregroundStyle(Theme.gitWarn(app.palette))
+                            .help("Uncommitted changes")
                     }
-                    if let pr = session.pr, !pr.isEmpty {
-                        let info = app.views[session.id]?.pr
-                        let badge = PRInfo.badge(info)
-                        TagIcon(symbol: badge.symbol, link: pr,
-                                help: info?.summary.isEmpty == false ? "\(badge.help) — \(info!.summary)"
-                                                                    : badge.help)
-                            .foregroundStyle(Theme.pr(badge, app.palette))
-                    }
-                    // `internal/tui/list.go`'s two git icons, in its order: ±
-                    // for a dirty worktree, ↑ for commits that are not on the
-                    // remote. Both can show at once — they are different work
-                    // in different places, and collapsing them would hide one.
-                    // SF Symbols rather than the literal glyphs so they weigh
-                    // and align like the row's other icons; they draw the same
-                    // ± and ↑. Counts stay in the detail panel's Changes row.
-                    if let git = app.gitBadges(for: session) {
-                        if git.dirty {
-                            Image(systemName: "plusminus")
-                                .foregroundStyle(Theme.gitWarn(app.palette))
-                                .help("Uncommitted changes")
-                        }
-                        if git.unpushed {
-                            Image(systemName: "arrow.up")
-                                .foregroundStyle(Theme.gitWarn(app.palette))
-                                .help("Unpushed commits")
-                        }
-                    }
-                    // Archived rows are only on screen because the Archived
-                    // toggle is on, and without this they are indistinguishable
-                    // from live ones — the toggle changes the list and nothing
-                    // says which rows it added.
-                    if session.archived {
-                        Image(systemName: "archivebox")
-                            .foregroundStyle(.tertiary)
-                            .help("Archived")
+                    if git.unpushed {
+                        Image(systemName: "arrow.up")
+                            .foregroundStyle(Theme.gitWarn(app.palette))
+                            .help("Unpushed commits")
                     }
                 }
-                // Badges track the name, 2pt down, the way .caption sits under
-                // .body at the default size.
-                .font(.system(size: max(9, app.listFontSize - 2)))
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                // Archived rows are only on screen because the Archived
+                // toggle is on, and without this they are indistinguishable
+                // from live ones — the toggle changes the list and nothing
+                // says which rows it added.
+                if session.archived {
+                    Image(systemName: "archivebox")
+                        .foregroundStyle(.tertiary)
+                        .help("Archived")
+                }
             }
+                // Badges track the name 3pt down — what .caption (10pt) was
+                // under .body (13pt) before any of this was adjustable.
+            .font(Theme.list(app.listFontFamily, max(9, app.listFontSize - 3)))
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        // On the HStack so the state icon scales with the name; the badge
+        // On the VStack so the state icon scales with the name; the badge
         // row sets its own size below.
-        .font(.system(size: app.listFontSize))
+        .font(Theme.list(app.listFontFamily, app.listFontSize))
         .padding(.vertical, 2)
-        .padding(.leading, indented ? 12 : 0)
+        .padding(.leading, indented ? app.listFontSize : 0)
         // The payload is the session id as a plain string — no custom UTType,
         // which would need an Info.plist declaration to be worth anything.
         // The cost is that dragging a row into a text field types its id;
