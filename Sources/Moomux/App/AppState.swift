@@ -1276,6 +1276,19 @@ public final class AppState {
 
     static let diffToolKey = "diffTool"
 
+    /// Point size for the sidebar's session rows; project and folder headers
+    /// draw 2pt larger (`headerFontSize`). `UserDefaults` for the same reason
+    /// as `diffTool` — the core serves no such field and the TUI has no use
+    /// for it.
+    public var listFontSize: Double = UserDefaults.standard.object(forKey: listFontSizeKey) as? Double
+        ?? Double(NSFont.systemFontSize) {
+        didSet { UserDefaults.standard.set(listFontSize, forKey: Self.listFontSizeKey) }
+    }
+
+    static let listFontSizeKey = "listFontSize"
+
+    public var headerFontSize: Double { listFontSize + 2 }
+
     public func canOpenDiffTool(_ session: Session) -> Bool {
         !AppState.diffToolArguments(diffTool).isEmpty && !session.worktreePath.isEmpty
     }
