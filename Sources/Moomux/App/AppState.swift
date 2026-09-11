@@ -893,6 +893,11 @@ public final class AppState {
     }
 
     nonisolated static func demo() {
+        assert(fontFamilies(["Menlo"], selected: "") == ["Menlo"], "the system font is not a family")
+        assert(fontFamilies(["Menlo"], selected: "Menlo") == ["Menlo"], "installed once, listed once")
+        assert(fontFamilies(["Menlo"], selected: "Gone") == ["Gone", "Menlo"],
+               "an uninstalled stored family stays selectable, or the Picker renders blank")
+
         // The review window's command line. Measured against a real worktree:
         // the merge-base form catches committed *and* uncommitted work, the
         // fallbacks fire on exit 128 from an unresolvable ref, and the status
@@ -1288,6 +1293,26 @@ public final class AppState {
     static let listFontSizeKey = "listFontSize"
 
     public var headerFontSize: Double { listFontSize + 2 }
+
+    /// Font family for the sidebar. Empty means the system font, which is the
+    /// default and what every other Mac app's sidebar uses.
+    public var listFontFamily: String = UserDefaults.standard.string(forKey: listFontFamilyKey) ?? "" {
+        didSet { UserDefaults.standard.set(listFontFamily, forKey: Self.listFontFamilyKey) }
+    }
+
+    static let listFontFamilyKey = "listFontFamily"
+
+    /// Every installed family, plus whatever is stored if that font has since
+    /// been uninstalled — a Picker whose selection matches no tag renders
+    /// blank and writes nothing, the same trap as the theme picker.
+    public var fontFamilies: [String] {
+        AppState.fontFamilies(NSFontManager.shared.availableFontFamilies, selected: listFontFamily)
+    }
+
+    nonisolated static func fontFamilies(_ installed: [String], selected: String) -> [String] {
+        guard !selected.isEmpty, !installed.contains(selected) else { return installed }
+        return [selected] + installed
+    }
 
     public func canOpenDiffTool(_ session: Session) -> Bool {
         !AppState.diffToolArguments(diffTool).isEmpty && !session.worktreePath.isEmpty
