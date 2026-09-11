@@ -918,6 +918,16 @@ private struct SessionRow: View {
         // `AppState.drop` ignores any string that is not a session of the
         // project it landed on.
         .draggable(session.id)
+        // `DoubleClickCatcher`, not `TapGesture(count: 2)`: SwiftUI's own
+        // double-tap gesture uses a fixed internal timeout rather than the
+        // system's actual double-click speed (System Settings ›
+        // Trackpad/Mouse), which read as "finicky" — needing an
+        // unreasonably fast double-click to register. `NSEvent.clickCount`
+        // is AppKit's own reading of that same system setting.
+        .background(DoubleClickCatcher {
+            app.selectedSessionID = session.id
+            app.attach(session)
+        })
         // Closes over `session`, never over the selection: right-clicking an
         // unselected row has to act on the row you clicked.
         .contextMenu {
@@ -962,6 +972,34 @@ private struct SessionRow: View {
                 .disabled(!app.isAlive(session))
             Button("Delete…", role: .destructive) { app.askDelete(session) }
         }
+    }
+}
+
+/// A double-click sink that sits behind a row's content and forwards every
+/// event straight on to `super`, so it never disturbs the List's own
+/// single-click selection above it — only rides along for the second click of
+/// a pair. `NSEvent.clickCount` is AppKit counting clicks against the system's
+/// own double-click-speed preference, which is what makes this reliable where
+/// `TapGesture(count: 2)` was not.
+private struct DoubleClickCatcher: NSViewRepresentable {
+    let action: () -> Void
+
+    final class ClickView: NSView {
+        var action: (() -> Void)?
+        override func mouseDown(with event: NSEvent) {
+            if event.clickCount == 2 { action?() }
+            super.mouseDown(with: event)
+        }
+    }
+
+    func makeNSView(context: Context) -> ClickView {
+        let view = ClickView()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ nsView: ClickView, context: Context) {
+        nsView.action = action
     }
 }
 
