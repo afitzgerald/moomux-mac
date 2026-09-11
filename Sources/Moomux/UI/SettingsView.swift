@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Settings and project management: the two write surfaces that are about the
@@ -375,12 +376,28 @@ private struct PreferencesPane: View {
             }
         }
         .formStyle(.grouped)
-        Text("Theme is shared: the core serves the palette both front ends draw from, so a "
-             + "session's state color is the same here and in the terminal UI. Appearance is the "
-             + "terminal UI's alone — this app follows the system.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Theme is shared: the core serves the palette both front ends draw from, so a "
+                 + "session's state color is the same here and in the terminal UI. Appearance is the "
+                 + "terminal UI's alone — this app follows the system.")
+            // Not ours to fix: macOS leaves pop-up buttons and switches out of the
+            // Tab chain unless Full Keyboard Access is on, so Tab in the New
+            // Session sheet skips Agent, Model and Thinking entirely and looks
+            // like a bug in the form.
+            Text("Tab skips the pop-up menus and switches until macOS's Full Keyboard Access is "
+                 + "on (Keyboard → Keyboard navigation). With it on, Tab reaches them and Space "
+                 + "opens a menu or flips a switch.")
+            Button("Open Keyboard settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .buttonStyle(.link)
+            .foregroundStyle(Color.accentColor)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
