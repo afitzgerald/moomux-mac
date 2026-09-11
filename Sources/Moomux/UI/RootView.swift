@@ -754,6 +754,7 @@ private struct ProjectHeader: View {
                     .background(Capsule().fill(.quaternary))
             }
         }
+        .font(.system(size: app.headerFontSize))
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setProject(name, expanded: !expanded) }
@@ -795,6 +796,7 @@ private struct FolderHeader: View {
                     .background(Capsule().fill(.quaternary))
             }
         }
+        .font(.system(size: app.headerFontSize))
         .padding(.leading, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -885,10 +887,15 @@ private struct SessionRow: View {
                             .help("Archived")
                     }
                 }
-                .font(.caption)
+                // Badges track the name, 2pt down, the way .caption sits under
+                // .body at the default size.
+                .font(.system(size: max(9, app.listFontSize - 2)))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
+        // On the HStack so the state icon scales with the name; the badge
+        // row sets its own size below.
+        .font(.system(size: app.listFontSize))
         .padding(.vertical, 2)
         .padding(.leading, indented ? 12 : 0)
         // The payload is the session id as a plain string — no custom UTType,
