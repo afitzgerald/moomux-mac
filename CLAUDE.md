@@ -307,7 +307,7 @@ to fix in Go, not a reason to link the core.
   branch → prompt → Ticket → PR and then straight to Cancel/Create, skipping Agent, Model,
   Thinking and both switches. It reads exactly like the form being half-wired. Nothing to fix in
   SwiftUI — `@FocusState` on a `Picker` does not put it in the chain either. Settings →
-  Preferences says so in a footnote and links to the Keyboard pane.
+  General → Keyboard says so in a footnote and links to the Keyboard pane.
 
 - **A tap gesture on a `List` row's content beats the `List`'s own selection.** A
   `.onTapGesture(count: 2)` added to a project row for double-click-to-edit stopped single clicks
@@ -666,6 +666,15 @@ Decisions, not oversights. Don't "fix" these without being asked.
   there is (`Scripts/ui.swift` walks the *first* AX window, and `shot.sh` frames it), and a UI
   change that cannot be photographed cannot be checked. ⌘, still opens it, via
   `CommandGroup(replacing: .appSettings)`.
+  Its four panes are a hand-built `HStack` — sidebar `List` + `Divider` + detail — and **not** a
+  `NavigationSplitView`. Nested inside this sheet, which `RootView`'s own split view is presenting,
+  every `List` in *both* columns renders empty: no sidebar rows, and the projects list shows
+  neither its rows nor its `ContentUnavailableView`. Measured. There is no navigation stack to
+  push onto and nothing worth collapsing, so the hand-built version gives up nothing.
+  The "Not connected" gate is per **section**, not per pane, because two panes hold client-local
+  controls beside core-backed ones — General's diff tool and Appearance's session-list font are
+  `UserDefaults` and work fine with no core. Only Projects is useless without one and takes the
+  whole pane.
 - **No project emoji palette.** `config.ProjectEmojiPalette` is a Go table nothing serves over IPC,
   so a copy here would drift — the exact rule below. A free-text field plus macOS's own ⌃⌘Space
   gets there. The cost is that an empty emoji shows nothing in this app's sidebar while the TUI
