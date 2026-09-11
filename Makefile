@@ -1,4 +1,11 @@
+# Machine-local overrides (SDK pins, build-system choice) that don't belong in
+# a Makefile every checkout shares — see Makefile.local.example.
+-include Makefile.local
+
 CONFIG ?= release
+# Extra flags for every `swift build` invocation. Empty by default; a machine
+# with a broken default toolchain sets this in Makefile.local instead of here.
+SWIFT_BUILD_FLAGS ?=
 BUNDLE_ID = app.moomux.Moomux
 # `run`/`dev` build a *different app* as far as LaunchServices is concerned.
 # Sharing one identifier with the installed copy meant `open .build/Moomux.app`
@@ -55,13 +62,13 @@ STAGE := .build/dmg
 APPZIP := .build/Moomux.zip
 # Deferred (=) rather than immediate (:=): `dev` sets CONFIG per-target, and :=
 # would bake in the release path at parse time.
-BINDIR = $(shell swift build -c $(CONFIG) --show-bin-path)
+BINDIR = $(shell swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) --show-bin-path)
 BIN = $(BINDIR)/Moomux
 
 .PHONY: build app run dev selfcheck warnings install shot signapp dmg dist notarize clean
 
 build:
-	swift build -c $(CONFIG)
+	swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS)
 
 # Every warning in *our* sources, without the `rm -rf .build` that idiom used
 # to need. swift build only re-emits diagnostics for files it recompiles, so
@@ -71,7 +78,7 @@ build:
 # recompiles exactly the module we care about, and in seconds.
 warnings:
 	@find Sources -name '*.swift' -exec touch {} +
-	@swift build -c $(CONFIG) 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
+	@swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
 
 # The assert-based checks. Deliberately not part of `build`: they must never be
 # built with -O, which deletes every assert (see Scripts/selfcheck.sh).
