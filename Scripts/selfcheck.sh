@@ -15,5 +15,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-swift build                                     # debug: -Onone, asserts live
-exec "$(swift build --show-bin-path)/Moomux" --selftest
+# SWIFT_BUILD_FLAGS: same machine-local override `make` picks up from
+# Makefile.local (e.g. `--build-system native`), for a script invoked directly.
+swift build ${SWIFT_BUILD_FLAGS:-}                # debug: -Onone, asserts live
+exec "$(swift build ${SWIFT_BUILD_FLAGS:-} --show-bin-path)/Moomux" --selftest
