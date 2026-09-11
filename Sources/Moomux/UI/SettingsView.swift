@@ -350,6 +350,11 @@ private struct PreferencesPane: View {
                 get: { app.diffTool }, set: { app.diffTool = $0 }),
                 prompt: Text("diffier"))
                 .help("⌘D runs this against the selected session's worktree — empty turns it off")
+            Stepper(value: Binding(get: { app.listFontSize }, set: { app.listFontSize = $0 }),
+                    in: 9...24, step: 1) {
+                Text("Session list text size: \(Int(app.listFontSize)) pt")
+            }
+            .help("Project and folder headers draw 2pt larger")
             Picker("Theme", selection: Binding(
                 get: { cfg?.theme?.nilIfEmpty ?? "default" },
                 set: { app.setTheme($0, appearance: cfg?.appearance ?? "") })) {
