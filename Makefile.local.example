@@ -1,0 +1,21 @@
+# Copy this to Makefile.local (gitignored, per-machine) to work around a
+# local toolchain problem without changing the Makefile everyone shares.
+#
+# Known case: CommandLineTools can symlink its default SDK ahead of the
+# installed swift-frontend's own target (e.g. a MacOSX27.0 beta SDK as
+# `MacOSX.sdk` while `swift --version` reports macosx26.0). That mismatch
+# breaks SwiftUI macro plugin resolution under the new `swiftbuild` engine —
+# symptoms are misleading errors like "cannot find '$foo' in scope" on an
+# @State property, or "external macro implementation type ... could not be
+# found for macro 'State()'". The same engine has also been seen to skip
+# copying a dependency's SwiftPM resource bundle contents (`make app` fails
+# with "No such file or directory" copying into GhosttyKit_GhosttyTerminal.bundle).
+#
+# Diagnose with:
+#   swift --version                      # ends in "Target: arm64-apple-macosx<N>.0"
+#   ls -la /Library/Developer/CommandLineTools/SDKs/   # MacOSX.sdk -> MacOSX<M>.sdk
+# If M > N, pin SDKROOT to the matching (non-beta) SDK below and fall back to
+# the older `native` build system, which doesn't have either bug.
+#
+# export SDKROOT := $(shell xcrun --sdk macosx26.5 --show-sdk-path)
+# SWIFT_BUILD_FLAGS := --build-system native
