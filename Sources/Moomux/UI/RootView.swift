@@ -825,61 +825,68 @@ private struct SessionRow: View {
 
     var body: some View {
         let state = app.state(for: session)
-        HStack(spacing: 8) {
+        // Baseline rather than .top: a two-line row is taller than the icon, and
+        // .top would leave it floating a couple of points above the name.
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: state.symbol)
                 .foregroundStyle(Theme.color(state, app.palette))
                 .help(app.label(for: session))
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(session.name)
-                Text(session.branch)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 4)
-            // `internal/tui/list.go` draws the tag icons before the git ones,
-            // in this order. The PR icon carries its merge/CI state the way
-            // `prGlyph` does — a merged or blocked PR is exactly what you want
-            // to spot without opening the session.
-            if let ticket = session.ticket, !ticket.isEmpty {
-                TagIcon(symbol: "ticket", link: ticket, help: ticket)
-                    .foregroundStyle(.secondary)
-            }
-            if let pr = session.pr, !pr.isEmpty {
-                let info = app.views[session.id]?.pr
-                let badge = PRInfo.badge(info)
-                TagIcon(symbol: badge.symbol, link: pr,
-                        help: info?.summary.isEmpty == false ? "\(badge.help) — \(info!.summary)"
-                                                            : badge.help)
-                    .foregroundStyle(Theme.pr(badge, app.palette))
-            }
-            // `internal/tui/list.go`'s two git icons, in its order: ± for a
-            // dirty worktree, ↑ for commits that are not on the remote. Both
-            // can show at once — they are different work in different places,
-            // and collapsing them would hide one. SF Symbols rather than the
-            // literal glyphs so they weigh and align like the row's other
-            // icons; they draw the same ± and ↑. Counts stay in the detail
-            // panel's Changes row.
-            if let git = app.gitBadges(for: session) {
-                if git.dirty {
-                    Image(systemName: "plusminus")
-                        .foregroundStyle(Theme.gitWarn(app.palette))
-                        .help("Uncommitted changes")
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Second row, right aligned. Empty for a session with no tags
+                // and a clean worktree, and an empty HStack takes no height, so
+                // those rows stay single-line.
+                HStack(spacing: 10) {
+                    // `internal/tui/list.go` draws the tag icons before the git
+                    // ones, in this order. The PR icon carries its merge/CI
+                    // state the way `prGlyph` does — a merged or blocked PR is
+                    // exactly what you want to spot without opening the session.
+                    if let ticket = session.ticket, !ticket.isEmpty {
+                        TagIcon(symbol: "ticket", link: ticket, help: ticket)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let pr = session.pr, !pr.isEmpty {
+                        let info = app.views[session.id]?.pr
+                        let badge = PRInfo.badge(info)
+                        TagIcon(symbol: badge.symbol, link: pr,
+                                help: info?.summary.isEmpty == false ? "\(badge.help) — \(info!.summary)"
+                                                                    : badge.help)
+                            .foregroundStyle(Theme.pr(badge, app.palette))
+                    }
+                    // `internal/tui/list.go`'s two git icons, in its order: ±
+                    // for a dirty worktree, ↑ for commits that are not on the
+                    // remote. Both can show at once — they are different work
+                    // in different places, and collapsing them would hide one.
+                    // SF Symbols rather than the literal glyphs so they weigh
+                    // and align like the row's other icons; they draw the same
+                    // ± and ↑. Counts stay in the detail panel's Changes row.
+                    if let git = app.gitBadges(for: session) {
+                        if git.dirty {
+                            Image(systemName: "plusminus")
+                                .foregroundStyle(Theme.gitWarn(app.palette))
+                                .help("Uncommitted changes")
+                        }
+                        if git.unpushed {
+                            Image(systemName: "arrow.up")
+                                .foregroundStyle(Theme.gitWarn(app.palette))
+                                .help("Unpushed commits")
+                        }
+                    }
+                    // Archived rows are only on screen because the Archived
+                    // toggle is on, and without this they are indistinguishable
+                    // from live ones — the toggle changes the list and nothing
+                    // says which rows it added.
+                    if session.archived {
+                        Image(systemName: "archivebox")
+                            .foregroundStyle(.tertiary)
+                            .help("Archived")
+                    }
                 }
-                if git.unpushed {
-                    Image(systemName: "arrow.up")
-                        .foregroundStyle(Theme.gitWarn(app.palette))
-                        .help("Unpushed commits")
-                }
-            }
-            // Archived rows are only on screen because the Archived toggle is
-            // on, and without this they are indistinguishable from live ones —
-            // the toggle changes the list and nothing says which rows it added.
-            if session.archived {
-                Image(systemName: "archivebox")
-                    .foregroundStyle(.tertiary)
-                    .help("Archived")
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(.vertical, 2)
