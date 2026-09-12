@@ -1208,8 +1208,8 @@ private struct SessionInfo: View {
                     if session.hasBeenOpened {
                         Field("Last opened", session.lastOpened.formatted(.relative(presentation: .named)))
                     }
-                    if let ticket = session.ticket, !ticket.isEmpty { Field("Ticket", ticket) }
-                    if let pr = session.pr, !pr.isEmpty { Field("PR", pr) }
+                    if let ticket = session.ticket, !ticket.isEmpty { Field("Ticket", ticket, link: true) }
+                    if let pr = session.pr, !pr.isEmpty { Field("PR", pr, link: true) }
                 }
 
                 // The core recovers this from the agent's own logs for a
@@ -1255,16 +1255,31 @@ private struct TagIcon: View {
 private struct Field: View {
     let label: String
     let value: String
+    let link: Bool
 
-    init(_ label: String, _ value: String) {
+    init(_ label: String, _ value: String, link: Bool = false) {
         self.label = label
         self.value = value
+        self.link = link
     }
 
     var body: some View {
         GridRow {
             Text(label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
-            Text(value).font(Theme.mono).textSelection(.enabled)
+            // A ticket is as often "T-1" as a URL, so only a value the same
+            // allowlist a ⌘-clicked pane link goes through accepts becomes a
+            // link; everything else stays selectable text.
+            if link, TerminalLink.resolve(value) != nil {
+                // A Button and not a tap gesture on selectable text: the
+                // selection swallows the click (same reason TagIcon is one).
+                Button { TerminalLink.open(value) } label: {
+                    Text(value).font(Theme.mono).underline()
+                }
+                .buttonStyle(.link)
+                .onHover { NSCursor.pointingHand.set(); if !$0 { NSCursor.arrow.set() } }
+            } else {
+                Text(value).font(Theme.mono).textSelection(.enabled)
+            }
         }
     }
 }
