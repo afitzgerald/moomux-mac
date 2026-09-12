@@ -4,3 +4,4 @@ dist/
 *.xcodeproj
 .DS_Store
 /Makefile.local
+.wt-seed-env-mise-install.log
