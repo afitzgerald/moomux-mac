@@ -74,7 +74,7 @@ public struct Session: Decodable, Identifiable, Hashable, Sendable {
     public var lastOpened: Date
     /// The folder this session is filed under within its project, "" for a
     /// loose one. Membership lives here; the folder's own display state lives
-    /// in `Project.folders` — see `Row`.
+    /// in `Config.folders` — see `Row`.
     public var folder: String
 
     /// The agent actually used. Sessions created before moomux had a picker
@@ -135,12 +135,17 @@ public struct Project: Codable, Hashable, Sendable {
     public var promptAgent: Bool
     public var noWorktree: Bool
     public var emoji: String?
-    /// Display state for this project's session folders, keyed by name (the
-    /// name *is* the id). Membership is on the session, not here.
+    /// Not a field this app reads: folders are `Config.folders` now, and a
+    /// current core keeps its per-project map off the wire entirely
+    /// (`config.Project.Folders` is `json:"-"`), so this decodes nil and is
+    /// never sent.
     ///
-    /// Carried in both directions for one reason: `UpdateProject` replaces the
-    /// whole project record, so a project edited from this app that did not
-    /// send its folders back would silently lose them.
+    /// It survives only for the version-skew window. This app ships as its own
+    /// Homebrew cask, so it can be upgraded a release ahead of the core, and
+    /// `UpdateProject` replaces the whole project record — against a core that
+    /// still owns folders, dropping the field would silently delete that
+    /// project's folder table the first time anyone edited it in Settings.
+    /// Delete it once no one is running a core that old.
     public var folders: [String: FolderMeta]?
     /// Whether the sidebar's group for this project is folded away. Config, not
     /// a local preference: the core serves it so the choice survives a restart
@@ -208,19 +213,38 @@ public struct Project: Codable, Hashable, Sendable {
     }
 }
 
-/// `config.FolderMeta` — a folder's display state, and deliberately not its
-/// position: a folder sits wherever its first member sits (`sessionview.BuildRows`),
-/// so there is no order here to drift out of step with the sessions'.
+/// `config.FolderMeta` — one global folder's display state, keyed by name in
+/// `Config.folders`.
 public struct FolderMeta: Codable, Hashable, Sendable {
     public var collapsed: Bool
+    /// Position in the core's folder-first layout, which this app does not
+    /// render — it is still the order folder *names* are listed in. 0 means
+    /// never positioned and sorts last; ties break by name. The project-first
+    /// rows this app draws ignore it: there a folder sits wherever its first
+    /// member sits (`sessionview.BuildRows`).
+    public var order: Int64
 
-    public init(collapsed: Bool = false) { self.collapsed = collapsed }
+    public init(collapsed: Bool = false, order: Int64 = 0) {
+        self.collapsed = collapsed
+        self.order = order
+    }
 
-    enum CodingKeys: String, CodingKey { case collapsed }
+    enum CodingKeys: String, CodingKey { case collapsed, order }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
+        order = try c.decodeIfPresent(Int64.self, forKey: .order) ?? 0
+    }
+
+    /// Both fields are `omitempty` on the Go side, and the only thing this app
+    /// ever encodes a `FolderMeta` for is the skew round trip in
+    /// `Project.folders` — where an `order` the old core has no field for
+    /// should not appear at all.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        if collapsed { try c.encode(collapsed, forKey: .collapsed) }
+        if order != 0 { try c.encode(order, forKey: .order) }
     }
 }
 
@@ -342,6 +366,10 @@ public struct ThemePalette: Decodable, Hashable, Sendable {
 
 public struct Config: Decodable, Sendable {
     public var projects: [String: Project]
+    /// The global folder namespace, keyed by name (the name *is* the id, in
+    /// every project at once). Membership lives on each session as
+    /// `Session.folder`; this is only the folders' own display state.
+    public var folders: [String: FolderMeta]
     /// The user's manual project order. Names missing from it sort
     /// alphabetically after the ordered ones — same rule as
     /// `config.OrderedProjectNames`.
@@ -360,7 +388,7 @@ public struct Config: Decodable, Sendable {
     public var sortRecentFirst: Bool
 
     enum CodingKeys: String, CodingKey {
-        case projects, order, theme, appearance
+        case projects, folders, order, theme, appearance
         case autoTmux = "auto_tmux"
         case autoSubmitDefault = "auto_submit_default"
         case sortRecentFirst = "sort_recent_first"
@@ -369,6 +397,7 @@ public struct Config: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         projects = try c.decodeIfPresent([String: Project].self, forKey: .projects) ?? [:]
+        folders = try c.decodeIfPresent([String: FolderMeta].self, forKey: .folders) ?? [:]
         order = try c.decodeIfPresent([String].self, forKey: .order) ?? []
         theme = try c.decodeIfPresent(String.self, forKey: .theme)
         appearance = try c.decodeIfPresent(String.self, forKey: .appearance)
@@ -836,7 +865,8 @@ public enum Wire {
         let configJSON = """
         {"projects":{"moomux":{"repo":"/src/moomux","agent":"codex","emoji":"🐮"},
                      "site":{"repo":"/src/site","kind":"plain"}},
-         "order":["site","moomux"],"theme":"gruvbox"}
+         "order":["site","moomux"],"theme":"gruvbox",
+         "folders":{"wip":{"collapsed":true,"order":2},"done":{}}}
         """
         let cfg = try! decoder.decode(Config.self, from: Data(configJSON.utf8))
         assert(cfg.projects["moomux"]?.repo == "/src/moomux")
@@ -844,12 +874,16 @@ public enum Wire {
         assert(cfg.projects["site"]?.isPlain == true)
         assert(cfg.projects["moomux"]?.usesWorktree == true)
         assert(cfg.orderedProjectNames == ["site", "moomux"], "Order must win over alphabetical")
+        // The global folder table. An absent order is 0, not a decode failure.
+        assert(cfg.folders["wip"] == FolderMeta(collapsed: true, order: 2), "\(cfg.folders)")
+        assert(cfg.folders["done"] == FolderMeta())
         // A project missing from Order sorts alphabetically, after the ordered ones.
         let extraJSON = """
         {"projects":{"b":{"repo":"/b"},"a":{"repo":"/a"},"z":{"repo":"/z"}},"order":["z"]}
         """
         let extra = try! decoder.decode(Config.self, from: Data(extraJSON.utf8))
         assert(extra.orderedProjectNames == ["z", "a", "b"])
+        assert(extra.folders.isEmpty, "no folders key is an empty table, not a decode failure")
 
         // Every settings flag is `omitempty` on the Go side, so "off" arrives
         // as an absent key and must not decode as nil-shaped garbage.
@@ -891,16 +925,16 @@ public enum Wire {
             as: UTF8.self)
         assert(sent == #"{"agent":"codex","base_branch":"main","collapsed":false,"dangerous":true,"#
                + #""no_worktree":false,"prompt_agent":false,"repo":"/src/x"}"#, sent)
-        // Folders and the collapse flag ride along because UpdateProject
-        // replaces the whole record: a save that dropped them would delete the
-        // project's folders. `folders` is absent when there are none, the same
-        // as every other unset optional.
+        // The collapse flag rides along because UpdateProject replaces the
+        // whole record. So does a per-project folder table, on the one core
+        // old enough to still send one — see Project.folders. A current core
+        // sends none, and then nothing is sent back.
         assert(!sent.contains("folders"), "no folders means no key")
-        let withFolders = String(decoding: try! out.encode(
+        let carried = String(decoding: try! out.encode(
             Project(repo: "/x", folders: ["wip": FolderMeta(collapsed: true)], collapsed: true)),
             as: UTF8.self)
-        assert(withFolders.contains(#""folders":{"wip":{"collapsed":true}}"#), withFolders)
-        assert(withFolders.contains(#""collapsed":true"#), withFolders)
+        assert(carried.contains(#""folders":{"wip":{"collapsed":true}}"#), carried)
+        assert(carried.contains(#""collapsed":true"#), carried)
         assert(!sent.contains("null"), "an unset field must vanish, never encode as null")
         assert(!sent.contains("kind"), "kind is the core's to decide, not ours to send")
 

@@ -12,8 +12,9 @@ snapshots,
 opens its diff for review in a tmux window of its own — or in whatever GUI diff tool
 Settings names (⌘D) — and
 creates, renames, retags, re-agents, archives, reorders, kills and deletes them. Sessions file into
-per-project folders — the core's own (`SetSessionFolder`, `CreateFolder`, `RenameFolder`,
-`DeleteFolder`, `SetFolderCollapsed`), laid out by the core as `Snapshot.Rows` and rendered here —
+folders — one flat *global* namespace, the core's own (`SetSessionFolder`, `CreateFolder`,
+`RenameFolder`, `DeleteFolder`, `SetFolderCollapsed`, none of which takes a project), laid out by
+the core as `Snapshot.Rows` — still project-first, a folder header per project that has members —
 and both a folder and a whole project fold away, the project's state through `SetProjectCollapsed`
 so it survives a restart and reads the same in every front end. Creating one asks
 the same questions the TUI's dialog does — agent, model, thinking level, branch and base branch
@@ -352,9 +353,24 @@ to fix in Go, not a reason to link the core.
   alert, and the stray click dismisses the alert — so the action silently never runs. Click an
   alert's button by coordinate (`find` prints them) rather than by label.
 - **`UpdateProject` replaces the whole project record**, so anything this app does not send back
-  is deleted — which now includes `folders` and `collapsed`. `ProjectForm` carries both through
-  untouched for exactly that reason (`Project`'s round-trip assert in `ProjectForm.demo` is the
-  check), the same way `kind` is restored by the core.
+  is deleted — which includes `collapsed`. `ProjectForm` carries it through untouched for exactly
+  that reason (`Project`'s round-trip assert in `ProjectForm.demo` is the check), the same way
+  `kind` is restored by the core. Folders live on `Config.folders` now, one global table, and a
+  current core keeps `config.Project.Folders` off the wire entirely (`json:"-"`) — so `Project.folders`
+  decodes nil and is never sent. It is kept only for version skew: this app upgrades through its own
+  cask and can run a release ahead of the core, where dropping the field would delete an old core's
+  per-project folder table on the first project edit. Delete it when no such core is left.
+- **Folders are global, and three behaviours changed with it.** `CreateFolder` refuses a name any
+  project already uses; `SetFolderCollapsed` folds the folder in *every* project at once; and
+  `DeleteFolder`/`RenameFolder` rewrite members across every project, however few of them the
+  header you clicked was showing. `AppState.folderNames` is the whole namespace, ordered the way
+  `sessionview.FolderOrder` does it (`order` ascending, 0 last, ties by name), which is what the
+  "file this session under…" menu offers — unioned with the names the sessions themselves claim,
+  since membership and the folder table are two writes and a header you can see but cannot file
+  into is the worse half. Dropping a session onto a folder header files it there whatever project
+  the header is drawn under, for the same reason; `project` still gates a drop on a *project*
+  header, which is the un-file case. `Snapshot.FolderRows` — the core's folder-first layout — is
+  ignored: this app groups by project and there is no screen that wants the other way round.
 - **A manual reorder sends the project's whole order, not a delta.** `MoveSession` still exists on
   the wire as a deprecated shim kept for this app alone; `ReorderSessions` takes the order the
   client is displaying, because the core re-deriving it from a list the client filters differently
