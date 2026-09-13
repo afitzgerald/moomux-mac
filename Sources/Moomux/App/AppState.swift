@@ -1467,6 +1467,21 @@ public final class AppState {
         }
     }
 
+    /// Archives or unarchives every session in a folder. One `mutate`, so the
+    /// sidebar refreshes once at the end rather than per member; members
+    /// already in the wanted state are skipped, which also makes this a no-op
+    /// when there is nothing to do.
+    public func setArchived(project: String, folder: String, _ archived: Bool) {
+        let ids = sessions
+            .filter { $0.project == project && $0.folder == folder && $0.archived != archived }
+            .map(\.id)
+        guard !ids.isEmpty else { return }
+        mutate(archived ? "Archive folder" : "Unarchive folder") { client in
+            for id in ids { try client.setArchived(id: id, archived) }
+            return nil
+        }
+    }
+
     /// Deletes the folder only — every member is filed back at the top level,
     /// which is why this asks nothing.
     public func deleteFolder(project: String, name: String) {

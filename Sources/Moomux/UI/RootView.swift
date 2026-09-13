@@ -820,6 +820,9 @@ private struct FolderHeader: View {
         .listRowBackground(targeted ? Color.accentColor.opacity(0.25) : nil)
         .contextMenu {
             Button("Rename…") { app.sheet = .renameFolder(project: project, name: name) }
+            Button("Archive All") { app.setArchived(project: project, folder: name, true) }
+            Button("Unarchive All") { app.setArchived(project: project, folder: name, false) }
+            Divider()
             // No confirmation: deleting a folder files its members back at the
             // top level and removes nothing.
             Button("Delete") { app.deleteFolder(project: project, name: name) }
