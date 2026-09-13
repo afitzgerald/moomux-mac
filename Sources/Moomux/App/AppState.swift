@@ -107,11 +107,12 @@ public final class AppState {
         /// gain from splitting them into two sheets and two shortcuts.
         case edit(Session)
         case tags(Session)
-        /// A new folder in a project — and, when it was opened from a session's
-        /// own menu, the session to file into it. `SetSessionFolder` creates a
-        /// folder on first use, so that is one call rather than two.
-        case newFolder(project: String, assign: Session?)
-        case renameFolder(project: String, name: String)
+        /// A new folder — and, when it was opened from a session's own menu,
+        /// the session to file into it. `SetSessionFolder` creates a folder on
+        /// first use, so that is one call rather than two. No project: the
+        /// namespace is global.
+        case newFolder(assign: Session?)
+        case renameFolder(name: String)
         /// Settings *and* project management, on two tabs.
         ///
         /// The project add/edit form is deliberately not a case here: it is
@@ -581,14 +582,27 @@ public final class AppState {
         sessions.filter { $0.project == project }
     }
 
-    /// The project's folder names, in the order they are drawn (a folder sits
-    /// wherever its first member does), for the "file this session under…" menu.
-    public func folders(of project: String) -> [String] {
-        let named = layout(of: project, in: allSessions(of: project))
-            .filter(\.isFolder).map(\.folder)
-        guard named.isEmpty else { return named }
-        // No layout yet (an older core, or the pull path): config still knows.
-        return (config?.projects[project]?.folders?.keys).map { $0.sorted() } ?? []
+    /// Every folder there is, in the core's own order (`sessionview.FolderOrder`:
+    /// `order` ascending, 0 last, ties by name), for the "file this session
+    /// under…" menu. Global, not per project — a folder spans projects now, so
+    /// the menu offers all of them rather than only the ones this project has
+    /// members in.
+    ///
+    /// Unioned with the folder names the sessions themselves claim, because
+    /// membership and the folder table are two writes: a session pointing at a
+    /// name the table has lost still draws a header (the core builds rows off
+    /// the session loop), and a header you can see but cannot file into is
+    /// worse than an extra menu item.
+    public var folderNames: [String] {
+        var folders = config?.folders ?? [:]
+        for name in sessions.map(\.folder) where !name.isEmpty && folders[name] == nil {
+            folders[name] = FolderMeta()
+        }
+        return folders.keys.sorted { a, b in
+            let x = folders[a]!.order, y = folders[b]!.order
+            if x != y { return (x == 0 ? Int64.max : x) < (y == 0 ? Int64.max : y) }
+            return a < b
+        }
     }
 
     /// Moves the selection to the next/previous row in sidebar order,
@@ -1077,7 +1091,15 @@ public final class AppState {
                               Row(id: "a:two")]]
             let drawn = app.sidebarRows(of: "a", in: app.sessions.filter { $0.project == "a" })
             assert(drawn.map(\.id) == ["folder:wip", "a:two"], "\(drawn.map(\.id))")
-            assert(app.folders(of: "a") == ["wip"])
+            app.config = try! Wire.decoder.decode(Config.self, from: Data(#"""
+            {"projects":{},"folders":{"wip":{"order":2},"done":{"order":1},"zz":{}}}
+            """#.utf8))
+            assert(app.folderNames == ["done", "wip", "zz"], "\(app.folderNames)")
+            // A session filed under a folder the table has lost still draws a
+            // header, so the menu has to offer it — unpositioned, hence last.
+            app.sessions[0] = try! Wire.decoder.decode(Session.self, from: Data(
+                #"{"id":"a:one","project":"a","name":"one","folder":"orphan"}"#.utf8))
+            assert(app.folderNames == ["done", "wip", "orphan", "zz"], "\(app.folderNames)")
             app.selectedSessionID = "a:two"
             app.selectAdjacentSession(by: 1)
             assert(app.selectedSessionID == "b:three", "a hidden member is not in the rotation")
@@ -1443,12 +1465,18 @@ public final class AppState {
     }
 
     /// A sidebar drop: the payload is a plain session id, so anything that
-    /// carries a string can land here — only an id this project owns is acted
-    /// on, and a session already in `folder` is left alone. Returns whether
-    /// the drop meant anything, which is what tells SwiftUI to accept it.
+    /// carries a string can land here, and a session already in `folder` is
+    /// left alone. Returns whether the drop meant anything, which is what tells
+    /// SwiftUI to accept it.
+    ///
+    /// `project` gates only the un-file case (a drop on a *project* header,
+    /// `folder` empty), where another project's session has no business
+    /// landing. A folder is global, so filing one of project A's sessions into
+    /// a folder drawn under project B is a real move — refusing it left the row
+    /// highlighting as a valid target and then doing nothing.
     public func drop(_ ids: [String], into folder: String, project: String) -> Bool {
         let moved = ids.compactMap(session(id:))
-            .filter { $0.project == project && $0.folder != folder }
+            .filter { $0.folder != folder && (!folder.isEmpty || $0.project == project) }
         // One `mutate` per session would race on `busy` and on `refresh`; the
         // sidebar is single-select, so one drop is one session in practice.
         guard let session = moved.first else { return false }
@@ -1456,13 +1484,14 @@ public final class AppState {
         return true
     }
 
-    public func createFolder(project: String, name: String) {
-        mutate("New folder") { try $0.createFolder(project: project, name: name); return nil }
+    /// Refused when any project already uses the name — one global namespace.
+    public func createFolder(name: String) {
+        mutate("New folder") { try $0.createFolder(name: name); return nil }
     }
 
-    public func renameFolder(project: String, from old: String, to new: String) {
+    public func renameFolder(from old: String, to new: String) {
         mutate("Rename folder") {
-            try $0.renameFolder(project: project, from: old, to: new)
+            try $0.renameFolder(from: old, to: new)
             return nil
         }
     }
@@ -1483,14 +1512,17 @@ public final class AppState {
     }
 
     /// Deletes the folder only — every member is filed back at the top level,
-    /// which is why this asks nothing.
-    public func deleteFolder(project: String, name: String) {
-        mutate("Delete folder") { try $0.deleteFolder(project: project, name: name); return nil }
+    /// which is why this asks nothing. Members in *other* projects go with it:
+    /// the folder is one global thing, however few of it this project shows.
+    public func deleteFolder(name: String) {
+        mutate("Delete folder") { try $0.deleteFolder(name: name); return nil }
     }
 
-    public func setFolder(project: String, name: String, collapsed: Bool) {
+    /// Collapsed is one global bit, so this folds the folder in every project
+    /// at once.
+    public func setFolder(name: String, collapsed: Bool) {
         mutate(collapsed ? "Collapse" : "Expand") {
-            try $0.setFolderCollapsed(project: project, name: name, collapsed)
+            try $0.setFolderCollapsed(name: name, collapsed)
             return nil
         }
     }

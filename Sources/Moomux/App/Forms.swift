@@ -178,7 +178,8 @@ public struct ProjectForm: Equatable, Sendable {
     public var emoji = ""
     /// Display state the form does not edit but must not drop: `UpdateProject`
     /// replaces the whole project record, so a save that left these out would
-    /// silently delete the project's folders and un-collapse it.
+    /// silently un-collapse it — or, against a core old enough to still serve
+    /// a per-project folder table, delete that (see `Project.folders`).
     var folders: [String: FolderMeta]?
     var collapsed = false
     /// nil for a new project; the name being edited otherwise. Editing cannot

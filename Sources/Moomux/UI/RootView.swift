@@ -252,8 +252,8 @@ struct RootView: View {
                                values: [session.ticket ?? "", session.pr ?? ""]) {
                     app.setTags(session, ticket: $0[0], pr: $0[1])
                 }
-            case let .newFolder(project, assign):
-                TextFieldSheet(title: "New folder in “\(project)”",
+            case let .newFolder(assign):
+                TextFieldSheet(title: "New folder",
                                labels: ["Name"], values: [""]) { values in
                     let name = values[0].trimmed
                     // Filing a session into it *is* the create: SetSessionFolder
@@ -261,13 +261,13 @@ struct RootView: View {
                     if let session = assign {
                         app.setFolder(session, to: name)
                     } else {
-                        app.createFolder(project: project, name: name)
+                        app.createFolder(name: name)
                     }
                 }
-            case let .renameFolder(project, name):
+            case let .renameFolder(name):
                 TextFieldSheet(title: "Rename “\(name)”",
                                labels: ["Name"], values: [name]) { values in
-                    app.renameFolder(project: project, from: name, to: values[0].trimmed)
+                    app.renameFolder(from: name, to: values[0].trimmed)
                 }
             case .settings:
                 SettingsSheet()
@@ -776,7 +776,7 @@ private struct ProjectHeader: View {
         } isTargeted: { targeted = $0 }
         .listRowBackground(targeted ? Color.accentColor.opacity(0.25) : nil)
         .contextMenu {
-            Button("New Folder…") { app.sheet = .newFolder(project: name, assign: nil) }
+            Button("New Folder…") { app.sheet = .newFolder(assign: nil) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -813,24 +813,24 @@ private struct FolderHeader: View {
         .padding(.leading, app.listFontSize)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture { app.setFolder(project: project, name: name, collapsed: !collapsed) }
+        .onTapGesture { app.setFolder(name: name, collapsed: !collapsed) }
         .dropDestination(for: String.self) { ids, _ in
             app.drop(ids, into: name, project: project)
         } isTargeted: { targeted = $0 }
         .listRowBackground(targeted ? Color.accentColor.opacity(0.25) : nil)
         .contextMenu {
-            Button("Rename…") { app.sheet = .renameFolder(project: project, name: name) }
+            Button("Rename…") { app.sheet = .renameFolder(name: name) }
             Button("Archive All") { app.setArchived(project: project, folder: name, true) }
             Button("Unarchive All") { app.setArchived(project: project, folder: name, false) }
             Divider()
             // No confirmation: deleting a folder files its members back at the
             // top level and removes nothing.
-            Button("Delete") { app.deleteFolder(project: project, name: name) }
+            Button("Delete") { app.deleteFolder(name: name) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(collapsed ? "\(name), collapsed, \(count) sessions" : name)
-        .accessibilityAction { app.setFolder(project: project, name: name, collapsed: !collapsed) }
+        .accessibilityAction { app.setFolder(name: name, collapsed: !collapsed) }
     }
 }
 
@@ -952,7 +952,7 @@ private struct SessionRow: View {
             Menu("Folder") {
                 Button("None") { app.setFolder(session, to: "") }
                     .disabled(session.folder.isEmpty)
-                let folders = app.folders(of: session.project)
+                let folders = app.folderNames
                 if !folders.isEmpty { Divider() }
                 ForEach(folders, id: \.self) { name in
                     Button(name) { app.setFolder(session, to: name) }
@@ -960,7 +960,7 @@ private struct SessionRow: View {
                 }
                 Divider()
                 Button("New Folder…") {
-                    app.sheet = .newFolder(project: session.project, assign: session)
+                    app.sheet = .newFolder(assign: session)
                 }
             }
             Button("Move Up") { app.move(session, by: -1) }
