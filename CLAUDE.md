@@ -42,6 +42,35 @@ every other worktree too.
   that is now a choice rather than a constraint.
 - SwiftUI, AppKit, `@Observable`, `MenuBarExtra`, `Settings`, UserNotifications and Network all
   compile fine. So does libghostty, as a prebuilt binary target.
+- **The macOS 27 SDK cannot build this package, so the Makefile pins `SDKROOT` to `MacOSX26.sdk`.**
+  CommandLineTools symlinks `MacOSX.sdk` at the 27.0 SDK while the installed swift-frontend still
+  targets `macosx26.0`, and that SDK's `SwiftUICore` declares a `State()` *macro* beside the
+  property wrapper — `#externalMacro(module: "SwiftUIMacros")`, a plugin that ships with Xcode.
+  The only plugins in `/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/` are
+  `libObservationMacros.dylib` and `libSwiftMacros.dylib`, so every `@State` in `UI/` dies with
+  `plugin for module 'SwiftUIMacros' not found` and the whole build fails, in files nobody
+  touched. Same family as the `#Preview` constraint, now reaching a core property wrapper.
+  Which SDK declares what:
+
+  ```sh
+  for s in 26.5 27.0; do echo "== $s"; rg -c 'macro State' \
+    /Library/Developer/CommandLineTools/SDKs/MacOSX$s.sdk/System/Library/Frameworks/\
+SwiftUICore.framework/Modules/SwiftUICore.swiftmodule/arm64e-apple-macos.swiftinterface; done
+  # == 26.5   no match — property wrapper only
+  # == 27.0   3
+  ```
+
+  A bare `swift build` does **not** get the pin — the `make` targets export it, so pass
+  `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk` by hand or it fails the same way.
+  Two `ld: warning: search path '/Library/Developer/CommandLineTools/Developer/...' not found`
+  lines come with it: toolchain directories that no longer exist. Linker warnings from the
+  toolchain, not compiler warnings from this package — `make warnings` is still the zero.
+- **`swiftbuild` is the default build engine now, and it lays the resource bundle out differently.**
+  It emits a `Contents/Resources`-style `GhosttyKit_GhosttyTerminal.bundle`; the older `native`
+  engine emits a flat one. `make app` picks whichever exists (`GHOSTTY_RES`), so a
+  `Makefile.local` that still selects `--build-system native` keeps working. Hardcoding either
+  layout fails as `cp: .../Ghostty/themes: No such file or directory`, which reads like a missing
+  build step rather than a moved directory.
 - Notarization needs no Xcode — `notarytool` and `stapler` are in CommandLineTools — so `make dist`
   and `make notarize` work here, and `.github/workflows/release.yml` runs the same `notarize`
   target on a `macos-15` runner. A Developer ID certificate is the only piece Xcode would not have
