@@ -118,12 +118,24 @@ public final class MoomuxClient: Sendable {
         var cfg: Config?
         var agents: [AgentOption]?
         var themes: [ThemePalette]?
+        /// Project name → the glyph to draw: the project's own `emoji` when it
+        /// set one, and `config.ProjectEmojiPalette`'s deterministic pick when
+        /// it did not. A sibling of `cfg` rather than a field on each project,
+        /// because `UpdateProject` replaces the whole record — a front end that
+        /// round-tripped it would save a palette pick as the user's own choice,
+        /// the trap `collapsed` already has. Serve-only: never sent back.
+        var projectEmoji: [String: String]?
         var hint: String?
         var ok: Bool?
         var dirty: Bool?
         var unpushed: Bool?
         var files: Int?
         var commits: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits
+            case projectEmoji = "project_emoji"
+        }
     }
 
     /// What the core can say about a session's worktree, on demand.
@@ -180,9 +192,13 @@ public final class MoomuxClient: Sendable {
         return response.result ?? CallResult()
     }
 
-    public func config() throws -> Config {
-        guard let cfg = try call("Config").cfg else { throw Failure.emptyResponse }
-        return cfg
+    /// The config, and the emoji table that comes with it — empty from a core
+    /// too old to send one, which is what leaves the sidebar drawing the
+    /// project's own emoji or nothing, exactly as it did before.
+    public func config() throws -> (config: Config, projectEmoji: [String: String]) {
+        let result = try call("Config")
+        guard let cfg = result.cfg else { throw Failure.emptyResponse }
+        return (cfg, result.projectEmoji ?? [:])
     }
 
     /// Which agents the core can launch, and the model/thinking choices worth

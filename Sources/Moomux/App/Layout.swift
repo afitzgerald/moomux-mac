@@ -66,6 +66,88 @@ public enum Layout {
         return out
     }
 
+    // MARK: - Folder-first
+
+    /// One line of the folder-first sidebar.
+    public enum FolderSidebarRow: Identifiable, Hashable, Sendable {
+        case folder(name: String, collapsed: Bool, count: Int)
+        /// A project header: a subheader inside a folder, or — with `folder`
+        /// empty — the trailing block of sessions filed nowhere. `hidden` is
+        /// what its own collapse is keeping off screen, 0 when it is open.
+        case project(folder: String, name: String, collapsed: Bool, hidden: Int)
+        case session(Session, indent: Int)
+
+        public var id: String {
+            switch self {
+            case let .folder(name, _, _): return "folder:\(name)"
+            case let .project(folder, name, _, _): return "sub:\(folder)/\(name)"
+            case let .session(session, _): return session.id
+            }
+        }
+
+        public var session: Session? {
+            if case let .session(s, _) = self { return s }
+            return nil
+        }
+    }
+
+    /// One (folder, project) group's key in `collapsedGroups` — the loose
+    /// block is the group whose folder is "".
+    public static func groupKey(folder: String, project: String) -> String {
+        "\(folder)\u{0}\(project)"
+    }
+
+    /// The folder-first layout (`Snapshot.folderRows`) filtered to what this
+    /// window is showing, on the same rules as `rows(_:shown:searching:)`: a
+    /// header with nothing in `shown` is not drawn, a collapsed one draws with
+    /// the count of what it hides, and a search reaches inside both.
+    ///
+    /// `collapsedGroups` holds `groupKey`s, so one rule covers both project
+    /// header kinds — the loose block's (the core's own `collapsed` flag) and a
+    /// subheader's (this window's, since one project appears under every folder
+    /// it has members in and folding them all at once is not what a disclosure
+    /// triangle means). `pinned` is the selected and attached session, which no
+    /// collapse may take off screen.
+    public static func folderRows(_ layout: [FolderRow], shown: [Session], searching: Bool,
+                                  collapsedGroups: Set<String> = [],
+                                  pinned: String? = nil) -> [FolderSidebarRow] {
+        let sessions = Dictionary(shown.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // What each header has in *this* view — the core's own counts are of
+        // every member, which overstates a filtered or searched list.
+        var members: [String: Int] = [:]
+        var folders: [String: Int] = [:]
+        var pinnedGroup: String?
+        for row in layout where row.kind == .session && sessions[row.id] != nil {
+            members[groupKey(folder: row.folder, project: row.project), default: 0] += 1
+            folders[row.folder, default: 0] += 1
+            if row.id == pinned { pinnedGroup = groupKey(folder: row.folder, project: row.project) }
+        }
+
+        var out: [FolderSidebarRow] = []
+        for row in layout {
+            let group = groupKey(folder: row.folder, project: row.project)
+            switch row.kind {
+            case .folder:
+                guard let count = folders[row.folder] else { continue }
+                out.append(.folder(name: row.folder, collapsed: row.collapsed && !searching,
+                                   count: count))
+            case .project:
+                guard !(row.hidden && !searching), let count = members[group] else { continue }
+                let collapsed = collapsedGroups.contains(group)
+                out.append(.project(folder: row.folder, name: row.project, collapsed: collapsed,
+                                    hidden: collapsed ? count - (group == pinnedGroup ? 1 : 0) : 0))
+            case .session:
+                guard let session = sessions[row.id], !(row.hidden && !searching) else { continue }
+                guard !collapsedGroups.contains(group) || row.id == pinned else { continue }
+                // Always one level in from whatever header it sits under: a
+                // project subheader inside a folder (two levels), or the loose
+                // block's own project header (one).
+                out.append(.session(session, indent: row.folder.isEmpty ? 1 : 2))
+            }
+        }
+        return out
+    }
+
     /// A project's whole session order after moving `id` one step, or nil when
     /// the move has nowhere to go. `sessionview.Reorder`, rule for rule.
     ///
@@ -202,5 +284,79 @@ public enum Layout {
         // A row the window is filtering out is never the one swapped with.
         assert(reorder([Row(id: "a"), Row(id: "b"), Row(id: "c")], id: "a", delta: 1,
                        skip: { $0 == "b" }) == ["c", "b", "a"])
+
+        folderDemo()
+    }
+
+    /// The folder-first layout, on the shape `BuildFolderRows` produces:
+    /// [work: one/a, two/b], then the loose block one/c, two/d.
+    private static func folderDemo() {
+        func sess(_ id: String, _ project: String, _ folder: String) -> Session {
+            try! Wire.decoder.decode(Session.self, from: Data(
+                #"{"id":"\#(id)","name":"\#(id)","project":"\#(project)","folder":"\#(folder)"}"#
+                    .utf8))
+        }
+        func layout(collapsed: Bool) -> [FolderRow] {
+            [FolderRow(kind: .folder, folder: "work", collapsed: collapsed, count: 2),
+             FolderRow(kind: .project, folder: "work", project: "one", hidden: collapsed, count: 1),
+             FolderRow(kind: .session, folder: "work", project: "one", id: "a", hidden: collapsed),
+             FolderRow(kind: .project, folder: "work", project: "two", hidden: collapsed, count: 1),
+             FolderRow(kind: .session, folder: "work", project: "two", id: "b", hidden: collapsed),
+             FolderRow(kind: .project, project: "one", count: 1),
+             FolderRow(kind: .session, project: "one", id: "c"),
+             FolderRow(kind: .project, project: "two", count: 1),
+             FolderRow(kind: .session, project: "two", id: "d")]
+        }
+        let all = [sess("a", "one", "work"), sess("b", "two", "work"),
+                   sess("c", "one", ""), sess("d", "two", "")]
+
+        let open = folderRows(layout(collapsed: false), shown: all, searching: false)
+        assert(open.map(\.id) == ["folder:work", "sub:work/one", "a", "sub:work/two", "b",
+                                  "sub:/one", "c", "sub:/two", "d"], "\(open.map(\.id))")
+        // Every session one level in from its own header: folder › project ›
+        // session is two, the loose block's project › session is one.
+        assert(open.compactMap { if case let .session(s, indent) = $0 { return (s.id, indent) }
+                                 else { return nil } }
+            .allSatisfy { $0.0 == "a" || $0.0 == "b" ? $0.1 == 2 : $0.1 == 1 })
+
+        let shut = folderRows(layout(collapsed: true), shown: all, searching: false)
+        assert(shut.map(\.id) == ["folder:work", "sub:/one", "c", "sub:/two", "d"],
+               "a collapsed folder hides its whole subtree")
+        if case let .folder(_, collapsed, count) = shut[0] { assert(collapsed && count == 2) } else {
+            assert(false, "row 0 must be the folder header")
+        }
+
+        // Search reaches inside a collapsed folder, and a header with no match
+        // is not drawn at all — neither the folder's nor its subheader's.
+        let found = folderRows(layout(collapsed: true), shown: [sess("b", "two", "work")],
+                               searching: true)
+        assert(found.map(\.id) == ["folder:work", "sub:work/two", "b"], "\(found.map(\.id))")
+        let none = folderRows(layout(collapsed: false), shown: [sess("c", "one", "")],
+                              searching: false)
+        assert(none.map(\.id) == ["sub:/one", "c"], "\(none.map(\.id))")
+
+        // One rule for both project header kinds: a collapsed group keeps its
+        // header, counts what it hides, and drops its rows. Here one group in
+        // a folder and one in the loose block, at once.
+        let folded = folderRows(layout(collapsed: false), shown: all, searching: false,
+                                collapsedGroups: [groupKey(folder: "work", project: "one"),
+                                                  groupKey(folder: "", project: "one")])
+        assert(folded.map(\.id) == ["folder:work", "sub:work/one", "sub:work/two", "b",
+                                    "sub:/one", "sub:/two", "d"], "\(folded.map(\.id))")
+        for row in folded {
+            if case let .project(_, name, collapsed, hidden) = row {
+                assert(collapsed == (name == "one"), "\(name)")
+                assert(hidden == (name == "one" ? 1 : 0), "\(name) \(hidden)")
+            }
+        }
+        // The attached session survives its group folding, and is not counted
+        // as hidden.
+        let pinned = folderRows(layout(collapsed: false), shown: all, searching: false,
+                                collapsedGroups: [groupKey(folder: "work", project: "one")],
+                                pinned: "a")
+        assert(pinned.map(\.id).contains("a"))
+        if case let .project(_, _, _, hidden) = pinned[1] { assert(hidden == 0, "\(hidden)") } else {
+            assert(false, "row 1 must be the subheader")
+        }
     }
 }

@@ -38,6 +38,10 @@ public final class AppState {
     /// the first snapshot, and empty from a core older than folders; both are
     /// what `layout(of:)`'s fallback covers.
     public private(set) var rows: [String: [Row]] = [:]
+    /// The same sessions laid out folder-first — `sessionview.FolderRows`, one
+    /// flat list across every project. Empty from a core that predates it,
+    /// which is what `folderView` checks before switching the sidebar over.
+    public private(set) var folderRows: [FolderRow] = []
     public private(set) var config: Config?
     /// Which agents the core can launch, and what to offer in a model or
     /// thinking-level picker for each. Fetched once — it is a static table in
@@ -519,9 +523,19 @@ public final class AppState {
             }
     }
 
+    /// The glyph to draw for a project: its own if it set one, otherwise the
+    /// core's deterministic palette pick — which is what the TUI draws, and
+    /// what this app drew *nothing* for until the core served the table
+    /// (`config.ProjectEmojiPalette` is a Go table, and a copy here would be a
+    /// second one to drift).
     public func emoji(for project: String) -> String? {
-        config?.projects[project]?.emoji
+        if let own = config?.projects[project]?.emoji, !own.isEmpty { return own }
+        return projectEmoji[project]
     }
+
+    /// Project name → its effective emoji, straight off the `Config` response.
+    /// Empty from a core too old to send it.
+    public private(set) var projectEmoji: [String: String] = [:]
 
     /// A search must never be answered by a section the user cannot see, so
     /// collapsing is ignored while there is a query — same reason search
@@ -576,6 +590,54 @@ public final class AppState {
                            searching: searching)
     }
 
+    /// Whether the sidebar is drawing the folder-first layout: the preference,
+    /// and a core new enough to have sent one. A stale core would otherwise
+    /// switch the sidebar to an empty list.
+    public var folderView: Bool { folderFirst && !folderRows.isEmpty }
+
+    /// What the folder-first sidebar draws: the core's folder-first layout,
+    /// filtered to this window's view.
+    public var folderSidebarRows: [Layout.FolderSidebarRow] {
+        let pinned = selectedSessionID.flatMap { attachedSessions.contains($0) ? $0 : nil }
+        return Layout.folderRows(folderRows, shown: listedSessions, searching: searching,
+                                 collapsedGroups: collapsedGroups, pinned: pinned)
+    }
+
+    /// Which (folder, project) groups the folder-first sidebar is folding: the
+    /// loose block's from the core's own project flag, a subheader's from this
+    /// window. Searching ignores both, for the same reason `projectExpanded`
+    /// does.
+    var collapsedGroups: Set<String> {
+        guard !searching else { return [] }
+        var groups = folderProjectCollapsed
+        for (name, project) in config?.projects ?? [:] where project.collapsed {
+            groups.insert(Layout.groupKey(folder: "", project: name))
+        }
+        return groups
+    }
+
+    /// A project subheader inside a folder folds on its own, and nowhere else:
+    /// one project appears under every folder it has members in, and
+    /// `SetProjectCollapsed` would fold all of them plus the loose block at
+    /// once, which is not what a disclosure triangle means. So this is local —
+    /// `UserDefaults`, like `folderFirst`, since it describes a screen only
+    /// this app has.
+    public func setFolderProject(folder: String, project: String, expanded: Bool) {
+        let key = Layout.groupKey(folder: folder, project: project)
+        if expanded { folderProjectCollapsed.remove(key) } else { folderProjectCollapsed.insert(key) }
+    }
+
+    private var folderProjectCollapsed: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: AppState.folderProjectCollapsedKey) ?? []
+    ) {
+        didSet {
+            UserDefaults.standard.set(Array(folderProjectCollapsed),
+                                      forKey: Self.folderProjectCollapsedKey)
+        }
+    }
+
+    static let folderProjectCollapsedKey = "folderProjectCollapsed"
+
     /// Every session of a project, filtered by nothing — what a reorder has to
     /// renumber, and the fallback layout has to cover.
     private func allSessions(of project: String) -> [Session] {
@@ -613,8 +675,11 @@ public final class AppState {
     public func selectAdjacentSession(by delta: Int) {
         // Rows inside a collapsed section are not on screen; stepping the
         // selection onto one would look like the keystroke did nothing.
-        let ids = sessionsByProject
-            .flatMap { sidebarRows(of: $0.project, in: $0.sessions).compactMap { $0.session?.id } }
+        let ids = folderView
+            ? folderSidebarRows.compactMap { $0.session?.id }
+            : sessionsByProject.flatMap {
+                sidebarRows(of: $0.project, in: $0.sessions).compactMap { $0.session?.id }
+            }
         guard !ids.isEmpty else { return }
         guard let current = selectedSessionID, let index = ids.firstIndex(of: current) else {
             selectedSessionID = ids[0]
@@ -626,7 +691,18 @@ public final class AppState {
     /// Manual reordering is meaningless while the core sorts by last-opened —
     /// the next open would undo it. The TUI disables shift+↑↓ for the same
     /// reason rather than letting a move silently do nothing.
-    public var canReorder: Bool { config?.sortRecentFirst != true }
+    ///
+    /// Off in the folder-first lens too, and not because a move there is hard:
+    /// `move(_:by:)` reorders against the *project-first* layout, which that
+    /// list is not showing. A session whose next row on screen belongs to
+    /// another project has nothing to swap with and the move silently does
+    /// nothing; a loose one swaps with a whole folder block and persists an
+    /// order the list it came from cannot show — the invisible-write half of
+    /// the bug CLAUDE.md records for shift+↑↓. A disabled item says so; a
+    /// no-op does not. The upgrade, if it is ever wanted, is for
+    /// `ReorderSessions` to take the (folder, project) bucket's order the way
+    /// it already takes the project's.
+    public var canReorder: Bool { config?.sortRecentFirst != true && !folderView }
 
     // MARK: Agent table
     //
@@ -770,7 +846,9 @@ public final class AppState {
 
     private func refreshConfig() async {
         do {
-            config = try await withoutBlockingTheUI { [client] in try client.config() }
+            let answer = try await withoutBlockingTheUI { [client] in try client.config() }
+            config = answer.config
+            if answer.projectEmoji != projectEmoji { projectEmoji = answer.projectEmoji }
             connection = .connected
         } catch {
             // Deliberately leaves the last-good config in place; a failed call
@@ -868,6 +946,7 @@ public final class AppState {
                         notifier?.report(previous: previous, current: views)
                     }
                     if snapshot.rows != rows { rows = snapshot.rows }
+                    if snapshot.folderRows != folderRows { folderRows = snapshot.folderRows }
                     adopt(sessions: snapshot.sessions)
                     if let err = snapshot.err, err == pendingWatcherError {
                         set(statusError: err)
@@ -1030,6 +1109,14 @@ public final class AppState {
 
             // Manual reordering is off while the core sorts by last-opened.
             assert(app.canReorder, "no config yet must not disable reordering")
+            // ...and off in the folder-first lens, whose rows `move(_:by:)`
+            // does not reorder against — see `canReorder`.
+            app.folderFirst = true
+            assert(app.canReorder, "the preference alone is not the folder lens")
+            app.folderRows = [FolderRow(kind: .session, folder: "f", project: "p", id: "a")]
+            assert(!app.canReorder, "reordering is off while the folder lens is on screen")
+            app.folderRows = []
+            app.folderFirst = false
         }
 
         // Collapsing a project hides its rows, so ⌘↓/⌘↑ must step past them —
@@ -1327,8 +1414,17 @@ public final class AppState {
 
     static let autoFocusNewSessionKey = "autoFocusNewSession"
 
-    /// Point size for the sidebar's session rows; project and folder headers
-    /// draw 2pt larger (`headerFontSize`). `UserDefaults` for the same reason
+    /// Group the sidebar by folder rather than by project. `UserDefaults` for
+    /// the same reason as `diffTool`: which way this window is looking at the
+    /// same list is not something the core or the TUI has any use for.
+    public var folderFirst: Bool = UserDefaults.standard.bool(forKey: folderFirstKey) {
+        didSet { UserDefaults.standard.set(folderFirst, forKey: Self.folderFirstKey) }
+    }
+
+    static let folderFirstKey = "folderFirst"
+
+    /// Point size for the whole sidebar — headers included, at the same size as
+    /// the rows they head. `UserDefaults` for the same reason
     /// as `diffTool` — the core serves no such field and the TUI has no use
     /// for it.
     public var listFontSize: Double = UserDefaults.standard.object(forKey: listFontSizeKey) as? Double
@@ -1337,8 +1433,6 @@ public final class AppState {
     }
 
     static let listFontSizeKey = "listFontSize"
-
-    public var headerFontSize: Double { listFontSize + 2 }
 
     /// Font family for the sidebar. Empty means the system font, which is the
     /// default and what every other Mac app's sidebar uses.
@@ -1500,9 +1594,12 @@ public final class AppState {
     /// sidebar refreshes once at the end rather than per member; members
     /// already in the wanted state are skipped, which also makes this a no-op
     /// when there is nothing to do.
+    /// An empty `project` means every project, which is what a folder header in
+    /// the folder-first sidebar is: one folder spanning all of them.
     public func setArchived(project: String, folder: String, _ archived: Bool) {
         let ids = sessions
-            .filter { $0.project == project && $0.folder == folder && $0.archived != archived }
+            .filter { (project.isEmpty || $0.project == project) && $0.folder == folder
+                && $0.archived != archived }
             .map(\.id)
         guard !ids.isEmpty else { return }
         mutate(archived ? "Archive folder" : "Unarchive folder") { client in

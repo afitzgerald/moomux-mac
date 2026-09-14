@@ -243,12 +243,15 @@ private struct ProjectsPane: View {
 }
 
 private struct ProjectRow: View {
+    @Environment(AppState.self) private var app
     let name: String
     let project: Project?
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(project?.emoji ?? "").frame(width: 20)
+            // The effective glyph, not the stored one, so this list shows what
+            // the sidebar shows for a project that never chose an emoji.
+            Text(app.emoji(for: name) ?? "").frame(width: 20)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(name)
@@ -313,11 +316,13 @@ struct ProjectSheet: View {
                               + "Can't be changed while the project has sessions.")
                 }
                 TextField("Emoji", text: $form.emoji, prompt: Text("none"))
-                    // No palette picker: `config.ProjectEmojiPalette` is a Go
-                    // table nothing serves over IPC, and this app must not keep
-                    // a copy to drift. ⌃⌘Space is macOS's own picker.
-                    .help("Shown in place of the name in the TUI's compact views. "
-                          + "Left empty, the TUI picks one and this app shows none.")
+                    // No palette picker: the core serves the *resolved* glyph
+                    // (`project_emoji`), not the palette behind it, and a copy
+                    // of that Go table here would be a second one to drift.
+                    // ⌃⌘Space is macOS's own picker.
+                    .help("Shown in place of the name in the TUI's compact views, "
+                          + "and beside it here. Left empty, both front ends draw "
+                          + "the same glyph picked from the project's name.")
             }
             .formStyle(.grouped)
             .textFieldStyle(.roundedBorder)
@@ -492,7 +497,7 @@ private struct AppearancePane: View {
             } header: {
                 Text("Session list")
             } footer: {
-                Text("Project and folder headers draw 2pt larger. This app only — the TUI "
+                Text("Sets the whole sidebar, headers included. This app only — the TUI "
                      + "renders in whatever font your terminal is set to.")
                 .font(.caption)
             }
