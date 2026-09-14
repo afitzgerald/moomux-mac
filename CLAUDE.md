@@ -14,9 +14,11 @@ Settings names (⌘D) — and
 creates, renames, retags, re-agents, archives, reorders, kills and deletes them. Sessions file into
 folders — one flat *global* namespace, the core's own (`SetSessionFolder`, `CreateFolder`,
 `RenameFolder`, `DeleteFolder`, `SetFolderCollapsed`, none of which takes a project), laid out by
-the core as `Snapshot.Rows` — still project-first, a folder header per project that has members —
-and both a folder and a whole project fold away, the project's state through `SetProjectCollapsed`
-so it survives a restart and reads the same in every front end. Creating one asks
+the core as `Snapshot.Rows` — project-first, a folder header per project that has members — or, with
+the Folders toggle on (⇧⌘F), as `Snapshot.FolderRows`: folders at the top level, a project subheader
+under each, and everything filed nowhere last. Both a folder and a whole project fold away, the
+project's state through `SetProjectCollapsed` so it survives a restart and reads the same in every
+front end. Creating one asks
 the same questions the TUI's dialog does — agent, model, thinking level, branch and base branch
 included — because the core serves the table those pickers are built from (`AgentOptions`). ⌘,
 manages projects (add, edit, remove, reorder, and the "that path isn't a git repo" choice) and the
@@ -369,8 +371,44 @@ to fix in Go, not a reason to link the core.
   since membership and the folder table are two writes and a header you can see but cannot file
   into is the worse half. Dropping a session onto a folder header files it there whatever project
   the header is drawn under, for the same reason; `project` still gates a drop on a *project*
-  header, which is the un-file case. `Snapshot.FolderRows` — the core's folder-first layout — is
-  ignored: this app groups by project and there is no screen that wants the other way round.
+  header, which is the un-file case.
+- **The sidebar has two lenses, and the core lays out both.** Project-first (`Snapshot.Rows`) is the
+  default; the Folders toolbar toggle (⇧⌘F, `AppState.folderFirst`, `UserDefaults`) swaps it for
+  `Snapshot.FolderRows` — every folder at the top level with a project subheader under it, then the
+  sessions filed nowhere, by project, last. `Layout.folderRows` filters that to the window the same
+  way `Layout.rows` does: a header with nothing in view is not drawn, a collapsed one carries the
+  count of what it hides — the *number* is spoken, not drawn: no header renders a count badge any
+  more, and `count`/`hidden` survive on the rows to decide what is drawn at all and to fill the
+  accessibility labels — and a search reaches inside both. Indentation is one rule in both lenses,
+  and it is a **column grid**, not a per-row padding: `SidebarGrid` lays every row out as
+  `[indent][disclosure][icon][name]` with the disclosure and icon columns fixed-width, left *empty*
+  rather than skipped by a row that has neither. So a name's x follows from its nesting level and
+  nothing else — not whether the row has a chevron, not whether a project set an emoji, not the
+  glyph metrics of whatever font the sidebar is set to. A session sits one level in from whatever
+  header it is grouped under (project › session is one, folder › project › session two), and pays
+  for the chevron column it does not use in its leading padding (`SidebarGrid.rowIndent`). One knob,
+  `SidebarGrid.step`; the pair of hand-tuned constants this replaced could not stay aligned when a
+  row's prefix changed width, which is exactly what an emoji-less project did. Two things
+  differ from the project-first list. A project *subheader* inside a folder folds **locally**
+  (`AppState.setFolderProject`, `UserDefaults`) rather than through `SetProjectCollapsed`: the same
+  project has a subheader under every folder it has members in, and folding all of them plus the
+  loose block at once is not what a disclosure triangle means. `Layout.folderRows` takes both as one
+  `collapsedGroups` set of `groupKey(folder:project:)`s — the loose block is the group whose folder
+  is "", so its keys come from the core's flag and a subheader's from here, and one rule covers both
+  (the loose block stays a real `ProjectHeader`, drop-to-unfile included). And a folder header there
+  spans projects, so its drop and its Archive All pass an empty `project`, which
+  `AppState.setArchived(project:folder:)` reads as "every project". The toggle is disabled while
+  `folderRows` is empty, and reads its *checked* state off `folderView` rather than the stored
+  preference — a remembered `folderFirst` against a core too old to send the layout would otherwise
+  draw it ticked and greyed over a project-first list, with no way to clear it. ⇧⌘F is the View
+  menu's "Group by Folder", and only the menu item's: a shortcut claimed by two views is ambiguous,
+  the same reason ⌘N lives on the File item and not on the toolbar button.
+  **Manual reordering is off in this lens** (`canReorder`), because `move(_:by:)` reorders against
+  the project-first layout: a session whose next row on screen belongs to another project has
+  nothing to swap with and the move silently does nothing, while a loose one swaps with a whole
+  folder block and persists an order this list cannot show — the invisible-write half of the
+  shift+↑↓ bug in the next bullet. The upgrade, if it is ever wanted, is `ReorderSessions` taking a
+  (folder, project) bucket's order the way it already takes a project's.
 - **A manual reorder sends the project's whole order, not a delta.** `MoveSession` still exists on
   the wire as a deprecated shim kept for this app alone; `ReorderSessions` takes the order the
   client is displaying, because the core re-deriving it from a list the client filters differently

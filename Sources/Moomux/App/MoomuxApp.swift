@@ -101,6 +101,19 @@ struct SessionCommands: Commands {
                 app.sidebarVisible.toggle()
             }
             .keyboardShortcut("s", modifiers: [.control, .command])
+            // How the sidebar is grouped is a View-menu question, and a folder
+            // glyph in the toolbar does not say what it does. The shortcut
+            // lives here rather than on that toolbar toggle for the same reason
+            // ⌘N lives on the File item: two views claiming one shortcut is
+            // ambiguous, and only one of them wins.
+            // `folderView`, not `folderFirst`, for the reason the toolbar
+            // toggle uses it: the item names the swap the list can actually do.
+            Button(app.folderView ? "Group by Project" : "Group by Folder") {
+                app.folderFirst = !app.folderView
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            // A core too old to send the folder-first layout has none to draw.
+            .disabled(app.folderRows.isEmpty)
         }
         CommandMenu("Session") {
             // The sidebar List's own up/down-arrow navigation stops working

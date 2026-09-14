@@ -32,6 +32,45 @@ extension ToolbarContent {
     }
 }
 
+/// The sidebar's one layout rule.
+///
+/// Every row — project header, folder header, project subheader, session — is
+/// laid out as `[indent][disclosure][icon][name]`, where the disclosure and
+/// icon columns are **fixed widths** that a row leaves empty rather than
+/// skipping. So a name's x depends on its nesting level and nothing else: not
+/// on whether the row has a chevron, not on whether a project set an emoji,
+/// and not on the glyph metrics of whatever font the user picked. A session
+/// row has no chevron, so it pays for that column in its leading padding.
+///
+/// This replaces two constants that had to be tuned against each other (a
+/// per-level step plus a fudge for the missing chevron) and still came out
+/// wrong whenever a row's prefix changed width.
+enum SidebarGrid {
+    /// The gap between columns, and between the icon and the name.
+    static let gap: CGFloat = 4
+
+    /// One level of nesting. The only knob: everything else follows from the
+    /// columns. 1.25em lands on the 16pt Finder uses at the system font size,
+    /// and scales with the sidebar font.
+    static func step(_ font: Double) -> CGFloat { CGFloat(font) * 1.25 }
+    /// The disclosure triangle's column, occupied or not.
+    static func disclosure(_ font: Double) -> CGFloat { CGFloat(font) }
+    /// The folder glyph / project emoji / session state dot column.
+    static func icon(_ font: Double) -> CGFloat { CGFloat(font) * 1.25 }
+
+    /// A header's leading inset at `level`.
+    static func indent(_ level: Int, _ font: Double) -> CGFloat {
+        CGFloat(level) * step(font)
+    }
+
+    /// A session row's, which is a header's plus the chevron column it has no
+    /// chevron for — that is what puts its dot one clean step right of the
+    /// icon of the header it belongs to.
+    static func rowIndent(_ level: Int, _ font: Double) -> CGFloat {
+        indent(level, font) + disclosure(font) + gap
+    }
+}
+
 /// The colors this app draws sessions with. Every one of them comes from the
 /// core's `Themes` table now — no hardcoded palette here, and no literal hex
 /// outside `resolve`, which honours both halves of a served light/dark pair.
@@ -210,6 +249,23 @@ struct RootView: View {
                     // ⌘G is Review Changes; the grid is the shifted one.
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                     .help("Every live session at once, read-only. Click one to open it.")
+            }
+            ToolbarItem {
+                // Bound to what the sidebar is actually drawing, not to the
+                // stored preference: with `folderFirst` remembered true, a core
+                // that sends no folder layout would otherwise draw this checked
+                // *and* disabled over a project-first list, with no way to
+                // clear it. Writing still sets the preference.
+                Toggle(isOn: Binding(get: { app.folderView },
+                                     set: { app.folderFirst = $0 })) {
+                    Label("Folders", systemImage: "folder")
+                }
+                    // ⇧⌘F lives on the View menu item, not here.
+                    .help("Group the sidebar by folder instead of by project (⇧⌘F)")
+                    // A core too old to send a folder-first layout has none to
+                    // draw; a toggle that could only empty the sidebar is worse
+                    // than one that is off.
+                    .disabled(app.folderRows.isEmpty)
             }
             ToolbarItem {
                 Toggle(isOn: $app.showArchived) { Label("Archived", systemImage: "archivebox") }
@@ -669,42 +725,10 @@ private struct SessionList: View {
     var body: some View {
         @Bindable var app = app
         List(selection: $app.selectedSessionID) {
-            ForEach(app.sessionsByProject, id: \.project) { group in
-                // Not `Section`: a sidebar section keeps its *own* hidden
-                // disclosure state, a click on the header drives that as well
-                // as ours, and the two fall out of phase the moment a project
-                // is collapsed at launch — SwiftUI starts expanded, so the
-                // first click on a folded project expanded ours and collapsed
-                // its, and the rows stayed away. Plain rows have no such
-                // state, and they are what lets a collapsed project keep the
-                // attached session's row on screen. Both measured.
-                ProjectHeader(
-                    name: group.project,
-                    hidden: group.sessions.count - app.shownSessions(
-                        of: group.project, in: group.sessions
-                    ).count
-                )
-                // Untagged, but the List will still "select" it: a click in
-                // the row's leading inset misses the header's own
-                // `contentShape`, falls through, highlights the row and nils
-                // the session selection. Two outcomes for one row, and one of
-                // them threw away state.
-                .selectionDisabled()
-                // The core lays the rows out (`sessionview.Rows`); this walks
-                // them. A folder header is a plain row for the same reason a
-                // project header is — a selectable row would take the List's
-                // selection, and there is no session behind it.
-                ForEach(app.sidebarRows(of: group.project, in: group.sessions)) { row in
-                    switch row {
-                    case let .folder(name, collapsed, count):
-                        FolderHeader(project: group.project, name: name,
-                                     collapsed: collapsed, count: count)
-                            .selectionDisabled()
-                    case let .session(session, folder):
-                        SessionRow(session: session, indented: !folder.isEmpty).tag(session.id)
-                    }
-                }
-            }
+            // Two lenses on the same rows, both laid out by the core. Which one
+            // is on screen is a `UserDefaults` preference (`folderFirst`), and
+            // a core too old to send a folder-first layout keeps this one.
+            if app.folderView { folderFirst } else { projectFirst }
         }
         .searchable(text: $app.searchQuery, placement: .sidebar, prompt: "Find a session")
         // `.searchFocused` is macOS 15; the bundle targets 14. The field is
@@ -721,6 +745,123 @@ private struct SessionList: View {
                 // session is archived, which the Archived toggle explains.
                 ContentUnavailableView.search(text: app.searchQuery)
             }
+        }
+    }
+
+    @ViewBuilder private var projectFirst: some View {
+        ForEach(app.sessionsByProject, id: \.project) { group in
+            // Not `Section`: a sidebar section keeps its *own* hidden
+            // disclosure state, a click on the header drives that as well
+            // as ours, and the two fall out of phase the moment a project
+            // is collapsed at launch — SwiftUI starts expanded, so the
+            // first click on a folded project expanded ours and collapsed
+            // its, and the rows stayed away. Plain rows have no such
+            // state, and they are what lets a collapsed project keep the
+            // attached session's row on screen. Both measured.
+            ProjectHeader(
+                name: group.project,
+                hidden: group.sessions.count - app.shownSessions(
+                    of: group.project, in: group.sessions
+                ).count
+            )
+            // Untagged, but the List will still "select" it: a click in
+            // the row's leading inset misses the header's own
+            // `contentShape`, falls through, highlights the row and nils
+            // the session selection. Two outcomes for one row, and one of
+            // them threw away state.
+            .selectionDisabled()
+            // The core lays the rows out (`sessionview.Rows`); this walks
+            // them. A folder header is a plain row for the same reason a
+            // project header is — a selectable row would take the List's
+            // selection, and there is no session behind it.
+            ForEach(app.sidebarRows(of: group.project, in: group.sessions)) { row in
+                switch row {
+                case let .folder(name, collapsed, count):
+                    FolderHeader(project: group.project, name: name,
+                                 collapsed: collapsed, count: count)
+                        .selectionDisabled()
+                case let .session(session, folder):
+                    // One level in from its header, whichever it is: the
+                    // project header, or a folder header one level in itself.
+                    SessionRow(session: session, level: folder.isEmpty ? 1 : 2).tag(session.id)
+                }
+            }
+        }
+    }
+
+    /// `sessionview.FolderRows`: every folder at the top level with a project
+    /// subheader under it, then everything filed nowhere, by project, last.
+    /// One flat list rather than a `ForEach` per project — the folders are one
+    /// global namespace and their members span projects.
+    @ViewBuilder private var folderFirst: some View {
+        ForEach(app.folderSidebarRows) { row in
+            switch row {
+            case let .folder(name, collapsed, count):
+                // No project: this header is the whole folder, whatever
+                // projects its members come from, so a drop or an Archive All
+                // on it means all of them.
+                FolderHeader(project: "", name: name, collapsed: collapsed, count: count,
+                             level: 0)
+                    .selectionDisabled()
+            case let .project(folder, name, collapsed, hidden):
+                // The loose block's header is the project header proper —
+                // collapse through the core, drop-to-unfile and all. Inside a
+                // folder it is a group of its own, folding only itself.
+                if folder.isEmpty {
+                    ProjectHeader(name: name, hidden: hidden).selectionDisabled()
+                } else {
+                    FolderProjectHeader(folder: folder, name: name, collapsed: collapsed,
+                                        hidden: hidden)
+                        .selectionDisabled()
+                }
+            case let .session(session, indent):
+                SessionRow(session: session, level: indent).tag(session.id)
+            }
+        }
+    }
+}
+
+/// A project subheader inside a folder, folding only itself — the same plain
+/// row as the other two headers, one level in. Its collapse is this window's
+/// (`AppState.setFolderProject`), not `SetProjectCollapsed`: the same project
+/// has a subheader under every folder it has members in, and folding all of
+/// them plus the loose block at once is not what a disclosure triangle means.
+///
+/// No drop destination: a drop here would mean "file into this folder", which
+/// is exactly what the `FolderHeader` above it already takes.
+private struct FolderProjectHeader: View {
+    @Environment(AppState.self) private var app
+    let folder: String
+    let name: String
+    let collapsed: Bool
+    let hidden: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            // No font of its own: the row's is the list font, so the chevron
+            // draws at the size every other icon in the sidebar does. The
+            // colour is stated rather than inherited for the same reason — a
+            // subheader's row is secondary, and a disclosure triangle that
+            // changes shade with its row reads as a different control.
+            Image(systemName: "chevron.right")
+                .foregroundStyle(.secondary)
+                .frame(width: SidebarGrid.disclosure(app.listFontSize))
+                .rotationEffect(.degrees(collapsed ? 0 : 90))
+            Text(app.emoji(for: name) ?? "")
+                .frame(width: SidebarGrid.icon(app.listFontSize))
+            Text(name)
+        }
+        .font(Theme.list(app.listFontFamily, app.listFontSize))
+        .foregroundStyle(.secondary)
+        .padding(.leading, SidebarGrid.indent(1, app.listFontSize))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { app.setFolderProject(folder: folder, project: name, expanded: collapsed) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(collapsed ? "\(name), collapsed, \(hidden) sessions" : name)
+        .accessibilityAction {
+            app.setFolderProject(folder: folder, project: name, expanded: collapsed)
         }
     }
 }
@@ -755,19 +896,22 @@ private struct ProjectHeader: View {
         // steal the List's selection the way one on a row would.
         let expanded = app.projectExpanded(name)
         HStack(spacing: 4) {
+            // No font of its own: the row's is the list font, so the chevron
+            // draws at the size every other icon in the sidebar does. The
+            // colour is stated rather than inherited for the same reason — a
+            // subheader's row is secondary, and a disclosure triangle that
+            // changes shade with its row reads as a different control.
             Image(systemName: "chevron.right")
-                .font(.system(size: app.headerFontSize * 0.7, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: SidebarGrid.disclosure(app.listFontSize))
                 .rotationEffect(.degrees(expanded ? 90 : 0))
-            if let emoji = app.emoji(for: name) { Text(emoji) }
+            Text(app.emoji(for: name) ?? "")
+                .frame(width: SidebarGrid.icon(app.listFontSize))
             Text(name)
-            if !expanded, hidden > 0 {
-                Text("\(hidden)")
-                    .monospacedDigit()
-                    .padding(.horizontal, 5)
-                    .background(Capsule().fill(.quaternary))
-            }
         }
-        .font(Theme.list(app.listFontFamily, app.headerFontSize))
+        .font(Theme.list(app.listFontFamily, app.listFontSize))
+        // Level 0 in both lenses: a project header is either the top of the
+        // list or the top of the trailing loose block.
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setProject(name, expanded: !expanded) }
@@ -792,25 +936,29 @@ private struct FolderHeader: View {
     let name: String
     let collapsed: Bool
     let count: Int
+    /// How many levels in: one under a project header, none in the
+    /// folder-first sidebar, where a folder *is* the top level.
+    var level = 1
     @State private var targeted = false
 
     var body: some View {
         HStack(spacing: 4) {
+            // No font of its own: the row's is the list font, so the chevron
+            // draws at the size every other icon in the sidebar does. The
+            // colour is stated rather than inherited for the same reason — a
+            // subheader's row is secondary, and a disclosure triangle that
+            // changes shade with its row reads as a different control.
             Image(systemName: "chevron.right")
-                .font(.system(size: app.headerFontSize * 0.7, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: SidebarGrid.disclosure(app.listFontSize))
                 .rotationEffect(.degrees(collapsed ? 0 : 90))
             Image(systemName: collapsed ? "folder.fill" : "folder")
                 .foregroundStyle(.secondary)
+                .frame(width: SidebarGrid.icon(app.listFontSize))
             Text(name)
-            if collapsed, count > 0 {
-                Text("\(count)")
-                    .monospacedDigit()
-                    .padding(.horizontal, 5)
-                    .background(Capsule().fill(.quaternary))
-            }
         }
-        .font(Theme.list(app.listFontFamily, app.headerFontSize))
-        .padding(.leading, app.listFontSize)
+        .font(Theme.list(app.listFontFamily, app.listFontSize))
+        .padding(.leading, SidebarGrid.indent(level, app.listFontSize))
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setFolder(name: name, collapsed: !collapsed) }
@@ -837,9 +985,10 @@ private struct FolderHeader: View {
 private struct SessionRow: View {
     @Environment(AppState.self) private var app
     let session: Session
-    /// Set for a session inside a folder — straight off its row, so nothing
-    /// here has to join back to the folder to know.
-    var indented = false
+    /// How many levels in the row sits — straight off its layout row, so
+    /// nothing here has to join back to a folder to know. 1 under a project
+    /// header, 2 under a folder-then-project pair.
+    var level = 0
 
     var body: some View {
         let state = app.state(for: session)
@@ -847,9 +996,10 @@ private struct SessionRow: View {
         // centred on it — baseline-aligning it against a two-line VStack put it
         // a point or two off the name, and more so the larger the font gets.
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
+            HStack(spacing: SidebarGrid.gap) {
                 Image(systemName: state.symbol)
                     .foregroundStyle(Theme.color(state, app.palette))
+                    .frame(width: SidebarGrid.icon(app.listFontSize))
                     .help(app.label(for: session))
                 Text(session.name)
                     .lineLimit(1)
@@ -914,7 +1064,7 @@ private struct SessionRow: View {
         // row sets its own size below.
         .font(Theme.list(app.listFontFamily, app.listFontSize))
         .padding(.vertical, 2)
-        .padding(.leading, indented ? app.listFontSize : 0)
+        .padding(.leading, SidebarGrid.rowIndent(level, app.listFontSize))
         // The payload is the session id as a plain string — no custom UTType,
         // which would need an Info.plist declaration to be worth anything.
         // The cost is that dragging a row into a text field types its id;

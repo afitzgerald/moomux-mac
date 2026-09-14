@@ -612,6 +612,66 @@ public struct Row: Decodable, Hashable, Sendable {
     }
 }
 
+/// `sessionview.FolderRow` — one line of the **folder-first** layout: folders
+/// at the top level, a project subheader under each, that project's members
+/// under that, and everything filed nowhere last as a project block of its own.
+///
+/// A separate type from `Row` rather than a discriminator bolted onto it,
+/// because the two layouts genuinely differ — this one has three levels and
+/// inverts the outer two — and `kind` is always set, so nothing infers a row's
+/// shape from which fields happen to be empty.
+public struct FolderRow: Decodable, Hashable, Sendable {
+    public enum Kind: String, Decodable, Sendable { case folder, project, session }
+
+    public var kind: Kind
+    /// The folder this row sits under, or is the header for. Empty on the
+    /// loose block that follows every folder.
+    public var folder: String
+    /// The project a subheader names, and the project a session belongs to.
+    /// Empty on a folder header, which spans projects.
+    public var project: String
+    /// The session this row draws; empty on either header kind.
+    public var id: String
+    /// A folder header's state. Its subtree is still here, marked `hidden`.
+    public var collapsed: Bool
+    public var hidden: Bool
+    public var count: Int
+    public var archivedCount: Int
+
+    public init(kind: Kind, folder: String = "", project: String = "", id: String = "",
+                collapsed: Bool = false, hidden: Bool = false, count: Int = 0,
+                archivedCount: Int = 0) {
+        self.kind = kind
+        self.folder = folder
+        self.project = project
+        self.id = id
+        self.collapsed = collapsed
+        self.hidden = hidden
+        self.count = count
+        self.archivedCount = archivedCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind, folder, project, id, collapsed, hidden, count
+        case archivedCount = "archived_count"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // A kind this app has never heard of decodes as a session with no id,
+        // which every renderer drops — one new row kind must not take the
+        // whole snapshot down with it.
+        kind = Kind(rawValue: try c.decodeIfPresent(String.self, forKey: .kind) ?? "") ?? .session
+        folder = try c.decodeIfPresent(String.self, forKey: .folder) ?? ""
+        project = try c.decodeIfPresent(String.self, forKey: .project) ?? ""
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        count = try c.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        archivedCount = try c.decodeIfPresent(Int.self, forKey: .archivedCount) ?? 0
+    }
+}
+
 public struct Snapshot: Decodable, Sendable {
     /// Already sorted by the core, live-first tiebreak included. A client
     /// filters this and renders it; it does not sort.
@@ -622,6 +682,10 @@ public struct Snapshot: Decodable, Sendable {
     /// spliced in. Absent from a core older than folders, which is what the
     /// caller's fallback (one loose row per session) is for.
     public var rows: [String: [Row]]
+    /// The same sessions laid out folder-first, one flat list across every
+    /// project. Empty from a core that predates it, which is what the sidebar's
+    /// fall back to the project-first list is for.
+    public var folderRows: [FolderRow]
     public var pollTime: Date
     public var err: String?
     /// False when the snapshot carried no `views` key at all: a core older
@@ -635,6 +699,7 @@ public struct Snapshot: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case sessions, views, rows, err
+        case folderRows = "folder_rows"
         case pollTime = "poll_time"
     }
 
@@ -643,6 +708,7 @@ public struct Snapshot: Decodable, Sendable {
         sessions = try c.decodeIfPresent([Session].self, forKey: .sessions) ?? []
         views = try c.decodeIfPresent([String: SessionView].self, forKey: .views) ?? [:]
         rows = try c.decodeIfPresent([String: [Row]].self, forKey: .rows) ?? [:]
+        folderRows = try c.decodeIfPresent([FolderRow].self, forKey: .folderRows) ?? []
         pollTime = try c.decodeIfPresent(Date.self, forKey: .pollTime) ?? Date()
         err = try c.decodeIfPresent(String.self, forKey: .err)
         // Present-but-null counts: a core with no sessions at all sends
