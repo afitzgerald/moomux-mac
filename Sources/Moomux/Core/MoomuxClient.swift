@@ -67,7 +67,10 @@ public final class MoomuxClient: Sendable {
         /// `RenameFolder`'s target name — `name` carries the old one there,
         /// same as every other folder method's single folder-name parameter.
         var newName: String?
-        /// The project a folder method acts on.
+        /// The project a method acts on — `SetProjectCollapsed` and the
+        /// project CRUD. No folder method sends it any more: the namespace is
+        /// global, and the core would accept and ignore the key rather than
+        /// refuse it.
         var project: String?
         var agent: String?
         var ticket: String?
@@ -115,12 +118,24 @@ public final class MoomuxClient: Sendable {
         var cfg: Config?
         var agents: [AgentOption]?
         var themes: [ThemePalette]?
+        /// Project name → the glyph to draw: the project's own `emoji` when it
+        /// set one, and `config.ProjectEmojiPalette`'s deterministic pick when
+        /// it did not. A sibling of `cfg` rather than a field on each project,
+        /// because `UpdateProject` replaces the whole record — a front end that
+        /// round-tripped it would save a palette pick as the user's own choice,
+        /// the trap `collapsed` already has. Serve-only: never sent back.
+        var projectEmoji: [String: String]?
         var hint: String?
         var ok: Bool?
         var dirty: Bool?
         var unpushed: Bool?
         var files: Int?
         var commits: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits
+            case projectEmoji = "project_emoji"
+        }
     }
 
     /// What the core can say about a session's worktree, on demand.
@@ -177,9 +192,13 @@ public final class MoomuxClient: Sendable {
         return response.result ?? CallResult()
     }
 
-    public func config() throws -> Config {
-        guard let cfg = try call("Config").cfg else { throw Failure.emptyResponse }
-        return cfg
+    /// The config, and the emoji table that comes with it — empty from a core
+    /// too old to send one, which is what leaves the sidebar drawing the
+    /// project's own emoji or nothing, exactly as it did before.
+    public func config() throws -> (config: Config, projectEmoji: [String: String]) {
+        let result = try call("Config")
+        guard let cfg = result.cfg else { throw Failure.emptyResponse }
+        return (cfg, result.projectEmoji ?? [:])
     }
 
     /// Which agents the core can launch, and the model/thinking choices worth
@@ -313,9 +332,10 @@ public final class MoomuxClient: Sendable {
     // MARK: - Folders
     //
     // The split the core makes: a folder's display state lives in config under
-    // `Project.folders`, its membership on each session. So a rename or a
-    // delete rewrites both, and `SetSessionFolder` is the one session mutator
-    // that also creates a folder.
+    // `Config.folders` — one flat *global* namespace, which is why none of
+    // these takes a project — and its membership on each session. So a rename
+    // or a delete rewrites both, in every project, and `SetSessionFolder` is
+    // the one session mutator that also creates a folder.
 
     /// An empty `folder` files the session back at the top level. A name that
     /// does not exist yet is created by this call.
@@ -323,22 +343,24 @@ public final class MoomuxClient: Sendable {
         try call("SetSessionFolder", Args(id: id, name: folder))
     }
 
-    public func createFolder(project: String, name: String) throws {
-        try call("CreateFolder", Args(name: name, project: project))
+    /// Refused if any project is already using the name — the namespace is
+    /// global, so a second `auth` is a collision rather than a second folder.
+    public func createFolder(name: String) throws {
+        try call("CreateFolder", Args(name: name))
     }
 
-    public func renameFolder(project: String, from old: String, to new: String) throws {
-        try call("RenameFolder", Args(name: old, newName: new, project: project))
+    public func renameFolder(from old: String, to new: String) throws {
+        try call("RenameFolder", Args(name: old, newName: new))
     }
 
     /// Deletes the folder and files every member back at the top level; no
     /// session is removed.
-    public func deleteFolder(project: String, name: String) throws {
-        try call("DeleteFolder", Args(name: name, project: project))
+    public func deleteFolder(name: String) throws {
+        try call("DeleteFolder", Args(name: name))
     }
 
-    public func setFolderCollapsed(project: String, name: String, _ on: Bool) throws {
-        try call("SetFolderCollapsed", Args(name: name, project: project, on: on))
+    public func setFolderCollapsed(name: String, _ on: Bool) throws {
+        try call("SetFolderCollapsed", Args(name: name, on: on))
     }
 
     /// Whether the project's own sidebar group is folded away. Display state,
@@ -569,14 +591,16 @@ public final class MoomuxClient: Sendable {
                + #""prompt_agent":false,"repo":"/src/site"}},"method":"AddProject"}"#, addProject)
 
         // The two folder args: a rename carries the old name in `name` and the
-        // new one in `new_name`, and every folder method names its project.
+        // new one in `new_name`. No project — folders are a global namespace,
+        // and a stray `project` key would be accepted and ignored rather than
+        // refused, so it has to be left off here.
         // The keys are snake_case on the wire; a mismatch here is silent on
         // both sides — Go ignores the unknown key and uses the zero value.
         let rename = String(
             decoding: try! encoder.encode(Request(method: "RenameFolder", args: Args(
-                name: "wip", newName: "done", project: "moomux"))),
+                name: "wip", newName: "done"))),
             as: UTF8.self)
-        assert(rename == #"{"args":{"name":"wip","new_name":"done","project":"moomux"},"#
+        assert(rename == #"{"args":{"name":"wip","new_name":"done"},"#
                + #""method":"RenameFolder"}"#, rename)
 
         // A reorder sends the project's whole resulting order, not a delta.

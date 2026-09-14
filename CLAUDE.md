@@ -12,10 +12,13 @@ snapshots,
 opens its diff for review in a tmux window of its own — or in whatever GUI diff tool
 Settings names (⌘D) — and
 creates, renames, retags, re-agents, archives, reorders, kills and deletes them. Sessions file into
-per-project folders — the core's own (`SetSessionFolder`, `CreateFolder`, `RenameFolder`,
-`DeleteFolder`, `SetFolderCollapsed`), laid out by the core as `Snapshot.Rows` and rendered here —
-and both a folder and a whole project fold away, the project's state through `SetProjectCollapsed`
-so it survives a restart and reads the same in every front end. Creating one asks
+folders — one flat *global* namespace, the core's own (`SetSessionFolder`, `CreateFolder`,
+`RenameFolder`, `DeleteFolder`, `SetFolderCollapsed`, none of which takes a project), laid out by
+the core as `Snapshot.Rows` — project-first, a folder header per project that has members — or, with
+the Folders toggle on (⇧⌘F), as `Snapshot.FolderRows`: folders at the top level, a project subheader
+under each, and everything filed nowhere last. Both a folder and a whole project fold away, the
+project's state through `SetProjectCollapsed` so it survives a restart and reads the same in every
+front end. Creating one asks
 the same questions the TUI's dialog does — agent, model, thinking level, branch and base branch
 included — because the core serves the table those pickers are built from (`AgentOptions`). ⌘,
 manages projects (add, edit, remove, reorder, and the "that path isn't a git repo" choice) and the
@@ -42,6 +45,35 @@ every other worktree too.
   that is now a choice rather than a constraint.
 - SwiftUI, AppKit, `@Observable`, `MenuBarExtra`, `Settings`, UserNotifications and Network all
   compile fine. So does libghostty, as a prebuilt binary target.
+- **The macOS 27 SDK cannot build this package, so the Makefile pins `SDKROOT` to `MacOSX26.sdk`.**
+  CommandLineTools symlinks `MacOSX.sdk` at the 27.0 SDK while the installed swift-frontend still
+  targets `macosx26.0`, and that SDK's `SwiftUICore` declares a `State()` *macro* beside the
+  property wrapper — `#externalMacro(module: "SwiftUIMacros")`, a plugin that ships with Xcode.
+  The only plugins in `/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/` are
+  `libObservationMacros.dylib` and `libSwiftMacros.dylib`, so every `@State` in `UI/` dies with
+  `plugin for module 'SwiftUIMacros' not found` and the whole build fails, in files nobody
+  touched. Same family as the `#Preview` constraint, now reaching a core property wrapper.
+  Which SDK declares what:
+
+  ```sh
+  for s in 26.5 27.0; do echo "== $s"; rg -c 'macro State' \
+    /Library/Developer/CommandLineTools/SDKs/MacOSX$s.sdk/System/Library/Frameworks/\
+SwiftUICore.framework/Modules/SwiftUICore.swiftmodule/arm64e-apple-macos.swiftinterface; done
+  # == 26.5   no match — property wrapper only
+  # == 27.0   3
+  ```
+
+  A bare `swift build` does **not** get the pin — the `make` targets export it, so pass
+  `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk` by hand or it fails the same way.
+  Two `ld: warning: search path '/Library/Developer/CommandLineTools/Developer/...' not found`
+  lines come with it: toolchain directories that no longer exist. Linker warnings from the
+  toolchain, not compiler warnings from this package — `make warnings` is still the zero.
+- **`swiftbuild` is the default build engine now, and it lays the resource bundle out differently.**
+  It emits a `Contents/Resources`-style `GhosttyKit_GhosttyTerminal.bundle`; the older `native`
+  engine emits a flat one. `make app` picks whichever exists (`GHOSTTY_RES`), so a
+  `Makefile.local` that still selects `--build-system native` keeps working. Hardcoding either
+  layout fails as `cp: .../Ghostty/themes: No such file or directory`, which reads like a missing
+  build step rather than a moved directory.
 - Notarization needs no Xcode — `notarytool` and `stapler` are in CommandLineTools — so `make dist`
   and `make notarize` work here, and `.github/workflows/release.yml` runs the same `notarize`
   target on a `macos-15` runner. A Developer ID certificate is the only piece Xcode would not have
@@ -323,9 +355,60 @@ to fix in Go, not a reason to link the core.
   alert, and the stray click dismisses the alert — so the action silently never runs. Click an
   alert's button by coordinate (`find` prints them) rather than by label.
 - **`UpdateProject` replaces the whole project record**, so anything this app does not send back
-  is deleted — which now includes `folders` and `collapsed`. `ProjectForm` carries both through
-  untouched for exactly that reason (`Project`'s round-trip assert in `ProjectForm.demo` is the
-  check), the same way `kind` is restored by the core.
+  is deleted — which includes `collapsed`. `ProjectForm` carries it through untouched for exactly
+  that reason (`Project`'s round-trip assert in `ProjectForm.demo` is the check), the same way
+  `kind` is restored by the core. Folders live on `Config.folders` now, one global table, and a
+  current core keeps `config.Project.Folders` off the wire entirely (`json:"-"`) — so `Project.folders`
+  decodes nil and is never sent. It is kept only for version skew: this app upgrades through its own
+  cask and can run a release ahead of the core, where dropping the field would delete an old core's
+  per-project folder table on the first project edit. Delete it when no such core is left.
+- **Folders are global, and three behaviours changed with it.** `CreateFolder` refuses a name any
+  project already uses; `SetFolderCollapsed` folds the folder in *every* project at once; and
+  `DeleteFolder`/`RenameFolder` rewrite members across every project, however few of them the
+  header you clicked was showing. `AppState.folderNames` is the whole namespace, ordered the way
+  `sessionview.FolderOrder` does it (`order` ascending, 0 last, ties by name), which is what the
+  "file this session under…" menu offers — unioned with the names the sessions themselves claim,
+  since membership and the folder table are two writes and a header you can see but cannot file
+  into is the worse half. Dropping a session onto a folder header files it there whatever project
+  the header is drawn under, for the same reason; `project` still gates a drop on a *project*
+  header, which is the un-file case.
+- **The sidebar has two lenses, and the core lays out both.** Project-first (`Snapshot.Rows`) is the
+  default; the Folders toolbar toggle (⇧⌘F, `AppState.folderFirst`, `UserDefaults`) swaps it for
+  `Snapshot.FolderRows` — every folder at the top level with a project subheader under it, then the
+  sessions filed nowhere, by project, last. `Layout.folderRows` filters that to the window the same
+  way `Layout.rows` does: a header with nothing in view is not drawn, a collapsed one carries the
+  count of what it hides — the *number* is spoken, not drawn: no header renders a count badge any
+  more, and `count`/`hidden` survive on the rows to decide what is drawn at all and to fill the
+  accessibility labels — and a search reaches inside both. Indentation is one rule in both lenses,
+  and it is a **column grid**, not a per-row padding: `SidebarGrid` lays every row out as
+  `[indent][disclosure][icon][name]` with the disclosure and icon columns fixed-width, left *empty*
+  rather than skipped by a row that has neither. So a name's x follows from its nesting level and
+  nothing else — not whether the row has a chevron, not whether a project set an emoji, not the
+  glyph metrics of whatever font the sidebar is set to. A session sits one level in from whatever
+  header it is grouped under (project › session is one, folder › project › session two), and pays
+  for the chevron column it does not use in its leading padding (`SidebarGrid.rowIndent`). One knob,
+  `SidebarGrid.step`; the pair of hand-tuned constants this replaced could not stay aligned when a
+  row's prefix changed width, which is exactly what an emoji-less project did. Two things
+  differ from the project-first list. A project *subheader* inside a folder folds **locally**
+  (`AppState.setFolderProject`, `UserDefaults`) rather than through `SetProjectCollapsed`: the same
+  project has a subheader under every folder it has members in, and folding all of them plus the
+  loose block at once is not what a disclosure triangle means. `Layout.folderRows` takes both as one
+  `collapsedGroups` set of `groupKey(folder:project:)`s — the loose block is the group whose folder
+  is "", so its keys come from the core's flag and a subheader's from here, and one rule covers both
+  (the loose block stays a real `ProjectHeader`, drop-to-unfile included). And a folder header there
+  spans projects, so its drop and its Archive All pass an empty `project`, which
+  `AppState.setArchived(project:folder:)` reads as "every project". The toggle is disabled while
+  `folderRows` is empty, and reads its *checked* state off `folderView` rather than the stored
+  preference — a remembered `folderFirst` against a core too old to send the layout would otherwise
+  draw it ticked and greyed over a project-first list, with no way to clear it. ⇧⌘F is the View
+  menu's "Group by Folder", and only the menu item's: a shortcut claimed by two views is ambiguous,
+  the same reason ⌘N lives on the File item and not on the toolbar button.
+  **Manual reordering is off in this lens** (`canReorder`), because `move(_:by:)` reorders against
+  the project-first layout: a session whose next row on screen belongs to another project has
+  nothing to swap with and the move silently does nothing, while a loose one swaps with a whole
+  folder block and persists an order this list cannot show — the invisible-write half of the
+  shift+↑↓ bug in the next bullet. The upgrade, if it is ever wanted, is `ReorderSessions` taking a
+  (folder, project) bucket's order the way it already takes a project's.
 - **A manual reorder sends the project's whole order, not a delta.** `MoveSession` still exists on
   the wire as a deprecated shim kept for this app alone; `ReorderSessions` takes the order the
   client is displaying, because the core re-deriving it from a list the client filters differently

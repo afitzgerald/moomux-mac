@@ -6,6 +6,26 @@ CONFIG ?= release
 # Extra flags for every `swift build` invocation. Empty by default; a machine
 # with a broken default toolchain sets this in Makefile.local instead of here.
 SWIFT_BUILD_FLAGS ?=
+# Pin the SDK to macOS 26. CommandLineTools symlinks MacOSX.sdk at the 27.0 SDK
+# while the installed swift-frontend targets macosx26.0, and the 27.0
+# SwiftUICore declares a `State()` *macro* beside the property wrapper:
+#   public macro State() = #externalMacro(module: "SwiftUIMacros", type: "StateMacro")
+# That plugin ships with Xcode, not with CommandLineTools (which carries only
+# libObservationMacros and libSwiftMacros), so every `@State` in UI/ fails with
+# "plugin for module 'SwiftUIMacros' not found" and nothing builds — in files
+# nobody touched. Same family as the #Preview constraint, now reaching a core
+# property wrapper. Assert it rather than believing this comment:
+#   rg -c 'macro State' /Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk/System/\
+#     Library/Frameworks/SwiftUICore.framework/Modules/SwiftUICore.swiftmodule/\
+#     arm64e-apple-macos.swiftinterface   # 3 here, 0 under MacOSX26.5.sdk
+# `wildcard` is empty if that SDK ever goes away, and then the default SDK is
+# used and the build breaks loudly — the right direction to be wrong in. `?=`
+# leaves Makefile.local and the environment in charge. Drop this once
+# CommandLineTools ships the plugin.
+SDKROOT ?= $(wildcard /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk)
+ifneq ($(SDKROOT),)
+export SDKROOT
+endif
 BUNDLE_ID = app.moomux.Moomux
 # `run`/`dev` build a *different app* as far as LaunchServices is concerned.
 # Sharing one identifier with the installed copy meant `open .build/Moomux.app`
@@ -64,6 +84,12 @@ APPZIP := .build/Moomux.zip
 # would bake in the release path at parse time.
 BINDIR = $(shell swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) --show-bin-path)
 BIN = $(BINDIR)/Moomux
+# Where libghostty's resource bundle keeps its payload. The `swiftbuild` engine
+# (Swift 6.4's default) emits a Contents/Resources-style bundle; the older
+# `native` engine emits a flat one, and `Makefile.local` may still select it.
+# Recursive on purpose — it is expanded in `app`'s recipe, after the build ran.
+GHOSTTY_BUNDLE = $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle
+GHOSTTY_RES = $(GHOSTTY_BUNDLE)$(if $(wildcard $(GHOSTTY_BUNDLE)/Contents/Resources),/Contents/Resources,)
 
 .PHONY: build app run dev selfcheck warnings install shot signapp dmg dist notarize clean
 
@@ -113,9 +139,9 @@ app: build
 	# $(BINDIR)'s bundle before it is copied on, so the unbundled `.build`
 	# binary resolves them too. Without them one `theme =` line makes
 	# `prepareConfig` reject the user's whole config (see AppState.paneConfig).
-	rm -rf $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle/Ghostty/themes
-	cp -R Resources/ghostty-themes $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle/Ghostty/themes
-	cp -R $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle $(APP)/Contents/Resources/
+	rm -rf $(GHOSTTY_RES)/Ghostty/themes
+	cp -R Resources/ghostty-themes $(GHOSTTY_RES)/Ghostty/themes
+	cp -R $(GHOSTTY_BUNDLE) $(APP)/Contents/Resources/
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP)
 
