@@ -49,6 +49,7 @@ APP := .build/Moomux.app
 # command line of every process, including the `sh -c while pgrep -f ...` that
 # runs the wait loop — a plain path matches that shell and the loop never ends.
 # The bracket makes the pattern match the executable and not its own spelling.
+LSREGISTER = /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 DEV_PAT = $(CURDIR)/$(APP)/Contents/MacOS/[M]oomux
 # Distribution signs with a Developer ID instead of the ad-hoc identity `app`
 # uses — that's the only cert that can be notarized. Falls back to "-" (ad-hoc)
@@ -91,7 +92,7 @@ BIN = $(BINDIR)/Moomux
 GHOSTTY_BUNDLE = $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle
 GHOSTTY_RES = $(GHOSTTY_BUNDLE)$(if $(wildcard $(GHOSTTY_BUNDLE)/Contents/Resources),/Contents/Resources,)
 
-.PHONY: build app run dev selfcheck warnings install shot signapp dmg dist notarize clean
+.PHONY: build app run dev lsclean selfcheck warnings install shot signapp dmg dist notarize clean
 
 build:
 	swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS)
@@ -149,10 +150,25 @@ app: build
 # to point at a `moomux serve` other than the default one.
 ARGS ?=
 
+# Forget every Moomux bundle LaunchServices still has a record of that is no
+# longer on disk. Each worktree's `make dev` registers its own .build/Moomux.app;
+# deleting the worktree does not unregister it, and 45 dead records had piled up.
+# A dead record shadows the real app when something resolves the *bundle id*
+# rather than a path — notification banners do, so they draw a blank icon for an
+# app whose Dock icon is fine. Self-healing rather than a one-off cleanup,
+# because the next worktree recreates the problem.
+lsclean:
+	@$(LSREGISTER) -dump 2>/dev/null \
+		| awk -F'path: *' '/^path:/{p=$$2; sub(/ \(0x[0-9a-f]*\)$$/,"",p)} \
+			/identifier: *app\.moomux\.Moomux/{print p}' \
+		| sort -u | while read -r p; do \
+			[ -e "$$p" ] || $(LSREGISTER) -u "$$p"; \
+		done
+
 # Waiting out the old process is not politeness: `open` against an app that is
 # still terminating silently does nothing, which reads as a crash on launch.
 run: BUNDLE_ID = $(DEV_BUNDLE_ID)
-run: app
+run: app lsclean
 	pkill -f "$(DEV_PAT)" || true
 	@while pgrep -f "$(DEV_PAT)" >/dev/null; do sleep 0.2; done
 	open -n $(APP) --args $(ARGS)
@@ -161,7 +177,7 @@ run: app
 # build's minute.
 dev: CONFIG = debug
 dev: BUNDLE_ID = $(DEV_BUNDLE_ID)
-dev: app
+dev: app lsclean
 	pkill -f "$(DEV_PAT)" || true
 	@while pgrep -f "$(DEV_PAT)" >/dev/null; do sleep 0.2; done
 	open -n $(APP) --args $(ARGS)
