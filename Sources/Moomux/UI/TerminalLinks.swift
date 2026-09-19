@@ -69,7 +69,36 @@ enum TerminalLink {
     /// `activateFileViewerSelecting([url])` if revealing is ever wanted instead.
     static func open(_ link: String) {
         guard let url = resolve(link) else { return }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(asanaDesktop(url) ?? url)
+    }
+
+    /// Asana's desktop app registers `asanadesktop://` but ships no
+    /// associated-domains entitlement, so it claims no universal link for
+    /// app.asana.com — an https task URL handed to `NSWorkspace` always lands
+    /// in a browser, which then bounces to the app. Rewriting it ourselves is
+    /// the only way to skip that. The shape is the app's own handler's:
+    /// `asanadesktop:///app` + the https path, query and fragment kept.
+    ///
+    /// nil whenever it would not work, so the caller falls back to the browser:
+    /// a link that is not Asana's, or an Asana one on a machine with no Asana
+    /// app, where the custom scheme would open nothing at all.
+    ///
+    /// Deliberately *not* done by adding `asanadesktop` to `allowedSchemes`:
+    /// this only ever fires on a URL that already passed the allowlist, so a
+    /// pane cannot print an `asanadesktop://` link of its own choosing.
+    static func asanaDesktop(_ url: URL, installed: (String) -> Bool = schemeHasHandler) -> URL? {
+        guard url.host?.lowercased() == "app.asana.com" else { return nil }
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        guard installed("asanadesktop") else { return nil }
+        parts.scheme = "asanadesktop"
+        parts.host = ""
+        parts.path = "/app" + url.path
+        return parts.url
+    }
+
+    static func schemeHasHandler(_ scheme: String) -> Bool {
+        guard let probe = URL(string: "\(scheme):///") else { return false }
+        return NSWorkspace.shared.urlForApplication(toOpen: probe) != nil
     }
 
     static func demo() {
@@ -96,6 +125,22 @@ enum TerminalLink {
         assert(resolve("/private/tmp/nope.png", exists: fake) == nil)
         assert(resolve("Sources/Moomux/UI/TerminalLinks.swift", exists: fake) == nil,
                "a relative path has no cwd to resolve against")
+
+        // Asana's desktop app. The shape is taken from the app's own log line
+        // ("Custom protocol handler invoked with URL: asanadesktop:///app/1/…"),
+        // not from guessing: three slashes, then "app", then the https path.
+        let yes: (String) -> Bool = { _ in true }
+        let no: (String) -> Bool = { _ in false }
+        let task = URL(string: "https://app.asana.com/1/1206/project/1216/task/1218")!
+        assert(asanaDesktop(task, installed: yes)?.absoluteString
+               == "asanadesktop:///app/1/1206/project/1216/task/1218")
+        assert(asanaDesktop(task, installed: no) == nil, "no app means the browser")
+        assert(asanaDesktop(URL(string: "https://app.asana.com/0/1/2?focus=true#f")!,
+                            installed: yes)?.absoluteString
+               == "asanadesktop:///app/0/1/2?focus=true#f", "query and fragment survive")
+        assert(asanaDesktop(URL(string: "https://github.com/a/b/pull/1")!, installed: yes) == nil)
+        assert(asanaDesktop(URL(string: "https://asana.com/pricing")!, installed: yes) == nil,
+               "only the app host, not the marketing site")
     }
 
     // The detector itself is no longer ours to check. SwiftTerm's `Terminal`
