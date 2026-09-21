@@ -42,8 +42,20 @@ jobs:
       # `swiftc` in `make ios` — so nothing above type-checks a line of it.
       # Without this a phone-only file can break and every other check stays
       # green.
+      #
+      # The one step that needs Xcode, hence `DEVELOPER_DIR` rather than a
+      # global `xcode-select`: CommandLineTools ships no iOS SDK and no
+      # iphonesimulator Swift stdlib, so under the runner's default developer
+      # directory every module fails with "unable to load standard library for
+      # target arm64-apple-ios*-simulator". The macOS steps above stay on the
+      # toolchain the dev machine uses. The `xcrun` line is there so a runner
+      # image without that SDK says so in one line instead of forty.
       - name: iOS bundle
-        run: make ios
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+        run: |
+          xcrun --sdk iphonesimulator --show-sdk-path
+          make ios
 
   lint:
     runs-on: macos-26
