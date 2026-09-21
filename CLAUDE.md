@@ -694,11 +694,16 @@ Decisions, not oversights. Don't "fix" these without being asked.
   re-download the difference on every upgrade.
 - **The sidebar's ⌃⌘S is ours, not SwiftUI's.** `NavigationSplitView` ships a toolbar button and
   **no** View-menu item, and on macOS a shortcut needs a menu item — so ⌃⌘S, which every other Mac
-  app spells this way, did nothing at all here. Measured before and after. The fix is a
-  `CommandGroup(after: .sidebar)` item over `AppState.sidebarVisible`, which `RootView` maps onto
-  `columnVisibility`; the built-in toolbar button writes back through the same binding, so the two
-  cannot disagree. Keep it a `Bool` on the store rather than a `NavigationSplitViewVisibility`, or
-  `AppState` imports SwiftUI for one enum.
+  app spells this way, did nothing at all here. Measured before and after. It is
+  `CommandGroup(replacing: .sidebar)` sending `toggleSidebar:` up the responder chain, which is the
+  toolbar button's own action, so the two cannot disagree. Three things it took two goes to learn:
+  `after:` leaves two items sharing the shortcut and SwiftUI silently remaps ours to ⌥⌘S, so the
+  menu advertises ⌃⌘S beside an item that does nothing; a `columnVisibility` binding over a store
+  flag only ever *hides*, because SwiftUI writes its own value back after collapsing the column and
+  the next press computes "hide" again; and the item says "Toggle Sidebar" rather than Hide/Show
+  because a `Commands` body is not re-evaluated when an `@Observable` it reads changes, so a
+  computed title is read once at launch and lies from then on. The group still has to be declared —
+  with no `.sidebar` group the View menu holds only Enter Full Screen.
 - **Search matches names and nothing else**, case-insensitively, over the *whole* store — archived
   sessions included, whatever the Archived toggle says. Both halves are `internal/tui/search.go`'s
   `matchSessions`: the session you cannot remember is disproportionately likely to be one you
