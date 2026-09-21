@@ -11,7 +11,14 @@ let package = Package(
         // The engine is a library so an iOS app can link it. The Mac app stays
         // an executableTarget, so `make build` / `make selfcheck` keep working
         // under plain `swift build` exactly as before.
-        .library(name: "MoomuxKit", targets: ["MoomuxKit"])
+        // `type: .static` and not the default: an *automatic* library product
+        // cannot be named by `swift build --product`, which is how `make ios`
+        // asks for MoomuxKit alone — the default set drags in the macOS
+        // executable and fails on `import AppKit`. Static is also what the iOS
+        // app shell links (`libMoomuxKit.a`); `--target` builds the module
+        // without emitting one. The Mac app depends on the target, not this
+        // product, so its link is unchanged.
+        .library(name: "MoomuxKit", type: .static, targets: ["MoomuxKit"])
     ],
     dependencies: [
         // The one dependency: Ghostty's terminal engine, as a prebuilt

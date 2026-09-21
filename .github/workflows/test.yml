@@ -43,13 +43,12 @@ jobs:
       # Without this a phone-only file can break and every other check stays
       # green.
       #
-      # The one step that needs Xcode, hence `DEVELOPER_DIR` rather than a
-      # global `xcode-select`: CommandLineTools ships no iOS SDK and no
-      # iphonesimulator Swift stdlib, so under the runner's default developer
-      # directory every module fails with "unable to load standard library for
-      # target arm64-apple-ios*-simulator". The macOS steps above stay on the
-      # toolchain the dev machine uses. The `xcrun` line is there so a runner
-      # image without that SDK says so in one line instead of forty.
+      # The one step that needs an iOS SDK, so it pins the toolchain rather
+      # than inheriting whichever Xcode the image defaults to — `make ios`
+      # reads the SDK path out of `xcrun`, and the macOS steps above stay on
+      # the CommandLineTools toolchain the dev machine uses. The `xcrun` line
+      # is there so an image without that SDK says so in one line rather than
+      # as forty "unable to load standard library" errors.
       - name: iOS bundle
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
