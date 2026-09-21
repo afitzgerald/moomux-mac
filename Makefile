@@ -311,12 +311,25 @@ clean:
 # is exported, and SwiftPM hands SDKROOT to the *manifest* compile too, which
 # then tries to build Package.swift for macOS against an iPhone SDK and fails
 # with "unable to load standard library".
+#
+# But unsetting it leaves nothing pointing at the iPhone SDK either, and
+# `--triple` alone does not imply one: the frontend falls back to the macOS
+# sysroot and every module dies with "unable to load standard library for
+# target arm64-apple-ios*-simulator" — at each dependency's own minimum
+# deployment triple (ios13.0, ios15.0), which is what makes it read like a
+# dependency problem. Hence IOS_SDKFLAGS: `-Xswiftc`/`-Xcc` reach the target
+# compiles without reaching the manifest one, which is the whole difficulty.
+#
+# This is invisible once `.build` holds iOS-compiled modules, so it only ever
+# reproduces on a clean checkout — it shipped green locally and failed twice
+# on CI.
 IOS_TRIPLE   ?= arm64-apple-ios18.0-simulator
 IOS_SDK       = $(shell xcrun --sdk iphonesimulator --show-sdk-path)
 # Release, like every other target here. Debug would ship the `assert`s that
 # `--selftest` exists to run — an inverted invariant would abort the app on a
 # phone instead of drawing — and leave the VT byte path at -Onone.
-IOS_PRODUCTS  = $(shell env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) --show-bin-path)
+IOS_SDKFLAGS  = -Xswiftc -sdk -Xswiftc $(IOS_SDK) -Xcc -isysroot -Xcc $(IOS_SDK)
+IOS_PRODUCTS  = $(shell env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) $(IOS_SDKFLAGS) --show-bin-path)
 # The C module the Swift wrapper imports. SwiftPM knows where the xcframework
 # slice is; a bare `swiftc` does not, and the failure reads as
 # "missing required module 'libghostty'".
@@ -337,7 +350,14 @@ IOS_ASSETS    = $(wildcard Resources/icons/*.svg) Scripts/rasterize.swift \
 ios: $(IOS_APP)
 
 $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.plist Makefile
-	env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) --product MoomuxKit
+	@# `--product MoomuxKit` only works because that product is declared
+	@# `type: .static` — an automatic one is ignored with a warning and the
+	@# default target set is built instead, which includes the macOS
+	@# executable and fails on `import AppKit`. `--target` is not the
+	@# alternative: it builds the module without emitting libMoomuxKit.a,
+	@# and the link below needs the archive.
+	env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) \
+		$(IOS_SDKFLAGS) --product MoomuxKit
 	@mkdir -p $(IOS_APP)
 	@# SDKROOT *set* here, not unset: -sdk reaches the Swift frontend but clang
 	@# picks the SDK from the environment, so unsetting it leaves the C module
