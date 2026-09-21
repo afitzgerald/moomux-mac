@@ -322,6 +322,10 @@ struct RootView: View {
                                labels: ["Name"], values: [name]) { values in
                     app.renameFolder(from: name, to: values[0].trimmed)
                 }
+            case let .web(link):
+                if let url = TerminalLink.resolve(link) {
+                    WebSheet(link: link, url: url)
+                }
             case .settings:
                 SettingsSheet()
             }
@@ -1387,13 +1391,14 @@ private struct SessionInfo: View {
 /// A `Button` and not a tap gesture: a gesture on a row's content outranks the
 /// `List`'s own selection and would stop the row selecting at all.
 private struct TagIcon: View {
+    @Environment(AppState.self) private var app
     let symbol: String
     let link: String
     let help: String
 
     var body: some View {
         if TerminalLink.resolve(link) != nil {
-            Button { TerminalLink.open(link) } label: { Image(systemName: symbol) }
+            Button { app.openTag(link) } label: { Image(systemName: symbol) }
                 .buttonStyle(.plain)
                 .help("\(help) — click to open")
         } else {
@@ -1403,6 +1408,7 @@ private struct TagIcon: View {
 }
 
 private struct Field: View {
+    @Environment(AppState.self) private var app
     let label: String
     let value: String
     let link: Bool
@@ -1422,7 +1428,7 @@ private struct Field: View {
             if link, TerminalLink.resolve(value) != nil {
                 // A Button and not a tap gesture on selectable text: the
                 // selection swallows the click (same reason TagIcon is one).
-                Button { TerminalLink.open(value) } label: {
+                Button { app.openTag(value) } label: {
                     Text(value).font(Theme.mono).underline()
                 }
                 .buttonStyle(.link)
