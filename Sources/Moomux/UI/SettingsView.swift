@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import MoomuxKit
 
 /// Settings and project management: the two write surfaces that are about the
 /// configuration rather than about one session.

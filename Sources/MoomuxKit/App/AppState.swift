@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 import Foundation
 import GhosttyTerminal
 import Observation
@@ -158,8 +162,17 @@ public final class AppState {
     /// instant instead of a fresh forkpty. `plainDelegates` exists because
     /// `AppTerminalView.delegate` is `weak`: without something else retaining
     /// the delegate, a client that exits while backgrounded has nobody to tell.
-    @ObservationIgnored var plainPanes: [Session.ID: TerminalPane.AttachedTerminalView] = [:]
-    @ObservationIgnored var plainDelegates: [Session.ID: TerminalPane.Coordinator] = [:]
+    ///
+    /// Typed as libghostty's own `AppTerminalView` rather than `TerminalPane`'s
+    /// subclass: the views live in the app target and this store is in the
+    /// Kit, so the pool holds the dependency's type and `TerminalPane` casts
+    /// on the way out. macOS-only, because `AppTerminalView` is the AppKit
+    /// half of the package — a phone attaches through the in-memory backend
+    /// instead, which pools nothing.
+    #if os(macOS)
+    @ObservationIgnored public var plainPanes: [Session.ID: AppTerminalView] = [:]
+    @ObservationIgnored public var plainDelegates: [Session.ID: any TerminalSurfaceViewDelegate] = [:]
+    #endif
 
     /// The one libghostty runtime: config, the `ghostty_app_t` behind it, and
     /// the wakeup fan-out every surface shares. One per process, so the
@@ -168,7 +181,18 @@ public final class AppState {
     /// Built lazily rather than in `init` because creating it initialises the
     /// ghostty C runtime, and `--selftest` runs in a binary that never draws a
     /// terminal — see `SelfTest`.
+    /// The runtime itself, kept off the store: libghostty-spm publishes no
+    /// `free()`, so a second `AppState` — which only the phone makes, one per
+    /// Disconnect → Connect — would strand the first one's `ghostty_app_t`
+    /// rather than replace it. "One per process" is the rule; this is what
+    /// enforces it.
+    @ObservationIgnored private static var runtime: TerminalController?
+
     @ObservationIgnored public private(set) lazy var terminalController: TerminalController = {
+        // Narrowing is skipped along with the build, so a reused runtime
+        // reports no dropped lines. Only the Mac shows that list, and only the
+        // phone ever gets here twice.
+        if let runtime = Self.runtime { return runtime }
         // One `.generated` source rather than two branches: the user's ghostty
         // config files concatenated in ghostty's own load order, then this
         // app's keybinds last so they win. An empty `TerminalTheme` is not a
@@ -192,6 +216,7 @@ public final class AppState {
             paneConfigDropped = dropped
             _ = controller.updateConfigSource(.generated(kept))
         }
+        Self.runtime = controller
         return controller
     }()
 
@@ -260,7 +285,15 @@ public final class AppState {
         // ghostty's own default is better than a hand-copied table and a
         // machine with no ghostty config has expressed no opinion about it.
         let base = user.isEmpty ? [Self.builtInPaneConfig.rendered] : user
+        #if os(iOS)
+        // Phone-only, and appended after the user's config for the same reason
+        // the keybinds are: a pane held at arm's length needs air that a
+        // desktop config never asked for.
+        return (base + [Self.phonePaneConfig.rendered, Self.paneKeybinds.rendered])
+            .joined(separator: "\n") + "\n"
+        #else
         return (base + [Self.paneKeybinds.rendered]).joined(separator: "\n") + "\n"
+        #endif
     }
 
     nonisolated private static let builtInPaneConfig = TerminalConfiguration(startingFrom: .default) {
@@ -271,6 +304,21 @@ public final class AppState {
         // the family isn't installed.
         $0.withFontFamily("Hack Nerd Font Mono")
         $0.withFontSize(12)
+    }
+
+    /// Breathing room for a pane you hold in one hand.
+    ///
+    /// Padding, because a terminal drawn to the very edge of a phone reads as
+    /// broken rather than dense, and the leading column sits under the screen
+    /// curvature. `adjust-cell-height` because at phone sizes the default
+    /// leading is tight enough to make wrapped prose hard to track across.
+    /// Both are ghostty keys, so an old ghostty that does not know them loses
+    /// only these lines — `narrowedConfig` re-offers the config a line at a
+    /// time and Settings lists what was dropped.
+    nonisolated private static let phonePaneConfig = TerminalConfiguration { builder in
+        builder.withCustom("window-padding-x", "8")
+        builder.withCustom("window-padding-y", "6")
+        builder.withCustom("adjust-cell-height", "14%")
     }
 
     /// The app owns ⌘-shortcuts; ghostty owns none of them.
@@ -337,7 +385,7 @@ public final class AppState {
             .filter(isReadable)
     }
 
-    nonisolated static func ghosttyConfigDemo() {
+    public nonisolated static func ghosttyConfigDemo() {
         let home = "/h"
         func paths(_ present: Set<String>, xdg: String? = nil) -> [String] {
             ghosttyConfigPaths(home: home, xdgConfigHome: xdg) { present.contains($0) }
@@ -585,7 +633,13 @@ public final class AppState {
         let shown = shownSessions(of: project, in: sessions)
         guard projectExpanded(project) else { return shown.map { .session($0, folder: "") } }
         return Layout.rows(layout(of: project, in: allSessions(of: project)), shown: shown,
-                           searching: searching)
+                           searching: searching, pinned: pinnedSession)
+    }
+
+    /// The session no collapse may hide: the selected one, while its pane is
+    /// attached. Both lenses exempt it.
+    var pinnedSession: String? {
+        selectedSessionID.flatMap { attachedSessions.contains($0) ? $0 : nil }
     }
 
     /// Whether the sidebar is drawing the folder-first layout: the preference,
@@ -596,9 +650,8 @@ public final class AppState {
     /// What the folder-first sidebar draws: the core's folder-first layout,
     /// filtered to this window's view.
     public var folderSidebarRows: [Layout.FolderSidebarRow] {
-        let pinned = selectedSessionID.flatMap { attachedSessions.contains($0) ? $0 : nil }
-        return Layout.folderRows(folderRows, shown: listedSessions, searching: searching,
-                                 collapsedGroups: collapsedGroups, pinned: pinned)
+        Layout.folderRows(folderRows, shown: listedSessions, searching: searching,
+                          collapsedGroups: collapsedGroups, pinned: pinnedSession)
     }
 
     /// Which (folder, project) groups the folder-first sidebar is folding: the
@@ -607,7 +660,15 @@ public final class AppState {
     /// does.
     var collapsedGroups: Set<String> {
         guard !searching else { return [] }
-        var groups = folderProjectCollapsed
+        // Loose-block keys are dropped before the core's are added: that block
+        // is a *real* project header folded by `SetProjectCollapsed`, so its
+        // state is the core's and only the core's. Without this a stale local
+        // key — one written by a client that treated the loose block as a
+        // subheader — wins forever, because nothing that writes the core flag
+        // can clear it. That is exactly how it presented: the config said not
+        // collapsed, the list drew collapsed, and every tap wrote the flag
+        // that was already right.
+        var groups = folderProjectCollapsed.filter { !$0.hasPrefix("\u{0}") }
         for (name, project) in config?.projects ?? [:] where project.collapsed {
             groups.insert(Layout.groupKey(folder: "", project: name))
         }
@@ -621,12 +682,20 @@ public final class AppState {
     /// `UserDefaults`, like `folderFirst`, since it describes a screen only
     /// this app has.
     public func setFolderProject(folder: String, project: String, expanded: Bool) {
+        // Never the loose block: that one is `SetProjectCollapsed`'s, and a
+        // key written here for it would be unclearable — see `collapsedGroups`.
+        guard !folder.isEmpty else { return setProject(project, expanded: expanded) }
         let key = Layout.groupKey(folder: folder, project: project)
         if expanded { folderProjectCollapsed.remove(key) } else { folderProjectCollapsed.insert(key) }
     }
 
+    // Filtered on the way in as well as on the way out: an older build wrote
+    // loose-block keys here, and nothing that writes the core's flag can ever
+    // clear them. Dropping them at load means the next toggle persists a set
+    // that no longer carries them.
     private var folderProjectCollapsed: Set<String> = Set(
-        UserDefaults.standard.stringArray(forKey: AppState.folderProjectCollapsedKey) ?? []
+        (UserDefaults.standard.stringArray(forKey: AppState.folderProjectCollapsedKey) ?? [])
+            .filter { !$0.hasPrefix("\u{0}") }
     ) {
         didSet {
             UserDefaults.standard.set(Array(folderProjectCollapsed),
@@ -805,6 +874,13 @@ public final class AppState {
     public func stop() {
         tasks.forEach { $0.cancel() }
         tasks = []
+        #if !os(macOS)
+        // Disconnect leaves the Connect screen up, so a badge left at 3 is a
+        // count of sessions nothing is watching any more. macOS has no
+        // equivalent: its dock tile goes with the window.
+        badgeCount = -1
+        notifier?.setBadge(0)
+        #endif
     }
 
     /// Config has no push channel; everything else arrives on the stream.
@@ -971,6 +1047,12 @@ public final class AppState {
         if statusError != message { statusError = message }
     }
 
+    #if !os(macOS)
+    /// The last count handed to the icon badge, so an unchanged one costs
+    /// nothing. macOS has no equivalent: `badgeLabel` is a plain property.
+    private var badgeCount = -1
+    #endif
+
     /// The quiet half of the notification surface: no sound, no banner, just a
     /// count that is there when you look. It is **not** free of authorization —
     /// macOS drops `badgeLabel` on the floor unless the app has the badge
@@ -978,29 +1060,28 @@ public final class AppState {
     /// `nil` rather than "0" — a zero badge is still a badge.
     private func updateDockBadge() {
         let count = needsInputCount
+        #if os(macOS)
         // `NSApp?`: there is no application object under `--selftest`, and
         // `demo()` drives the snapshot path that lands here.
         NSApp?.dockTile.badgeLabel = count == 0 ? nil : "\(count)"
+        #else
+        // No dock tile on iOS; the same count goes to the app icon badge —
+        // but only when it moves. `updateDockBadge` runs from `adopt`, i.e.
+        // several times a second while an agent writes its log, and
+        // `setBadgeCount` is an XPC round trip each time. Same guard, and the
+        // same reason, as `set(statusError:)` above.
+        if badgeCount != count {
+            badgeCount = count
+            notifier?.setBadge(count)
+        }
+        #endif
     }
 
-    nonisolated static func demo() {
+    public nonisolated static func demo() {
         assert(fontFamilies(["Menlo"], selected: "") == ["Menlo"], "the system font is not a family")
         assert(fontFamilies(["Menlo"], selected: "Menlo") == ["Menlo"], "installed once, listed once")
         assert(fontFamilies(["Menlo"], selected: "Gone") == ["Gone", "Menlo"],
                "an uninstalled stored family stays selectable, or the Picker renders blank")
-
-        // The review window's command line. Measured against a real worktree:
-        // the merge-base form catches committed *and* uncommitted work, the
-        // fallbacks fire on exit 128 from an unresolvable ref, and the status
-        // line is what makes an untracked file and a clean tree both visible.
-        let script = reviewScript(base: "main")
-        assert(script.hasPrefix("git diff --merge-base 'origin/main' 2>/dev/null"
-                                + " || git diff --merge-base 'main' 2>/dev/null"
-                                + " || git diff HEAD; git status --short --branch;"), script)
-        assert(script.hasSuffix(#"exec "${SHELL:-/bin/sh}""#), script)
-        // A branch name out of the user's config is interpolated into a shell
-        // command, so it is quoted rather than trusted.
-        assert(reviewScript(base: "a'b").contains(#"'origin/a'\''b'"#), reviewScript(base: "a'b"))
 
         // The diff tool command is argv, never a shell line: a program name and
         // its flags, with the worktree appended by the caller.
@@ -1109,12 +1190,15 @@ public final class AppState {
             assert(app.canReorder, "no config yet must not disable reordering")
             // ...and off in the folder-first lens, whose rows `move(_:by:)`
             // does not reorder against — see `canReorder`.
+            // Restored, because `folderFirst` persists to UserDefaults — a
+            // selftest must not reset the user's Group-by-Folder preference.
+            let wasFolderFirst = app.folderFirst
             app.folderFirst = true
             assert(app.canReorder, "the preference alone is not the folder lens")
             app.folderRows = [FolderRow(kind: .session, folder: "f", project: "p", id: "a")]
             assert(!app.canReorder, "reordering is off while the folder lens is on screen")
             app.folderRows = []
-            app.folderFirst = false
+            app.folderFirst = wasFolderFirst
         }
 
         // Collapsing a project hides its rows, so ⌘↓/⌘↑ must step past them —
@@ -1347,43 +1431,30 @@ public final class AppState {
     /// of that session, rather than rendering a patch natively — see the
     /// "Deliberately not done" note for why there is no patch viewer here.
     ///
-    /// Not through `mutate`: this never touches the socket. `tmux new-window`
-    /// from a second client also works whether or not the app is attached —
-    /// attached, the window switch shows up in the terminal pane; detached,
-    /// the hint set below is the only signal.
+    /// Not through `mutate`: this changes no session state and its answer is a
+    /// hint rather than a new row. It *does* go over the socket, so it fails
+    /// like any other call when the core is unreachable. Attached, the window
+    /// switch shows up in the terminal pane; detached, the hint is the only
+    /// signal.
     public func review(_ session: Session) {
-        guard let tmux = ToolPath.find("tmux") else {
-            actionError = "Review failed: can't find a tmux binary."
-            return
-        }
-        let base = config?.projects[session.project]?.baseBranch ?? "main"
-        let script = AppState.reviewScript(base: base)
-        let target = "\(session.tmuxSession):review"
-        let create = ["new-window", "-t", session.tmuxSession,
-                      "-c", session.worktreePath,
-                      // -n also turns automatic-rename off for the window, so the
-                      // tab keeps saying "review" and not "zsh".
-                      "-n", "review", script]
-        // Reviewing twice reuses the window rather than stacking a second one
-        // called "review" with nothing to tell it from the first — the old one
-        // holds a finished diff, which is exactly what is being replaced.
-        // `respawn-window` and not kill-then-create: killing the last window of
-        // a session kills the session. It does not select, hence the second
-        // command; `new-window` does.
-        let reuse = ["respawn-window", "-k", "-t", target,
-                     "-c", session.worktreePath, script]
+        // `Review` on the core, not `tmux new-window` here. This was one of
+        // the three places this app reached past the socket; the boundary rule
+        // says that is a hole to fix in Go, and it is fixed.
+        //
+        // Gone with it: the base-branch lookup. The core resolves it —
+        // session's own, then the project's, then `main` — so a session
+        // created with an explicit `-base` no longer silently diffs against
+        // the project default, which the client-side version could not know.
         Task {
             do {
-                try await withoutBlockingTheUI {
-                    do {
-                        try ToolPath.run(tmux, reuse)
-                        try ToolPath.run(tmux, ["select-window", "-t", target])
-                    } catch {
-                        try ToolPath.run(tmux, create)  // no review window yet
-                    }
+                let hint = try await withoutBlockingTheUI { [client] in
+                    try client.review(id: session.id)
                 }
-                hint = "Opened a review window in \(session.tmuxSession)."
+                self.hint = hint.isEmpty ? "Opened a review window." : hint
             } catch {
+                // A parked session answers "<name> is parked; open it before
+                // reviewing" rather than reviving itself — asking for a diff
+                // must not relaunch an agent. Surfaced, not swallowed.
                 failed("Review", error)
             }
         }
@@ -1426,11 +1497,17 @@ public final class AppState {
     /// as `diffTool` — the core serves no such field and the TUI has no use
     /// for it.
     public var listFontSize: Double = UserDefaults.standard.object(forKey: listFontSizeKey) as? Double
-        ?? Double(NSFont.systemFontSize) {
+        ?? AppState.systemFontSize {
         didSet { UserDefaults.standard.set(listFontSize, forKey: Self.listFontSizeKey) }
     }
 
     static let listFontSizeKey = "listFontSize"
+
+    #if os(macOS)
+    nonisolated static let systemFontSize = Double(NSFont.systemFontSize)
+    #else
+    nonisolated static let systemFontSize = Double(UIFont.systemFontSize)
+    #endif
 
     /// Font family for the sidebar. Empty means the system font, which is the
     /// default and what every other Mac app's sidebar uses.
@@ -1444,7 +1521,11 @@ public final class AppState {
     /// been uninstalled — a Picker whose selection matches no tag renders
     /// blank and writes nothing, the same trap as the theme picker.
     public var fontFamilies: [String] {
+        #if os(macOS)
         AppState.fontFamilies(NSFontManager.shared.availableFontFamilies, selected: listFontFamily)
+        #else
+        []  // no sidebar font picker on a phone; the list is what fills one
+        #endif
     }
 
     nonisolated static func fontFamilies(_ installed: [String], selected: String) -> [String] {
@@ -1467,6 +1548,9 @@ public final class AppState {
     /// `code --diff` both work as typed. Through `ToolPath` rather than a
     /// shell, since a GUI app's `PATH` would not find `/usr/local/bin`.
     public func openDiffTool(_ session: Session) {
+        #if !os(macOS)
+        _ = session  // no `Process`, and no GUI diff tool to launch into
+        #else
         let argv = AppState.diffToolArguments(diffTool)
         guard let tool = argv.first else { return }
         guard let path = tool.hasPrefix("/") ? tool : ToolPath.find(tool) else {
@@ -1481,33 +1565,7 @@ public final class AppState {
                 failed("Diff tool", error)
             }
         }
-    }
-
-    /// The shell line a review window runs.
-    ///
-    /// `git diff --merge-base` is everything not yet on the base branch —
-    /// commits since the merge base *and* uncommitted work — in one command.
-    /// `origin/` first because a local base branch goes stale in a worktree
-    /// checkout, then the local one, then a plain `HEAD` diff for a project
-    /// with neither. The `git status` line is not decoration: untracked files
-    /// are invisible to every diff, an agent's new files are usually untracked,
-    /// and `--branch` guarantees at least one line of output so a clean
-    /// worktree reads as "nothing to review" rather than as a window that
-    /// failed to run anything.
-    ///
-    /// No `--color` and no `| less`: output goes straight to a tty, so git
-    /// colours and pages it with the user's own pager — a configured `delta`
-    /// is honoured, which is most of the argument for reviewing here at all.
-    /// It ends in a shell so the window survives the pager and is somewhere to
-    /// run `git add -p` from.
-    nonisolated static func reviewScript(base: String) -> String {
-        let quoted = { (ref: String) in
-            "'" + ref.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
-        }
-        return "git diff --merge-base \(quoted("origin/" + base)) 2>/dev/null"
-            + " || git diff --merge-base \(quoted(base)) 2>/dev/null"
-            + " || git diff HEAD; git status --short --branch;"
-            + #" exec "${SHELL:-/bin/sh}""#
+        #endif
     }
 
     /// Both halves of the edit-session form, in the TUI's order: the rename
@@ -1520,14 +1578,6 @@ public final class AppState {
             try client.setAgent(id: session.id, agent: agent, dangerous: dangerous)
             return "\(name) will launch \(agent) next time it's opened."
         }
-    }
-
-    /// Where a clicked ticket or PR tag goes. Web links open in the overlay —
-    /// a browser tab per glance is what this exists to stop — and anything else
-    /// (a `file:` tag) keeps going to its own app.
-    public func openTag(_ link: String) {
-        guard let url = TerminalLink.resolve(link) else { return }
-        if url.isFileURL { TerminalLink.open(link) } else { sheet = .web(link) }
     }
 
     public func setTags(_ session: Session, ticket: String, pr: String) {
@@ -1767,8 +1817,10 @@ public final class AppState {
     /// is the public spelling of "let go of the pty".
     private func detach(id: Session.ID) {
         attachedSessions.remove(id)
+        #if os(macOS)
         plainPanes.removeValue(forKey: id)?.controller = nil
         plainDelegates.removeValue(forKey: id)
+        #endif
     }
 
     public func killTmux(_ session: Session) {

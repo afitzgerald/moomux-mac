@@ -6,7 +6,13 @@ import PackageDescription
 // Task.detached. Revisit when there is a reason to.
 let package = Package(
     name: "Moomux",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v14), .iOS(.v18)],
+    products: [
+        // The engine is a library so an iOS app can link it. The Mac app stays
+        // an executableTarget, so `make build` / `make selfcheck` keep working
+        // under plain `swift build` exactly as before.
+        .library(name: "MoomuxKit", targets: ["MoomuxKit"])
+    ],
     dependencies: [
         // The one dependency: Ghostty's terminal engine, as a prebuilt
         // xcframework wrapped in a Swift package (MIT). Reached only through
@@ -28,11 +34,29 @@ let package = Package(
         .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "1.5.20260906")
     ],
     targets: [
+        // Everything platform-independent: the wire types, the client, the
+        // store and the two pure layout/form helpers. `ToolPath` lives here
+        // too but compiles to nothing off macOS — `Process` is unavailable on
+        // iOS, and the three features that shell out are guarded to match.
+        //
+        // swiftLanguageMode(.v5) has to be repeated on this target: without it
+        // a new target defaults to Swift 6, strict concurrency turns on, and
+        // the blocking-fd socket client is the first thing to break — the same
+        // reason the note at the top of this file gives.
+        .target(
+            name: "MoomuxKit",
+            dependencies: [.product(name: "GhosttyTerminal", package: "libghostty-spm")],
+            path: "Sources/MoomuxKit",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "Moomux",
-            dependencies: [.product(name: "GhosttyTerminal", package: "libghostty-spm")],
+            dependencies: [
+                "MoomuxKit",
+                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+            ],
             path: "Sources/Moomux",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
     ]
 )

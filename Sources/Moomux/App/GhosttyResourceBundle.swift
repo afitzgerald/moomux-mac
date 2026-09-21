@@ -1,6 +1,7 @@
 import Foundation
 import GhosttyTerminal
 import ObjectiveC
+import MoomuxKit
 
 /// Makes libghostty's SwiftPM resource bundle findable from inside a `.app`.
 ///

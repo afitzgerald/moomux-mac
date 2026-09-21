@@ -38,6 +38,13 @@ jobs:
       - name: Release build + app bundle
         run: make app
 
+      # `Sources/MoomuxiOS` is not a SwiftPM target — it is compiled by a bare
+      # `swiftc` in `make ios` — so nothing above type-checks a line of it.
+      # Without this a phone-only file can break and every other check stays
+      # green.
+      - name: iOS bundle
+        run: make ios
+
   lint:
     runs-on: macos-26
     timeout-minutes: 15
