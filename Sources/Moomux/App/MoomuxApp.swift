@@ -95,10 +95,24 @@ struct SessionCommands: Commands {
         }
         // SwiftUI gives `NavigationSplitView` a toolbar button and no menu
         // item, and a shortcut needs a menu item — so ⌃⌘S, the system-wide
-        // spelling of this, did nothing at all. Verified before and after.
-        CommandGroup(after: .sidebar) {
-            Button(app.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
-                app.sidebarVisible.toggle()
+        // spelling of this, did nothing at all. `replacing:`, not `after:`:
+        // `after:` leaves two items sharing the one shortcut and SwiftUI
+        // silently remaps ours to ⌥⌘S, so the menu advertises ⌃⌘S beside an
+        // item that does nothing. The group still has to be declared — with no
+        // `.sidebar` group the View menu holds only Enter Full Screen.
+        //
+        // The action goes to AppKit rather than through a `columnVisibility`
+        // binding, because the binding only ever hid: SwiftUI writes its own
+        // value back after collapsing the column, so the next press computed
+        // "hide" again and the sidebar never came back. The toolbar button was
+        // unaffected all along because it is this same responder-chain action.
+        //
+        // "Toggle", not "Hide"/"Show": a `Commands` body is not re-evaluated
+        // when an `@Observable` it reads changes, so a computed title is read
+        // once at launch and lies from then on.
+        CommandGroup(replacing: .sidebar) {
+            Button("Toggle Sidebar") {
+                NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
             }
             .keyboardShortcut("s", modifiers: [.control, .command])
             // How the sidebar is grouped is a View-menu question, and a folder
