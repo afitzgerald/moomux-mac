@@ -156,8 +156,10 @@ enum TerminalLink {
 
 extension AppState {
     /// Where a clicked ticket or PR tag goes. Web links open in the overlay —
-    /// a browser tab per glance is what this exists to stop — and anything else
-    /// (a `file:` tag) keeps going to its own app.
+    /// a browser tab per glance is what this exists to stop — and anything with
+    /// a native app of its own (a `file:` tag, an Asana task on a machine with
+    /// the Asana app) goes there instead: the real app beats a logged-out
+    /// WKWebView of the same page.
     ///
     /// Here rather than on `AppState` itself: the store is in `MoomuxKit`,
     /// which both apps link, and `TerminalLink` is AppKit — `NSWorkspace` and
@@ -165,6 +167,10 @@ extension AppState {
     /// what a front end does about a link is the part that differs.
     public func openTag(_ link: String) {
         guard let url = TerminalLink.resolve(link) else { return }
-        if url.isFileURL { TerminalLink.open(link) } else { sheet = .web(link) }
+        if url.isFileURL || TerminalLink.asanaDesktop(url) != nil {
+            TerminalLink.open(link)
+        } else {
+            sheet = .web(link)
+        }
     }
 }
