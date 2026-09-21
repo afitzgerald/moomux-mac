@@ -31,6 +31,7 @@ enum SelfTest {
         Notifier.demo()
         TmuxSnapshot.demo()
         TerminalLink.demo()
+        WebSheet.demo()
         String.shellQuotedDemo()
         AppState.ghosttyConfigDemo()
         Theme.demo()
