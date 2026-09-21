@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import MoomuxKit
 
 /// Loaded once and shared by every view that draws the cow mark — reading
 /// and decoding the SVG from disk on every render (as each caller used to do
@@ -32,117 +33,20 @@ extension ToolbarContent {
     }
 }
 
-/// The sidebar's one layout rule.
-///
-/// Every row — project header, folder header, project subheader, session — is
-/// laid out as `[indent][disclosure][icon][name]`, where the disclosure and
-/// icon columns are **fixed widths** that a row leaves empty rather than
-/// skipping. So a name's x depends on its nesting level and nothing else: not
-/// on whether the row has a chevron, not on whether a project set an emoji,
-/// and not on the glyph metrics of whatever font the user picked. A session
-/// row has no chevron, so it pays for that column in its leading padding.
-///
-/// This replaces two constants that had to be tuned against each other (a
-/// per-level step plus a fudge for the missing chevron) and still came out
-/// wrong whenever a row's prefix changed width.
-enum SidebarGrid {
-    /// The gap between columns, and between the icon and the name.
-    static let gap: CGFloat = 4
-
-    /// One level of nesting. The only knob: everything else follows from the
-    /// columns. 1.25em lands on the 16pt Finder uses at the system font size,
-    /// and scales with the sidebar font.
-    static func step(_ font: Double) -> CGFloat { CGFloat(font) * 1.25 }
-    /// The disclosure triangle's column, occupied or not.
-    static func disclosure(_ font: Double) -> CGFloat { CGFloat(font) }
-    /// The folder glyph / project emoji / session state dot column.
-    static func icon(_ font: Double) -> CGFloat { CGFloat(font) * 1.25 }
-
-    /// A header's leading inset at `level`.
-    static func indent(_ level: Int, _ font: Double) -> CGFloat {
-        CGFloat(level) * step(font)
-    }
-
-    /// A session row's, which is a header's plus the chevron column it has no
-    /// chevron for — that is what puts its dot one clean step right of the
-    /// icon of the header it belongs to.
-    static func rowIndent(_ level: Int, _ font: Double) -> CGFloat {
-        indent(level, font) + disclosure(font) + gap
-    }
-}
-
 /// The colors this app draws sessions with. Every one of them comes from the
 /// core's `Themes` table now — no hardcoded palette here, and no literal hex
 /// outside `resolve`, which honours both halves of a served light/dark pair.
 enum Theme {
-    /// The agent-state colors, from the palette the core serves for the
-    /// config's current theme. Nil before `Themes` has answered, which falls
-    /// back to SwiftUI's own semantic colors — literally what the "default"
-    /// palette encodes, so the zero state is the right one.
+    // The colors moved to `SessionTheme` in the Kit so the phone draws from
+    // the same served palette; these forward so nothing in this file changed.
     static func color(_ state: AgentState, _ palette: ThemePalette?) -> Color {
-        resolve(palette?.color(for: state)) ?? {
-            switch state {
-            case .needsInput: return .orange
-            case .working: return .accentColor
-            case .done: return .green
-            case .parked, .unknown: return .secondary
-            }
-        }()
+        SessionTheme.color(state, palette)
     }
 
-    /// The sidebar's ± and ↑ badges. `internal/tui/list.go` draws both in
-    /// `warnStyle`, built from the palette's *warn* entry — so this is that
-    /// same join, and the two front ends now agree. (It used to bind to
-    /// `done`, which came out green here and amber there; the core split
-    /// `warn` out of `done` to end exactly that.)
-    static func gitWarn(_ palette: ThemePalette?) -> Color {
-        resolve(palette?.warn) ?? .orange
-    }
+    static func gitWarn(_ palette: ThemePalette?) -> Color { SessionTheme.gitWarn(palette) }
 
-    /// The sidebar's PR icon. Merged is the palette's `done`, conflicts and
-    /// failing CI its `warn` — the same two entries the git badges and state
-    /// dots already use, so nothing new is hardcoded here.
     static func pr(_ badge: PRInfo.Badge, _ palette: ThemePalette?) -> Color {
-        switch badge {
-        case .merged: return resolve(palette?.done) ?? .green
-        case .conflicts, .failing, .comments: return gitWarn(palette)
-        // Pending is not a problem, so it stays secondary: warn here would
-        // put an amber icon on every PR for the minutes its checks run.
-        case .open, .closed, .pending: return .secondary
-        }
-    }
-
-    /// A served color as SwiftUI sees it. `system` wins when the core names
-    /// one — that is how the state dots keep following the user's live
-    /// accent instead of a frozen #007aff. Otherwise the light/dark pair, as
-    /// a dynamic NSColor so AppKit resolves the half at draw time and no
-    /// view has to observe the color scheme.
-    private static func resolve(_ c: ThemeColor?) -> Color? {
-        guard let c else { return nil }
-        switch c.system {
-        case "accent": return .accentColor
-        case "green": return .green
-        case "orange": return .orange
-        case "secondary": return .secondary
-        default: break
-        }
-        guard nsColor(c.light) != nil, nsColor(c.dark) != nil else { return nil }
-        return Color(nsColor: NSColor(name: nil) { appearance in
-            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            return nsColor(dark ? c.dark : c.light) ?? .labelColor
-        })
-    }
-
-    /// "#rrggbb" only — the one format the core sends for a non-ANSI theme.
-    private static func nsColor(_ hex: String) -> NSColor? {
-        var h = Substring(hex)
-        guard h.first == "#" else { return nil }
-        h = h.dropFirst()
-        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
-        return NSColor(srgbRed: CGFloat((v >> 16) & 0xff) / 255,
-                       green: CGFloat((v >> 8) & 0xff) / 255,
-                       blue: CGFloat(v & 0xff) / 255,
-                       alpha: 1)
+        SessionTheme.pr(badge, palette)
     }
 
     static let mono = Font.system(size: 12, design: .monospaced)
@@ -164,24 +68,6 @@ enum Theme {
         assert(list("No Such Family", 13) == .system(size: 13), "an uninstalled family falls back")
         assert(list("Menlo", 13) != .system(size: 13), "an installed family is actually used")
 
-        assert(nsColor("#076678") != nil)
-        assert(nsColor("12") == nil, "an ANSI index is not hex")
-        assert(nsColor("#12345") == nil && nsColor("#1234567") == nil, "six digits or nothing")
-        assert(nsColor("076678") == nil, "the # is required")
-        assert(nsColor("#gggggg") == nil)
-        assert(nsColor("#ffffff")?.usingColorSpace(.sRGB)?.blueComponent == 1)
-        assert(nsColor("#ff0000")?.usingColorSpace(.sRGB)?.blueComponent == 0, "channels in RGB order")
-
-        // system beats hex, and only for the names the core actually sends.
-        assert(resolve(ThemeColor(light: "#ff0000", dark: "#ff0000", system: "accent")) == .accentColor)
-        assert(resolve(ThemeColor(light: "#ff0000", dark: "#ff0000", system: "chartreuse")) != nil,
-               "an unfamiliar system name falls back to the pair, not to nil")
-        assert(resolve(nil) == nil)
-        // The ANSI theme never reaches here (`ThemePalette.resolved` swaps it
-        // for default), but a half it could not parse must read as "no color"
-        // so the caller's semantic fallback wins.
-        assert(resolve(ThemeColor(light: "11", dark: "11")) == nil)
-        assert(resolve(ThemeColor(light: "#83a598", dark: "")) == nil, "both halves or neither")
     }
 }
 
@@ -628,24 +514,6 @@ private struct AttachingSpinner: View {
     }
 }
 
-/// A rounded rect with a small triangular tail on its leading edge, pointing
-/// at whatever is "speaking" — here, the cow icon beside it.
-private struct SpeechBubble: Shape {
-    var tailSize: CGFloat = 6
-
-    func path(in rect: CGRect) -> Path {
-        let bubble = CGRect(x: rect.minX + tailSize, y: rect.minY,
-                             width: rect.width - tailSize, height: rect.height)
-        var p = Path(roundedRect: bubble, cornerRadius: rect.height / 2)
-        let midY = rect.midY
-        p.move(to: CGPoint(x: bubble.minX + 1, y: midY - tailSize))
-        p.addLine(to: CGPoint(x: rect.minX, y: midY))
-        p.addLine(to: CGPoint(x: bubble.minX + 1, y: midY + tailSize))
-        p.closeSubpath()
-        return p
-    }
-}
-
 /// The plain cow-terminal mark, unadorned — the constant part of the toolbar
 /// title, whatever it's saying.
 private struct CowIcon: View {
@@ -860,7 +728,7 @@ private struct FolderProjectHeader: View {
         .onTapGesture { app.setFolderProject(folder: folder, project: name, expanded: collapsed) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(collapsed ? "\(name), collapsed, \(hidden) sessions" : name)
+        .accessibilityLabel(collapsed && hidden > 0 ? "\(name), collapsed, \(hidden) sessions" : name)
         .accessibilityAction {
             app.setFolderProject(folder: folder, project: name, expanded: collapsed)
         }
@@ -925,7 +793,7 @@ private struct ProjectHeader: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(expanded ? name : "\(name), collapsed, \(hidden) sessions")
+        .accessibilityLabel(expanded || hidden == 0 ? name : "\(name), collapsed, \(hidden) sessions")
         .accessibilityAction { app.setProject(name, expanded: !expanded) }
     }
 }
@@ -978,7 +846,7 @@ private struct FolderHeader: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(collapsed ? "\(name), collapsed, \(count) sessions" : name)
+        .accessibilityLabel(collapsed && count > 0 ? "\(name), collapsed, \(count) sessions" : name)
         .accessibilityAction { app.setFolder(name: name, collapsed: !collapsed) }
     }
 }

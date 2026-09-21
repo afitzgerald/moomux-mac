@@ -1,6 +1,7 @@
 import AppKit
 import GhosttyTerminal
 import SwiftUI
+import MoomuxKit
 
 /// A live tmux client, hosted in the app.
 ///
@@ -83,7 +84,7 @@ struct TerminalPane: NSViewRepresentable {
     /// switch, and a background exit would have nobody to tell.
     /// `AppState.plainDelegates` keeps one alive per session instead.
     func makeNSView(context: Context) -> AttachedTerminalView {
-        if let existing = pool.plainPanes[sessionID] {
+        if let existing = pool.plainPanes[sessionID] as? AttachedTerminalView {
             existing.delegate = pool.plainDelegates[sessionID]
             existing.setSurfaceVisible(true)
             return existing
@@ -156,7 +157,7 @@ struct TerminalPane: NSViewRepresentable {
     }
 
     func updateNSView(_ view: AttachedTerminalView, context: Context) {
-        pool.plainDelegates[sessionID]?.onExit = onExit
+        (pool.plainDelegates[sessionID] as? Coordinator)?.onExit = onExit
     }
 
     /// Stops the renderer, keeps the session. The pty and its tmux client both

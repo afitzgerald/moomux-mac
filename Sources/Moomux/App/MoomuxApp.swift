@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import MoomuxKit
 
 @main
 struct MoomuxApp: App {

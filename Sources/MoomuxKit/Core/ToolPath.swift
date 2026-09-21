@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Finds a command-line tool the way a terminal would — which a GUI app cannot
@@ -116,3 +117,4 @@ public enum ToolPath {
         assert(search("nonesuch", path: "/usr/bin", isExecutable: exists) == nil)
     }
 }
+#endif
