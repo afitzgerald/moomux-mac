@@ -784,6 +784,20 @@ public struct CreateRequest: Encodable, Sendable {
 
 public enum Wire {
 
+    /// A request as one newline-terminated line.
+    ///
+    /// The protocol is line-delimited in both directions — Go's
+    /// `json.Encoder.Encode` terminates every object it writes, which is what
+    /// makes `Watch`'s stream readable a line at a time — but `JSONEncoder`
+    /// on this side does not, so every request has to add it. Cheap, and it
+    /// is the difference between a server that answers and one that waits.
+    static func lineEncoded(_ value: some Encodable) throws -> Data {
+        var data = try encoder.encode(value)
+        data.append(UInt8(ascii: "\n"))
+        return data
+    }
+
+
     /// Anything at or before this is Go's zero `time.Time`
     /// ("0001-01-01T00:00:00Z"), meaning "never", not "in the year 1".
     public static let goZeroTimeCutoff = Date(timeIntervalSince1970: 0)

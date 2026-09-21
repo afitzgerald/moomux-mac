@@ -34,13 +34,39 @@ public final class MoomuxClient: Sendable {
         }
     }
 
-    public let socketPath: String
+    public let endpoint: Endpoint
+
+    /// Where a core is. The unix socket is the local case and stays the
+    /// default; TCP is how a phone on the tailnet reaches the same server,
+    /// which answers identically on both — see `ipc.Server.Serve`.
+    public enum Endpoint: Sendable, Equatable, CustomStringConvertible {
+        case unix(path: String)
+        case tcp(host: String, port: UInt16)
+
+        func connect() throws -> StreamSocket {
+            switch self {
+            case let .unix(path): return try StreamSocket(path: path)
+            case let .tcp(host, port): return try StreamSocket(host: host, port: port)
+            }
+        }
+
+        public var description: String {
+            switch self {
+            case let .unix(path): return path
+            case let .tcp(host, port): return "\(host):\(port)"
+            }
+        }
+    }
 
     /// The `Watch` connection currently open, so `nudge()` can write on it.
     private let live = LiveWatch()
 
     public init(socketPath: String = MoomuxClient.defaultSocketPath) {
-        self.socketPath = socketPath
+        endpoint = .unix(path: socketPath)
+    }
+
+    public init(endpoint: Endpoint) {
+        self.endpoint = endpoint
     }
 
     /// Mirrors `ipc.DefaultSocket`. `NSHomeDirectory()` is the real home only
@@ -86,6 +112,13 @@ public final class MoomuxClient: Sendable {
         /// A whole `config.Project`, for the four project writes. `Project`'s
         /// own encoder decides which of its fields cross.
         var proj: Project?
+        /// `Attach`'s initial pty size, and the only size it ever gets: the
+        /// core sets it once through `pty.Setsize` and a client that changes
+        /// size detaches and reattaches. Always send real numbers — the Go
+        /// side reads a missing or absurd value as 80x24, which is not what a
+        /// phone wants.
+        var cols: Int?
+        var rows: Int?
 
         // Every `ipc.Args` key this app sends already matches its property
         // name. A missing entry here would be invisible in both directions —
@@ -94,17 +127,18 @@ public final class MoomuxClient: Sendable {
             case id, ids, name, agent, ticket, pr, delta, dangerous, on, theme, appearance, req, proj
             case newName = "new_name"
             case project
+            case cols, rows
         }
     }
 
-    private struct Request: Encodable {
+    struct Request: Encodable {
         let method: String
         var args: Args?
     }
 
     /// `ipc.Result` plus the error fields, all optional — one union type, the
     /// same trade the Go side makes.
-    private struct Response: Decodable {
+    struct Response: Decodable {
         var result: CallResult?
         var err: String?
         var code: String?
@@ -127,6 +161,11 @@ public final class MoomuxClient: Sendable {
         var projectEmoji: [String: String]?
         var hint: String?
         var ok: Bool?
+        /// `Capture`: session id → the pane's text. `omitempty` on the Go
+        /// side, so nothing-captured omits the key rather than sending `{}`,
+        /// and an individual id that could not be captured is absent rather
+        /// than present-and-empty. Both mean "keep what you last drew".
+        var screens: [String: String]?
         var dirty: Bool?
         var unpushed: Bool?
         var files: Int?
@@ -134,6 +173,7 @@ public final class MoomuxClient: Sendable {
 
         enum CodingKeys: String, CodingKey {
             case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits
+            case screens
             case projectEmoji = "project_emoji"
         }
     }
@@ -178,9 +218,14 @@ public final class MoomuxClient: Sendable {
 
     @discardableResult
     private func call(_ method: String, _ args: Args? = nil) throws -> CallResult {
-        let socket = try UnixSocket(path: socketPath)
+        let socket = try endpoint.connect()
         defer { socket.close() }
-        try socket.write(Wire.encoder.encode(Request(method: method, args: args)))
+        try socket.write(Wire.lineEncoded(Request(method: method, args: args)))
+        // Then say so. The server reads this request to EOF, and without the
+        // half-close there is no EOF — the connection is still open because
+        // this side is waiting for the answer on it. Nothing at all comes
+        // back, which presents as a core that is up and silent.
+        socket.closeWrite()
         let data = try socket.readToEnd()
         guard !data.isEmpty else { throw Failure.emptyResponse }
         let response = try Wire.decoder.decode(Response.self, from: data)
@@ -254,6 +299,21 @@ public final class MoomuxClient: Sendable {
     @discardableResult
     public func ensureTmux(id: String) throws -> String {
         try call("EnsureTmux", Args(id: id)).hint ?? ""
+    }
+
+    /// Every tile in one call — the core batches it into a single tmux
+    /// invocation, so splitting this up buys nothing and costs a process each.
+    /// Keyed by session id; no front end needs a tmux session name.
+    public func capture(ids: [String]) throws -> [String: String] {
+        try call("Capture", Args(ids: ids)).screens ?? [:]
+    }
+
+    /// Opens the review window in the session's tmux, reusing an existing one.
+    /// The base branch is resolved core-side — session's own, then the
+    /// project's, then `main` — so nothing is passed for it here.
+    @discardableResult
+    public func review(id: String) throws -> String {
+        try call("Review", Args(id: id)).hint ?? ""
     }
 
     // MARK: - Mutations
@@ -445,13 +505,16 @@ public final class MoomuxClient: Sendable {
             // Closing the fd is what unblocks the read; cancelling the task is
             // not enough, since `bytes.lines` is parked inside read(2).
             continuation.onTermination = { _ in holder.close() }
-            Task.detached { [socketPath, live] in
+            Task.detached { [endpoint, live] in
                 do {
-                    let socket = try UnixSocket(path: socketPath)
+                    let socket = try endpoint.connect()
                     guard holder.adopt(socket) else { return continuation.finish() }
                     live.adopt(socket)
                     defer { live.drop(socket) }
-                    try socket.write(Wire.encoder.encode(Request(method: "Watch")))
+                    // Newline-terminated and *not* half-closed: `nudge()`
+                    // writes on this connection later, so its write half has
+                    // to stay open and the newline is what ends the request.
+                    try socket.write(Wire.lineEncoded(Request(method: "Watch")))
                     for try await line in socket.lines {
                         guard !line.isEmpty else { continue }
                         continuation.yield(
@@ -486,11 +549,11 @@ public final class MoomuxClient: Sendable {
     /// connection's socket down with it.
     private final class LiveWatch: @unchecked Sendable {
         private let lock = NSLock()
-        private var socket: UnixSocket?
+        private var socket: StreamSocket?
 
-        func adopt(_ socket: UnixSocket) { lock.withLock { self.socket = socket } }
+        func adopt(_ socket: StreamSocket) { lock.withLock { self.socket = socket } }
 
-        func drop(_ socket: UnixSocket) {
+        func drop(_ socket: StreamSocket) {
             lock.withLock { if self.socket === socket { self.socket = nil } }
         }
 
@@ -504,12 +567,12 @@ public final class MoomuxClient: Sendable {
     /// where termination lands before the connect finishes.
     private final class SocketHolder: @unchecked Sendable {
         private let lock = NSLock()
-        private var socket: UnixSocket?
+        private var socket: StreamSocket?
         private var closed = false
 
         /// Takes ownership. Returns false if close already happened, in which
         /// case the socket is closed here and the caller should give up.
-        func adopt(_ socket: UnixSocket) -> Bool {
+        func adopt(_ socket: StreamSocket) -> Bool {
             lock.withLock {
                 if closed {
                     socket.close()
@@ -521,7 +584,7 @@ public final class MoomuxClient: Sendable {
         }
 
         func close() {
-            let socket: UnixSocket? = lock.withLock {
+            let socket: StreamSocket? = lock.withLock {
                 closed = true
                 defer { self.socket = nil }
                 return self.socket

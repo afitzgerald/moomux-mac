@@ -95,7 +95,7 @@ public struct NewSessionForm: Equatable, Sendable {
         !project.isEmpty && !(name.isEmpty && existingBranch.isEmpty) && !agent.isEmpty
     }
 
-    static func demo() {
+    public static func demo() {
         let names = ["claude", "codex", "opencode"]
         var form = NewSessionForm()
         form.project = "moomux"
@@ -234,7 +234,7 @@ public struct ProjectForm: Equatable, Sendable {
         return nil
     }
 
-    static func demo() {
+    public static func demo() {
         var form = ProjectForm()
         assert(form.problem == "project name required")
         form.name = "my project"
@@ -273,6 +273,6 @@ public struct ProjectForm: Equatable, Sendable {
 }
 
 extension String {
-    var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
-    var nilIfEmpty: String? { isEmpty ? nil : self }
+    public var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
+    public var nilIfEmpty: String? { isEmpty ? nil : self }
 }

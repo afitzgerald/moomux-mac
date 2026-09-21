@@ -1,4 +1,5 @@
 import Foundation
+import MoomuxKit
 
 /// `Moomux --selftest` — runs every `demo()` check in the binary that ships.
 ///
@@ -19,6 +20,9 @@ enum SelfTest {
 
         Wire.demo()
         MoomuxClient.demo()
+        StreamSocket.demo()
+        AttachChannel.demo()
+        AttachSizing.demo()
         ToolPath.demo()
         Layout.demo()
         AppState.demo()
@@ -30,6 +34,7 @@ enum SelfTest {
         String.shellQuotedDemo()
         AppState.ghosttyConfigDemo()
         Theme.demo()
+        SessionTheme.demo()
         GhosttyResourceBundle.demo()
 
         print("selftest: ok")

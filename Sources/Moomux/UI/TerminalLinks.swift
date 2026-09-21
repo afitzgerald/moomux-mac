@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import MoomuxKit
 
 /// What a click on a link in a terminal pane is allowed to do.
 ///
@@ -151,4 +152,19 @@ enum TerminalLink {
     // renderer attached, which is not something an assert can stand up. What
     // survives is the half that was always the security boundary: `resolve`,
     // which refuses whatever the matcher hands over.
+}
+
+extension AppState {
+    /// Where a clicked ticket or PR tag goes. Web links open in the overlay —
+    /// a browser tab per glance is what this exists to stop — and anything else
+    /// (a `file:` tag) keeps going to its own app.
+    ///
+    /// Here rather than on `AppState` itself: the store is in `MoomuxKit`,
+    /// which both apps link, and `TerminalLink` is AppKit — `NSWorkspace` and
+    /// a Mac's installed apps. The `Sheet.web` case stays on the store, since
+    /// what a front end does about a link is the part that differs.
+    public func openTag(_ link: String) {
+        guard let url = TerminalLink.resolve(link) else { return }
+        if url.isFileURL { TerminalLink.open(link) } else { sheet = .web(link) }
+    }
 }

@@ -1,6 +1,7 @@
 import Foundation
 import GhosttyTerminal
 import SwiftUI
+import MoomuxKit
 
 /// Every live session at once, as read-only snapshots.
 ///
@@ -17,9 +18,16 @@ import SwiftUI
 struct SessionGrid: View {
     @Environment(AppState.self) private var app
 
-    /// One `capture-pane` output per tmux session, keyed by session name and
+    /// One `capture-pane` output per tmux session, keyed by session id and
     /// filled by the single loop below rather than per tile.
     @State private var screens: [String: [String]] = [:]
+
+    /// Why the last capture came back with nothing, or nil while it worked.
+    /// A tile that keeps its stale rows is right; a *grid* of them with no
+    /// word anywhere is the "a failed call must not read as empty" trap —
+    /// against a core too old to serve `Capture` there is no local fallback
+    /// any more, so every tile would simply stay blank forever.
+    @State private var captureError: String?
 
     /// Every live session, uncapped — measured, because the obvious reading of
     /// the numbers is wrong. Opening the grid costs ~190 MB of resident memory
@@ -38,7 +46,7 @@ struct SessionGrid: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 12)], spacing: 12) {
                 ForEach(tiles) { session in
-                    SessionTile(session: session, rows: screens[session.tmuxSession] ?? [])
+                    SessionTile(session: session, rows: screens[session.id] ?? [])
                         .onTapGesture {
                             app.selectedSessionID = session.id
                             app.showGrid = false
@@ -46,6 +54,15 @@ struct SessionGrid: View {
                 }
             }
             .padding(12)
+        }
+        .safeAreaInset(edge: .top) {
+            if let captureError {
+                Label(captureError, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .padding(8)
+                    .frame(maxWidth: .infinity)
+                    .background(.bar)
+            }
         }
         .overlay {
             if tiles.isEmpty {
@@ -58,13 +75,14 @@ struct SessionGrid: View {
         // every snapshot (map iteration, `session.Store.All`), and an id that
         // changed with it restarted this loop constantly — 33 captures where
         // 30 were due.
-        .task(id: tiles.map(\.tmuxSession).sorted().joined(separator: "\n")) {
+        .task(id: tiles.map(\.id).sorted().joined(separator: "\n")) {
             // One tmux process per tick for the whole grid, not one per tile.
             // Five seconds rather than the store's two because a snapshot is a
             // glance, not a live terminal. The loop belongs to the grid, so
             // closing it stops all of it.
             while !Task.isCancelled {
-                screens = await capture(sessions: tiles.map(\.tmuxSession), keeping: screens)
+                (screens, captureError) = await capture(ids: tiles.map(\.id),
+                                                        client: app.client, keeping: screens)
                 try? await Task.sleep(for: .seconds(5))
             }
         }
@@ -99,55 +117,44 @@ private struct SessionTile: View {
     }
 }
 
-/// `Process` blocks, same rule as every `MoomuxClient` call. A GUI app has
-/// launchd's `PATH`, so tmux comes from `ToolPath` and never from a bare name.
+/// The grid's screens, from the core.
 ///
-/// One invocation for the whole grid: `capture-pane`s joined with `;`, each
-/// preceded by a `display-message` marker that says whose output follows. Thirty
-/// tiles were thirty short-lived processes every five seconds, and the process
-/// churn was the entire expense of the design.
+/// This used to shell out to `tmux capture-pane` here — one of the three
+/// places this app reached past the socket, and the boundary rule says a thing
+/// the Swift side cannot do is a hole to fix in Go. `Capture` is that fix: one
+/// request for the whole grid, which the core batches into a single tmux
+/// invocation, keyed by **session id** so no front end needs a tmux name.
 ///
-/// No `-e`, unlike the control-mode repaint: `TmuxSnapshot.screen` cuts rows by
-/// character count, and SGR escapes are characters that occupy no columns, so
-/// keeping colour would cut every coloured row short.
-private func capture(sessions: [String], keeping previous: [String: [String]])
-    async -> [String: [String]] {
-    let names = sessions.filter { !$0.isEmpty }
-    // `previous`, not `[:]`: no tmux on the machine is exactly the case where
-    // wiping every tile to blank would read as "all your sessions are empty".
-    guard !names.isEmpty, let tmux = ToolPath.find("tmux") else { return previous }
-    return await Task.detached(priority: .utility) { () -> [String: [String]] in
-        // A session can die between the poll and the capture. Nothing captured
-        // leaves the tile showing its last snapshot, which is the same instinct
-        // as `AppState.refresh` keeping the last good list: a failed call must
-        // not read as "empty". Dropped keys are pruned, so a session that left
-        // the grid does not keep its screen alive here.
-        var out = names.reduce(into: [String: [String]]()) { $0[$1] = previous[$1] ?? [] }
-        var args: [String] = []
-        for name in names {
-            if !args.isEmpty { args.append(";") }
-            args += ["display-message", "-p", TmuxSnapshot.marker + name,
-                     ";", "capture-pane", "-p", "-t", name]
+/// Blocking, like every other `MoomuxClient` call, so it runs off the main
+/// actor.
+///
+/// Two things the move fixed rather than merely relocated. The local version
+/// could mis-attribute a dead session's `can't find pane:` error to the
+/// *previous* tile, because tmux abandons a command sequence at the first
+/// error while still exiting 0 and the local splitter accepted an unterminated
+/// trailing section. And the batch and the per-session retry disagreed about a
+/// trailing newline, so a tile could gain or lose a blank row depending on
+/// which path served it that tick. Both are the core's problem now, and it
+/// closes both.
+private func capture(ids: [String], client: MoomuxClient,
+                     keeping previous: [String: [String]]) async -> ([String: [String]], String?) {
+    guard !ids.isEmpty else { return (previous, nil) }
+    return await Task.detached(priority: .utility) { () -> ([String: [String]], String?) in
+        // Pruned to what is on screen, so a session that left the grid does
+        // not keep its rows alive here.
+        var out = ids.reduce(into: [String: [String]]()) { $0[$1] = previous[$1] ?? [] }
+        // A failed call must not read as "every session is empty" — the same
+        // instinct as `AppState.refresh` keeping its last good list. An absent
+        // key means the core could not capture that one, so the tile keeps
+        // what it last drew; `Capture` never sets `err`.
+        let screens: [String: String]
+        do { screens = try client.capture(ids: ids) } catch {
+            return (out, "Couldn't capture the sessions: \(error.localizedDescription)")
         }
-        var captured: Set<String> = []
-        if let text = try? ToolPath.run(tmux, args) {
-            for (name, rows) in TmuxSnapshot.split(text) where out[name] != nil {
-                out[name] = rows
-                captured.insert(name)
-            }
+        for (id, text) in screens where out[id] != nil {
+            out[id] = TmuxSnapshot.rows(of: text)
         }
-        // tmux abandons the rest of a command sequence at the first error, so
-        // one session that died a moment ago would otherwise freeze every tile
-        // after it in the list — measured: `can't find pane`, exit status 0,
-        // and no output at all for the commands that followed. Whatever the
-        // batch skipped gets one process of its own, which is at worst what
-        // this used to cost.
-        for name in names where !captured.contains(name) {
-            if let text = try? ToolPath.run(tmux, ["capture-pane", "-p", "-t", name]) {
-                out[name] = TmuxSnapshot.rows(of: text)
-            }
-        }
-        return out
+        return (out, nil)
     }.value
 }
 
@@ -252,32 +259,8 @@ private struct SnapshotTerminal: NSViewRepresentable {
 /// size until it was closed.
 enum TmuxSnapshot {
 
-    /// What a `display-message` marker looks like in the batched capture's
-    /// output, immediately followed by the session name whose screen comes
-    /// next. Deliberately unlikely rather than impossible: a pane printing this
-    /// exact line would have its snapshot cut there. tmux expands `#{...}` in a
-    /// message, so the marker carries no `#`.
-    static let marker = "@@moomux-tile@@"
-
-    /// One `capture-pane` per marked section of the batched output.
-    static func split(_ text: String) -> [(String, [String])] {
-        var out: [(String, [String])] = []
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.hasPrefix(marker) {
-                out.append((String(line.dropFirst(marker.count)), []))
-            } else if !out.isEmpty {
-                out[out.count - 1].1.append(String(line))
-            }
-        }
-        // tmux ends each section with the newline before the next marker, and
-        // the last one with the process's trailing newline.
-        return out.map { name, rows in
-            (name, rows.last == "" ? Array(rows.dropLast()) : rows)
-        }
-    }
-
-    /// The unbatched fallback's output: screen rows, blank ones kept — the
-    /// trailing-blank trimming belongs to `screen(from:columns:)`.
+    /// A captured screen as rows, blank ones kept — the trailing-blank
+    /// trimming belongs to `screen(from:columns:)`.
     static func rows(of text: String) -> [String] {
         text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     }
@@ -302,18 +285,9 @@ enum TmuxSnapshot {
     }
 
     static func demo() {
-        // The batched capture's output, as tmux really lays it out: a marker
-        // line per session, then that session's screen rows.
-        let batched = [marker + "one", "a", "b", marker + "two", "c", ""].joined(separator: "\n")
-        let sections = split(batched)
-        assert(sections.map(\.0) == ["one", "two"], "\(sections.map(\.0))")
-        assert(sections[0].1 == ["a", "b"], "\(sections[0].1)")
-        assert(sections[1].1 == ["c"], "the trailing newline is not a blank row: \(sections[1].1)")
-        // Output that starts with content rather than a marker (a tmux error
-        // printed before anything else) is attributed to nobody, never to the
-        // first session — a snapshot under the wrong tile is worse than none.
-        assert(split("can't find pane: x").isEmpty)
-        assert(split("").isEmpty)
+        // Splitting a batched capture used to live here and is the core's job
+        // now (`Capture`, keyed by session id), which is also what fixed
+        // mis-attributing a dead session's error to the previous tile.
         assert(rows(of: "a\nb\n") == ["a", "b", ""])
 
         let s = screen(from: ["abcdef", "gh"], columns: 4)

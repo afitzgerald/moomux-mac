@@ -92,7 +92,8 @@ BIN = $(BINDIR)/Moomux
 GHOSTTY_BUNDLE = $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle
 GHOSTTY_RES = $(GHOSTTY_BUNDLE)$(if $(wildcard $(GHOSTTY_BUNDLE)/Contents/Resources),/Contents/Resources,)
 
-.PHONY: build app run dev lsclean selfcheck warnings install shot signapp dmg dist notarize clean
+.PHONY: build app run dev lsclean selfcheck warnings install shot signapp dmg dist notarize clean \
+	ios ios-run ios-shot
 
 build:
 	swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS)
@@ -297,3 +298,117 @@ notarize:
 
 clean:
 	rm -rf .build dist
+
+# MARK: - iPhone
+#
+# No .xcodeproj. `swift build --triple` cross-compiles MoomuxKit and every
+# libghostty target for the simulator, and the app shell is one more `swiftc`
+# linked against those products — the same "assemble the bundle by hand" shape
+# as `app` above. An Xcode project only becomes necessary for distribution,
+# which needs certificates and an App Store Connect record.
+#
+# `env -u SDKROOT` is not optional: the macOS SDK pin at the top of this file
+# is exported, and SwiftPM hands SDKROOT to the *manifest* compile too, which
+# then tries to build Package.swift for macOS against an iPhone SDK and fails
+# with "unable to load standard library".
+#
+# But unsetting it leaves nothing pointing at the iPhone SDK either, and
+# `--triple` alone does not imply one: the frontend falls back to the macOS
+# sysroot and every module dies with "unable to load standard library for
+# target arm64-apple-ios*-simulator" — at each dependency's own minimum
+# deployment triple (ios13.0, ios15.0), which is what makes it read like a
+# dependency problem. Hence IOS_SDKFLAGS: `-Xswiftc`/`-Xcc` reach the target
+# compiles without reaching the manifest one, which is the whole difficulty.
+#
+# This is invisible once `.build` holds iOS-compiled modules, so it only ever
+# reproduces on a clean checkout — it shipped green locally and failed twice
+# on CI.
+IOS_TRIPLE   ?= arm64-apple-ios18.0-simulator
+IOS_SDK       = $(shell xcrun --sdk iphonesimulator --show-sdk-path)
+# Release, like every other target here. Debug would ship the `assert`s that
+# `--selftest` exists to run — an inverted invariant would abort the app on a
+# phone instead of drawing — and leave the VT byte path at -Onone.
+IOS_SDKFLAGS  = -Xswiftc -sdk -Xswiftc $(IOS_SDK) -Xcc -isysroot -Xcc $(IOS_SDK)
+# The engine is pinned, not inherited. The link step below names
+# `GhosttyTerminal.o`, `GhosttyKit.o` and `MSDisplayLink.o` in the products
+# directory, and one merged object per target is the *swiftbuild* layout: the
+# native engine emits none of those names anywhere (per-file objects under
+# `<target>.build/` instead) and puts the swiftmodules in `Modules/` rather
+# than at the root. Whichever engine a toolchain defaults to therefore decides
+# whether this target works at all — swiftbuild locally, native on a
+# macos-26 runner, which is how this passed here and failed there. Overridable
+# for a toolchain that lacks it.
+IOS_BUILD_SYSTEM ?= --build-system swiftbuild
+IOS_PRODUCTS  = $(shell env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) $(IOS_BUILD_SYSTEM) $(IOS_SDKFLAGS) --show-bin-path)
+# The C module the Swift wrapper imports. SwiftPM knows where the xcframework
+# slice is; a bare `swiftc` does not, and the failure reads as
+# "missing required module 'libghostty'".
+IOS_GHOSTTY   = .build/artifacts/libghostty-spm/libghostty/GhosttyKit.xcframework/ios-arm64_x86_64-simulator
+IOS_APP       = .build/Moomux-iOS.app
+IOS_BUNDLE_ID = app.moomux.Moomux.ios
+# Named rather than "booted": a second worktree's run would otherwise land in
+# whichever simulator happened to be open.
+IOS_DEVICE   ?= iPhone 18 Pro
+IOS_SOURCES   = $(shell find Sources/MoomuxiOS -name '*.swift')
+IOS_KIT_SOURCES = $(shell find Sources/MoomuxKit -name '*.swift')
+# The icons are rasterized into the bundle, so the SVGs and the script that
+# converts them are inputs too — and Package.resolved because a libghostty bump
+# changes the framework linked in. Left out, `ios-run` installs a stale bundle.
+IOS_ASSETS    = $(wildcard Resources/icons/*.svg) Scripts/rasterize.swift \
+                Package.swift Package.resolved
+
+ios: $(IOS_APP)
+
+$(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.plist Makefile
+	@# `--product MoomuxKit` only works because that product is declared
+	@# `type: .static` — an automatic one is ignored with a warning and the
+	@# default target set is built instead, which includes the macOS
+	@# executable and fails on `import AppKit`. `--target` is not the
+	@# alternative: it builds the module without emitting libMoomuxKit.a,
+	@# and the link below needs the archive.
+	env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) \
+		$(IOS_BUILD_SYSTEM) $(IOS_SDKFLAGS) --product MoomuxKit
+	@mkdir -p $(IOS_APP)
+	@# SDKROOT *set* here, not unset: -sdk reaches the Swift frontend but clang
+	@# picks the SDK from the environment, so unsetting it leaves the C module
+	@# and the link on the macOS sysroot ("-Wincompatible-sysroot"). The opposite
+	@# of what `swift build` above needs, which is why the two differ.
+	env SDKROOT=$(IOS_SDK) xcrun swiftc -O -target $(IOS_TRIPLE) -sdk $(IOS_SDK) -swift-version 5 \
+		-parse-as-library -I $(IOS_PRODUCTS) -I $(IOS_GHOSTTY)/Headers \
+		-o $(IOS_APP)/Moomux $(IOS_SOURCES) \
+		$(IOS_PRODUCTS)/libMoomuxKit.a \
+		$(IOS_PRODUCTS)/GhosttyTerminal.o $(IOS_PRODUCTS)/GhosttyKit.o \
+		$(IOS_PRODUCTS)/MSDisplayLink.o $(IOS_PRODUCTS)/libghostty.a -lc++
+	cp Resources/iOS-Info.plist $(IOS_APP)/Info.plist
+	@# The cow, and the home-screen icon. Both come from the same SVGs the Mac
+	@# bundle ships; `UIImage` cannot read SVG, so they are rasterized here
+	@# rather than checked in as a second copy that could drift. No asset
+	@# catalog on this path, so the icon is plain PNGs plus CFBundleIcons.
+	swift Scripts/rasterize.swift Resources/icons/moomux-terminal-nose.svg \
+		$(IOS_APP)/moomux-terminal-nose.png 84
+	swift Scripts/rasterize.swift Resources/icons/moomux-terminal-nose-plate.svg \
+		$(IOS_APP)/AppIcon60x60@2x.png 120
+	swift Scripts/rasterize.swift Resources/icons/moomux-terminal-nose-plate.svg \
+		$(IOS_APP)/AppIcon60x60@3x.png 180
+	@# Flat bundle root on iOS, which is where SwiftPM's generated accessor
+	@# looks first — so no GhosttyResourceBundle.warm() hook is needed here.
+	rm -rf $(IOS_APP)/GhosttyKit_GhosttyTerminal.bundle
+	cp -R $(IOS_PRODUCTS)/GhosttyKit_GhosttyTerminal.bundle $(IOS_APP)/
+	codesign --force --sign - $(IOS_APP)
+	@touch $(IOS_APP)
+
+ios-run: ios
+	xcrun simctl boot "$(IOS_DEVICE)" 2>/dev/null || true
+	xcrun simctl bootstatus "$(IOS_DEVICE)" -b >/dev/null
+	xcrun simctl install "$(IOS_DEVICE)" $(IOS_APP)
+	xcrun simctl terminate "$(IOS_DEVICE)" $(IOS_BUNDLE_ID) 2>/dev/null || true
+	xcrun simctl launch "$(IOS_DEVICE)" $(IOS_BUNDLE_ID) \
+		$(if $(HOST),-coreHost $(HOST),) $(if $(PORT),-corePort $(PORT),) \
+		$(if $(SESSION),-openSession $(SESSION),) $(if $(ATTACH),-attach 1,)
+
+# A crash on launch shows up as a home screen in the PNG — the iOS counterpart
+# of the pgrep check in CLAUDE.md.
+ios-shot: ios-run
+	@sleep 4
+	xcrun simctl io "$(IOS_DEVICE)" screenshot .build/ios-shot.png
+	@echo ".build/ios-shot.png"
