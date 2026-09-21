@@ -329,7 +329,17 @@ IOS_SDK       = $(shell xcrun --sdk iphonesimulator --show-sdk-path)
 # `--selftest` exists to run — an inverted invariant would abort the app on a
 # phone instead of drawing — and leave the VT byte path at -Onone.
 IOS_SDKFLAGS  = -Xswiftc -sdk -Xswiftc $(IOS_SDK) -Xcc -isysroot -Xcc $(IOS_SDK)
-IOS_PRODUCTS  = $(shell env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) $(IOS_SDKFLAGS) --show-bin-path)
+# The engine is pinned, not inherited. The link step below names
+# `GhosttyTerminal.o`, `GhosttyKit.o` and `MSDisplayLink.o` in the products
+# directory, and one merged object per target is the *swiftbuild* layout: the
+# native engine emits none of those names anywhere (per-file objects under
+# `<target>.build/` instead) and puts the swiftmodules in `Modules/` rather
+# than at the root. Whichever engine a toolchain defaults to therefore decides
+# whether this target works at all — swiftbuild locally, native on a
+# macos-26 runner, which is how this passed here and failed there. Overridable
+# for a toolchain that lacks it.
+IOS_BUILD_SYSTEM ?= --build-system swiftbuild
+IOS_PRODUCTS  = $(shell env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) $(IOS_BUILD_SYSTEM) $(IOS_SDKFLAGS) --show-bin-path)
 # The C module the Swift wrapper imports. SwiftPM knows where the xcframework
 # slice is; a bare `swiftc` does not, and the failure reads as
 # "missing required module 'libghostty'".
@@ -357,7 +367,7 @@ $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.p
 	@# alternative: it builds the module without emitting libMoomuxKit.a,
 	@# and the link below needs the archive.
 	env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) \
-		$(IOS_SDKFLAGS) --product MoomuxKit
+		$(IOS_BUILD_SYSTEM) $(IOS_SDKFLAGS) --product MoomuxKit
 	@mkdir -p $(IOS_APP)
 	@# SDKROOT *set* here, not unset: -sdk reaches the Swift frontend but clang
 	@# picks the SDK from the environment, so unsetting it leaves the C module
