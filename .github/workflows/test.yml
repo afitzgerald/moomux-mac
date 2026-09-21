@@ -38,6 +38,24 @@ jobs:
       - name: Release build + app bundle
         run: make app
 
+      # `Sources/MoomuxiOS` is not a SwiftPM target — it is compiled by a bare
+      # `swiftc` in `make ios` — so nothing above type-checks a line of it.
+      # Without this a phone-only file can break and every other check stays
+      # green.
+      #
+      # The one step that needs an iOS SDK, so it pins the toolchain rather
+      # than inheriting whichever Xcode the image defaults to — `make ios`
+      # reads the SDK path out of `xcrun`, and the macOS steps above stay on
+      # the CommandLineTools toolchain the dev machine uses. The `xcrun` line
+      # is there so an image without that SDK says so in one line rather than
+      # as forty "unable to load standard library" errors.
+      - name: iOS bundle
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+        run: |
+          xcrun --sdk iphonesimulator --show-sdk-path
+          make ios
+
   lint:
     runs-on: macos-26
     timeout-minutes: 15

@@ -272,8 +272,9 @@ inversion check whenever you add a check that matters.
 README won't tell you — this is how `#Preview`-using libraries get caught. Both terminal
 dependencies were spiked this way before going into `Package.swift`: SwiftTerm first, then
 libghostty-spm (links clean under CommandLineTools, the binary runs unbundled so `make selfcheck`
-survives, no `#Preview` anywhere in it). It is the only dependency; keep it that way for as long
-as possible.
+survives, no `#Preview` anywhere in it). It is currently the only one, which is a fact about how
+little this app has needed rather than a rule — add a dependency when it earns its place, and
+spike it first.
 
 **`NSLog` does not reach `log show` / `log stream` from this bundle.** Two rounds of debugging went
 into a predicate that was never going to match. When you need to trace something inside the running
@@ -317,7 +318,7 @@ UI/RootView.swift        split view, rows, detail, inspector, menu-bar content
 UI/TerminalPane.swift    libghostty hosting a plain `tmux attach`
 UI/TerminalLinks.swift   what a ⌘-clicked link in a pane is allowed to open
 UI/SettingsView.swift    project CRUD and the shared config flags, on two tabs
-UI/SessionGrid.swift     every live session at once, as capture-pane snapshots
+UI/SessionGrid.swift     every live session at once, as `Capture` snapshots
 ```
 
 libghostty is reached **only** through `UI/TerminalPane.swift` (the live attached session, on the
@@ -330,6 +331,12 @@ resource bundle to resolve at launch — see the bullet below). The one shared p
 `internal/ipc/client.go` is the reference implementation of `MoomuxClient`. Keep the two honest
 against each other — anything the Swift side cannot do over the socket is a hole in the boundary
 to fix in Go, not a reason to link the core.
+
+**Two of the three places this app used to reach past the socket are closed.** The grid's
+`tmux capture-pane` is `Capture` and Review's `tmux new-window` is `Review`, both keyed by
+session id. `ToolPath` survives for the two things that are genuinely local: the `.exec` attach
+in `TerminalPane`, and the GUI diff tool. Note `Capture`/`Review` mean this app now **requires a
+core new enough to serve them** — there is no fallback to the old local paths.
 
 ## Things that will bite you
 
@@ -840,21 +847,24 @@ Decisions, not oversights. Don't "fix" these without being asked.
   install; `args` are template-expanded, which is what makes `{{appdir}}` work there.
 - **Config is re-fetched on every 2s poll** rather than only after a change. One extra socket
   round trip, and it keeps project order and emoji fresh with no invalidation logic.
-- **Review happens in a tmux window, not in a patch viewer.** "Review Changes" runs
-  `new-window -n review` in the session with `git diff --merge-base <base>` plus a
-  `git status --short --branch`, and leaves a shell behind (`AppState.reviewScript`). Reviewing
-  twice reuses that window (`respawn-window -k`, then `select-window`; `new-window` only when there
-  is nothing to reuse) — two tabs both called "review" with nothing to tell them apart is worse than
-  either. `respawn-window` and not kill-then-create, because killing the last window of a session
-  kills the session. A native
+- **Review happens in a tmux window, not in a patch viewer — and the core runs it.**
+  `AppState.review(_:)` calls the wire's `Review`, which opens a `review` window in the session
+  with `git diff --merge-base <base>` plus a `git status --short --branch` and leaves a shell
+  behind. Reviewing twice reuses that window (`respawn-window -k`, then `select-window`;
+  `new-window` only when there is nothing to reuse) — two tabs both called "review" with nothing
+  to tell them apart is worse than either. `respawn-window` and not kill-then-create, because
+  killing the last window of a session kills the session. All of that is core-side now; the
+  `reviewScript` that used to build the command line here is gone, and so is the local
+  `tmux new-window`. A native
   viewer was designed and rejected: ~400 lines across two languages — a new `gitwt.Diff`, an
   `App.Diff`, a `Patch` field on `ipc.Result`, a `Server` hook, a `main.go` line and a two-pane
   SwiftUI sheet — to end up a *worse* pager than the shell pane this app already renders natively,
   with no colour config, no word diff and no `delta`. Going through tmux costs one `Process` call,
   and tmux's own window switching (the prefix key works fine over a plain attach) is what makes it
   reachable. The tradeoffs it keeps: no diff without a live tmux
-  session (`canReview`), the base branch comes from the *project*, not the session, so a session
-  created with an explicit `-base` diffs against the project default, and untracked files show as a
+  session (`canReview`, still `isAlive` — a parked session answers
+  "<name> is parked; open it before reviewing" rather than reviving itself, because asking for a
+  diff must not relaunch an agent), and untracked files show as a
   `git status` listing rather than as patches — `git add -N` would get them into the diff and is not
   worth mutating a live worktree's index for.
   **The escape hatch is one field**: Settings → Preferences → Diff tool takes a command, and ⌘D

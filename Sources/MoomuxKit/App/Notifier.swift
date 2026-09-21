@@ -1,4 +1,6 @@
+#if canImport(AppKit)
 import AppKit
+#endif
 import UserNotifications
 
 /// Banners for sessions that start waiting on you while you are elsewhere.
@@ -30,6 +32,17 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// The phone's answer to the Mac's dock tile. Driven by
+    /// `AppState.updateDockBadge` and **not** from `report`, which only runs
+    /// when the view map changed: `needsInputCount` filters `visibleSessions`,
+    /// so archiving the one waiting session — or flipping Show Archived —
+    /// leaves the views identical and would strand the badge at 1. Needs the
+    /// `.badge` authorization `init` asks for, same as the dock tile does.
+    public func setBadge(_ count: Int) {
+        guard let center else { return }
+        Task { try? await center.setBadgeCount(count) }
+    }
+
     /// Post for every session that just *became* blocked; clear the banner for
     /// every one that stopped being.
     public func report(previous: [Session.ID: SessionView], current: [Session.ID: SessionView]) {
@@ -45,7 +58,12 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         for id in change.started {
             guard let session = app.session(id: id), !session.archived else { continue }
             // A banner for the window you are already looking at is noise.
+            // No iOS half: with no `willPresent` delegate the system drops
+            // every foreground banner anyway, which is the same rule and
+            // stricter.
+            #if os(macOS)
             if NSApp.isActive, app.selectedSessionID == session.id { continue }
+            #endif
             post(session, to: center)
         }
     }
@@ -68,7 +86,10 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: Tapping a banner
 
-    /// Come forward with that session selected. `NSApp.activate()` rather than
+    /// Come forward with that session selected — which on iOS is what makes
+    /// the list push that session's pane, since nothing there reads a
+    /// selection except the observer `SessionListView` installs on it.
+    /// `NSApp.activate()` rather than
     /// `activate(ignoringOtherApps:)`, which is deprecated at the 14.0
     /// deployment target and would cost a warning.
     public nonisolated func userNotificationCenter(
@@ -79,8 +100,12 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let id = response.notification.request.identifier
         Task { @MainActor in
             app?.selectedSessionID = id
+            #if os(macOS)
             NSApp.activate()
             NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
+            #endif
+            // iOS brings the app forward itself when a banner is tapped; there
+            // is no window to order front.
             done()
         }
     }
@@ -106,7 +131,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         return (started.sorted(), ended.sorted())  // sorted so demo() can assert
     }
 
-    nonisolated static func demo() {
+    public nonisolated static func demo() {
         let a = "p:a", b = "p:b"
         // First sight of a session seeds; it never banners.
         assert(transitions(from: [:], to: [a: .needsInput]).started.isEmpty)

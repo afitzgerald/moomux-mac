@@ -5,3 +5,4 @@ dist/
 .DS_Store
 /Makefile.local
 .wt-seed-env-mise-install.log
+.moomux-panes.toml
