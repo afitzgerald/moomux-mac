@@ -111,6 +111,10 @@ public final class AppState {
         /// namespace is global.
         case newFolder(assign: Session?)
         case renameFolder(name: String)
+        /// A ticket or PR, in an in-app web view. The link string and not a
+        /// URL: the "Open Externally" button re-resolves it so an Asana link
+        /// still reaches the desktop app.
+        case web(String)
         /// Settings *and* project management, on two tabs.
         ///
         /// The project add/edit form is deliberately not a case here: it is
@@ -1516,6 +1520,14 @@ public final class AppState {
             try client.setAgent(id: session.id, agent: agent, dangerous: dangerous)
             return "\(name) will launch \(agent) next time it's opened."
         }
+    }
+
+    /// Where a clicked ticket or PR tag goes. Web links open in the overlay —
+    /// a browser tab per glance is what this exists to stop — and anything else
+    /// (a `file:` tag) keeps going to its own app.
+    public func openTag(_ link: String) {
+        guard let url = TerminalLink.resolve(link) else { return }
+        if url.isFileURL { TerminalLink.open(link) } else { sheet = .web(link) }
     }
 
     public func setTags(_ session: Session, ticket: String, pr: String) {
