@@ -93,7 +93,7 @@ GHOSTTY_BUNDLE = $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle
 GHOSTTY_RES = $(GHOSTTY_BUNDLE)$(if $(wildcard $(GHOSTTY_BUNDLE)/Contents/Resources),/Contents/Resources,)
 
 .PHONY: build app run dev lsclean selfcheck warnings install shot signapp dmg dist notarize clean \
-	ios ios-run ios-shot
+	ios ios-run ios-shot ios-archive testflight
 
 build:
 	swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS)
@@ -345,7 +345,8 @@ IOS_PRODUCTS  = $(shell env -u SDKROOT swift build -c release --triple $(IOS_TRI
 # "missing required module 'libghostty'".
 IOS_GHOSTTY   = .build/artifacts/libghostty-spm/libghostty/GhosttyKit.xcframework/ios-arm64_x86_64-simulator
 IOS_APP       = .build/Moomux-iOS.app
-IOS_BUNDLE_ID = app.moomux.Moomux.ios
+# The Mac app's identifier on purpose — see the comment on it in iOS-Info.plist.
+IOS_BUNDLE_ID = app.moomux.Moomux
 # Named rather than "booted": a second worktree's run would otherwise land in
 # whichever simulator happened to be open.
 IOS_DEVICE   ?= iPhone 18 Pro
@@ -380,6 +381,13 @@ $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.p
 		$(IOS_PRODUCTS)/GhosttyTerminal.o $(IOS_PRODUCTS)/GhosttyKit.o \
 		$(IOS_PRODUCTS)/MSDisplayLink.o $(IOS_PRODUCTS)/libghostty.a -lc++
 	cp Resources/iOS-Info.plist $(IOS_APP)/Info.plist
+	@# Nothing expands $(CURRENT_PROJECT_VERSION) on this path — the plist is
+	@# copied, not built.
+	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1" $(IOS_APP)/Info.plist
+	@# TARGETED_DEVICE_FAMILY on the Xcode path; in the plist too, Xcode warns
+	@# that it is overwriting it.
+	/usr/libexec/PlistBuddy -c "Add :UIDeviceFamily array" \
+		-c "Add :UIDeviceFamily:0 integer 1" $(IOS_APP)/Info.plist
 	@# The cow, and the home-screen icon. Both come from the same SVGs the Mac
 	@# bundle ships; `UIImage` cannot read SVG, so they are rasterized here
 	@# rather than checked in as a second copy that could drift. No asset
@@ -412,3 +420,63 @@ ios-shot: ios-run
 	@sleep 4
 	xcrun simctl io "$(IOS_DEVICE)" screenshot .build/ios-shot.png
 	@echo ".build/ios-shot.png"
+
+# MARK: - TestFlight
+#
+# The one path with an Xcode project. `make ios` builds without one, but
+# distribution needs a distribution certificate, a provisioning profile, an App
+# ID and an App Store Connect record, and Xcode makes all but the last from a
+# signed-in Apple ID (-allowProvisioningUpdates) where by hand it is several web
+# forms. Moomux.xcodeproj exists for this and nothing else: one iOS target over
+# Sources/MoomuxiOS, linking MoomuxKit from this package. The Mac app is not in
+# it and still ships through `make notarize` and the cask; when it joins, it is
+# a second target on the same record — the shared bundle id is what leaves room.
+#
+# One-time, and not scriptable from here: an Apple ID in Xcode ▸ Settings ▸
+# Accounts, and an App Store Connect app record for $(IOS_BUNDLE_ID) with "Make
+# this app available on Mac" turned off, since the Mac app owns that id natively.
+#
+# `env -u SDKROOT`, because the macOS SDK pin at the top of this file is exported
+# and xcodebuild reads the environment as build settings. DEVELOPER_DIR, because
+# xcodebuild refuses to run under CommandLineTools and this Makefile does not
+# assume which toolchain `xcode-select` points at.
+XCODE       ?= /Applications/Xcode.app/Contents/Developer
+# Empty locally, where Xcode ▸ Settings ▸ Accounts authenticates. CI has no
+# signed-in Apple ID and passes an App Store Connect API key here instead
+# (.github/workflows/testflight.yml) — a variable rather than a second recipe in
+# the workflow, because a duplicated recipe is how 0.0.26 shipped unstapled.
+XC_AUTH     ?=
+XCODEBUILD   = env -u SDKROOT DEVELOPER_DIR=$(XCODE) xcodebuild
+XC_ARCHIVE  := .build/Moomux-iOS.xcarchive
+# Every upload needs a build number App Store Connect has not seen. Minutes since
+# an arbitrary epoch: monotonic, no state in the repo. `:=` so it is read once —
+# `date` re-run per reference could straddle a minute.
+XC_BUILD    := $(shell echo $$(( ($$(date +%s) - 1750000000) / 60 )))
+# The two PNGs the Xcode build takes from Sources/MoomuxiOS (gitignored). The
+# icon is full-bleed and alpha-free: iOS applies its own mask, and App Store
+# Connect rejects a marketing icon with an alpha channel even when it is opaque.
+IOS_NOSE     = Sources/MoomuxiOS/moomux-terminal-nose.png
+IOS_ICON     = Sources/MoomuxiOS/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+
+$(IOS_NOSE): Resources/icons/moomux-terminal-nose.svg Scripts/rasterize.swift
+	swift Scripts/rasterize.swift $< $@ 84
+
+$(IOS_ICON): Resources/icons/moomux-terminal-nose-plate.svg Scripts/rasterize.swift
+	@mkdir -p .build
+	sed -E 's/ rx="[0-9]+" ry="[0-9]+"//' $< > .build/icon-full-bleed.svg
+	swift Scripts/rasterize.swift .build/icon-full-bleed.svg $@ 1024 --opaque
+
+ios-archive: $(IOS_NOSE) $(IOS_ICON)
+	$(XCODEBUILD) -project Moomux.xcodeproj -scheme Moomux \
+		-destination 'generic/platform=iOS' -configuration Release \
+		-archivePath $(XC_ARCHIVE) CURRENT_PROJECT_VERSION=$(XC_BUILD) $(XC_AUTH) \
+		-allowProvisioningUpdates archive
+
+# Uploads straight from the export (destination=upload in ExportOptions), so no
+# .ipa is written. Apple processes the build for a few minutes after this
+# returns; it then appears under TestFlight ▸ iOS.
+testflight: ios-archive
+	$(XCODEBUILD) -exportArchive -archivePath $(XC_ARCHIVE) \
+		-exportOptionsPlist Resources/ExportOptions.plist \
+		-exportPath .build/export $(XC_AUTH) -allowProvisioningUpdates
+	@echo "uploaded build $(XC_BUILD) — watch App Store Connect ▸ TestFlight"

@@ -6,8 +6,13 @@
 	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>Moomux</string>
+	<!-- The Mac app's identifier, not a `.ios` one. App Store Connect ties a
+	     record to one bundle id and only carries several platforms under it
+	     when they share it, and the id is locked the moment a first build is
+	     uploaded — so this is the one chance to leave room for the Mac build
+	     joining the same TestFlight record later. -->
 	<key>CFBundleIdentifier</key>
-	<string>app.moomux.Moomux.ios</string>
+	<string>app.moomux.Moomux</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -16,8 +21,16 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.0.1</string>
+	<!-- From the build setting, so `make testflight` can give every upload the
+	     distinct build number App Store Connect insists on. `make ios` has no
+	     build settings and substitutes a literal with PlistBuddy. -->
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- Plain TCP to the core over the tailnet, no custom cryptography. Without
+	     this every TestFlight build sits in "Missing Compliance" and is never
+	     offered to testers, which reads as the upload having failed. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundlePrimaryIcon</key>
@@ -38,10 +51,6 @@
 	<true/>
 	<key>MinimumOSVersion</key>
 	<string>18.0</string>
-	<key>UIDeviceFamily</key>
-	<array>
-		<integer>1</integer>
-	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
