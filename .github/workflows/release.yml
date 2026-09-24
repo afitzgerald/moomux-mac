@@ -178,3 +178,12 @@ jobs:
           git add Casks/moomux-mac.rb
           git commit -m "moomux-mac ${TAG}"
           git push
+
+  # After the cask, not beside it: a TestFlight build only goes out for a
+  # release brew actually got, and a failed upload cannot hold the cask back.
+  testflight:
+    needs: release
+    uses: ./.github/workflows/testflight.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+    secrets: inherit
