@@ -169,6 +169,12 @@ struct SessionCommands: Commands {
             Button("Tags…") { if let s = selected { app.sheet = .tags(s) } }
                 .keyboardShortcut("t", modifiers: .command)
                 .disabled(selected == nil)
+            // No shortcut: a ⌘ key would also have to go into `paneKeybinds`
+            // to survive a focused pane, and this is not an every-minute action.
+            Button("Open in MergeRight") {
+                if let link = selected.flatMap(app.installedMergeRightLink) { NSWorkspace.shared.open(link) }
+            }
+            .disabled(selected.flatMap(app.installedMergeRightLink) == nil)
             Button(selected?.archived == true ? "Unarchive" : "Archive") {
                 if let s = selected { app.setArchived(s, !s.archived) }
             }

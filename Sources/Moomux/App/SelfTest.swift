@@ -36,6 +36,7 @@ enum SelfTest {
         AppState.ghosttyConfigDemo()
         Theme.demo()
         SessionTheme.demo()
+        MergeRight.demo()
         GhosttyResourceBundle.demo()
 
         print("selftest: ok")
