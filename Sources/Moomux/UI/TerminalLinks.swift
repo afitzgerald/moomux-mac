@@ -175,10 +175,10 @@ extension AppState {
 
     public func openTag(_ link: String) {
         guard let url = TerminalLink.resolve(link) else { return }
-        // A PR tag only: MergeRight answers an Asana link with the PR that
-        // names it, and a clicked ticket tag should show the ticket.
-        if mergeRightLinks, url.host?.lowercased() == "github.com",
-           let mr = MergeRight.link(link), TerminalLink.schemeHasHandler("mergeright") {
+        // Ahead of the Asana app: with the setting on, a ticket tag goes to
+        // MergeRight too, which opens the PR that links the ticket.
+        if mergeRightLinks, let mr = MergeRight.link(link),
+           TerminalLink.schemeHasHandler("mergeright") {
             NSWorkspace.shared.open(mr)
         } else if url.isFileURL || TerminalLink.asanaDesktop(url) != nil {
             TerminalLink.open(link)
