@@ -23,6 +23,7 @@ enum SelfTest {
         StreamSocket.demo()
         AttachChannel.demo()
         AttachSizing.demo()
+        Reattach.demo()
         ToolPath.demo()
         Layout.demo()
         AppState.demo()
@@ -37,6 +38,7 @@ enum SelfTest {
         Theme.demo()
         SessionTheme.demo()
         MergeRight.demo()
+        WebLink.demo()
         GhosttyResourceBundle.demo()
 
         print("selftest: ok")

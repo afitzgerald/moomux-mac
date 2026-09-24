@@ -494,17 +494,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// http(s) only. These come from the session store rather than from pane
-    /// output, so they are not attacker-influenced the way `TerminalLink`'s
-    /// input is — but a scheme allowlist is one line and keeps a stray
-    /// `file:` or `mailto:` in a ticket field from being a tap target.
-    private func webLink(_ value: String?) -> URL? {
-        guard let value, !value.isEmpty, let url = URL(string: value),
-              url.scheme == "https" || url.scheme == "http"
-        else { return nil }
-        return url
-    }
-
     @ViewBuilder
     private func detail(_ session: Session) -> some View {
         List {
@@ -577,12 +566,12 @@ struct SessionDetailView: View {
                 }
             }
 
-            if webLink(session.ticket) != nil || webLink(session.pr) != nil {
+            if WebLink.url(session.ticket) != nil || WebLink.url(session.pr) != nil {
                 Section {
-                    if let url = webLink(session.ticket) {
+                    if let url = WebLink.url(session.ticket) {
                         Link(destination: url) { Label("Ticket", systemImage: "ticket") }
                     }
-                    if let url = webLink(session.pr) {
+                    if let url = WebLink.url(session.pr) {
                         Link(destination: url) {
                             Label("Pull request", systemImage: "arrow.triangle.pull")
                         }
