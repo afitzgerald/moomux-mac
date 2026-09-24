@@ -246,6 +246,7 @@ struct SessionListView: View {
                         ))
                         .disabled(app.folderRows.isEmpty)
                         Toggle("Show Archived", isOn: $app.showArchived)
+                        Toggle("Open in MergeRight", isOn: $app.mergeRightLinks)
                         Picker("Terminal size", selection: $fontSize) {
                             ForEach(TerminalFontSize.choices, id: \.self) { size in
                                 Text("\(Int(size)) pt").tag(size)
@@ -584,6 +585,15 @@ struct SessionDetailView: View {
                     if let url = webLink(session.pr) {
                         Link(destination: url) {
                             Label("Pull request", systemImage: "arrow.triangle.pull")
+                        }
+                    }
+                    // Hidden without MergeRight installed, where the scheme
+                    // opens nothing (`canOpenURL` needs the scheme listed in
+                    // LSApplicationQueriesSchemes).
+                    if let link = app.mergeRightLink(for: session),
+                       UIApplication.shared.canOpenURL(link) {
+                        Link(destination: link) {
+                            Label("Open in MergeRight", systemImage: "arrow.up.forward.app")
                         }
                     }
                 }

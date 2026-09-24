@@ -959,6 +959,9 @@ private struct SessionRow: View {
                 .disabled(!app.canOpenDiffTool(session))
             Button("Edit…") { app.sheet = .edit(session) }
             Button("Tags…") { app.sheet = .tags(session) }
+            if let link = app.installedMergeRightLink(for: session) {
+                Button("Open in MergeRight") { NSWorkspace.shared.open(link) }
+            }
             Button("Copy Path") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(session.worktreePath, forType: .string)
@@ -1170,6 +1173,15 @@ private struct SessionInfo: View {
                             Label("Tags", systemImage: "tag")
                         }
                         .help("Set this session's ticket and pull request")
+
+                        if let link = app.installedMergeRightLink(for: session) {
+                            Button {
+                                NSWorkspace.shared.open(link)
+                            } label: {
+                                Label("MergeRight", systemImage: "arrow.triangle.pull")
+                            }
+                            .help("Open this session's pull request in MergeRight")
+                        }
 
                         Button {
                             app.sheet = .edit(session)
