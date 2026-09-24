@@ -186,3 +186,38 @@ public enum AttachSizing: Sendable {
 }
 
 extension AttachSizing: Equatable {}
+
+/// What a pane does about to reattach after its link dropped.
+///
+/// `Attach` runs `EnsureTmux` core-side, so reattaching to a session that was
+/// killed meanwhile does not fail — it **recreates** it, agent and all. So once
+/// a pane has been attached, every reattach first asks whether the session is
+/// still there (`alive`, from `Capture`, which omits dead sessions and revives
+/// nothing; nil when the core could not be reached). Before the first attach
+/// there is nothing to check against: opening a parked session is the user
+/// asking for it to be revived.
+public enum Reattach: Sendable, Equatable {
+    case attach
+    /// The core is unreachable; ask again shortly.
+    case wait
+    /// The session is gone; the pane's reason to exist went with it.
+    case end
+
+    public static func decide(everAttached: Bool, alive: Bool?) -> Reattach {
+        guard everAttached else { return .attach }
+        switch alive {
+        case true?: return .attach
+        case false?: return .end
+        case nil: return .wait
+        }
+    }
+
+    public static func demo() {
+        assert(decide(everAttached: false, alive: nil) == .attach, "first open may revive")
+        assert(decide(everAttached: false, alive: false) == .attach)
+        assert(decide(everAttached: true, alive: true) == .attach)
+        assert(decide(everAttached: true, alive: false) == .end,
+               "a session killed while the link was down must not be recreated")
+        assert(decide(everAttached: true, alive: nil) == .wait, "no answer is not a death")
+    }
+}
