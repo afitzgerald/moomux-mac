@@ -89,8 +89,15 @@ public final class AppState {
     /// sessions. Clicking a tile selects it; Attach is still the full-size,
     /// deliberate thing. No snapshot text lives in the store — see `SessionGrid`.
     public var showGrid = false
-    /// Whatever the last `OpenSession` told the user to do, if anything.
+    /// What the last action that has no session to belong to had to say.
+    /// Front ends clear it when the selection moves.
     public var hint: String?
+    /// What the last action *on each session* had to say — a create's
+    /// userscript warnings or a first prompt that did not land, a review, a
+    /// revive. Keyed by session so it survives the selection moving: a create
+    /// selects the session it made, and a single `hint` cleared on selection
+    /// change was losing exactly that warning.
+    public var sessionHints: [Session.ID: String] = [:]
     /// A mutation the server refused, until the user dismisses it. See
     /// `failed(_:_:)` for why this is not `connection`.
     public var actionError: String?
@@ -800,6 +807,43 @@ public final class AppState {
             ?? []
     }
 
+    /// Whether `agent`'s model control is a picker or a free-text field.
+    /// opencode by name, because `models(for:)` falls back to claude's list
+    /// for it the way the TUI's helper does; this is the TUI's own swap
+    /// (`agent != "opencode"` in `internal/tui/update.go`).
+    public func hasModelList(for agent: String) -> Bool {
+        !models(for: agent).isEmpty && agent != "opencode"
+    }
+
+    // MARK: New-session form
+
+    /// A form seeded the way both front ends open it: `project`, the stored
+    /// auto-submit default, and that project's agent defaults.
+    public func newSessionForm(project: String) -> NewSessionForm {
+        var form = NewSessionForm()
+        form.project = project
+        form.autoSubmit = config?.autoSubmitDefault ?? false
+        applyProject(to: &form)
+        return form
+    }
+
+    /// The project changed: its agent defaults replace the form's.
+    public func applyProject(to form: inout NewSessionForm) {
+        form.applyProjectDefaults(config?.projects[form.project], agentNames: agentNames)
+        clampChoices(of: &form)
+    }
+
+    /// The agent table arrived or changed under an open form.
+    public func agentNamesChanged(in form: inout NewSessionForm) {
+        form.agentNamesChanged(config?.projects[form.project], agentNames: agentNames)
+        clampChoices(of: &form)
+    }
+
+    /// The agent changed: keep model and thinking on values it offers.
+    public func clampChoices(of form: inout NewSessionForm) {
+        form.clampChoices(models: models(for: form.agent), thinking: thinking(for: form.agent))
+    }
+
     /// The palette to draw with: the config's theme, resolved against the
     /// served list. `config.ThemeByName`'s fallbacks, plus the ANSI one.
     public var palette: ThemePalette? {
@@ -1395,15 +1439,18 @@ public final class AppState {
     /// `dangerous` is the caller's to compute rather than left nil, because the
     /// form shows a real toggle: nil would mean "the project's default", which
     /// is a different answer from the one the user just looked at.
-    public func create(project: String, name: String, existingBranch: String = "",
-                       baseBranch: String = "", agent: String = "", dangerous: Bool,
-                       model: String = "", thinking: String = "", ticket: String = "",
-                       pr: String = "", prompt: String, autoSubmit: Bool = false) {
+    ///
+    /// `focus` is asked when the create *finishes*, tens of seconds later, so a
+    /// front end can decline to move a user who has since gone elsewhere.
+    public func create(_ form: NewSessionForm, focus: @escaping @MainActor () -> Bool = { true }) {
+        let autoSubmit = form.autoSubmit
         let rememberAutoSubmit = autoSubmit != (config?.autoSubmitDefault ?? false)
-        let req = CreateRequest(project: project, name: name, agent: agent,
-                                branch: existingBranch, baseBranch: baseBranch,
-                                ticket: ticket, pr: pr, model: model, thinking: thinking,
-                                prompt: prompt, autoSubmit: autoSubmit, dangerous: dangerous)
+        let req = CreateRequest(project: form.project, name: form.name, agent: form.agent,
+                                branch: form.existingBranch, baseBranch: form.baseBranch,
+                                ticket: form.ticket, pr: form.pr,
+                                model: form.modelToSend(hasModelList: hasModelList(for: form.agent)),
+                                thinking: form.thinking, prompt: form.prompt,
+                                autoSubmit: autoSubmit, dangerous: form.dangerous)
         // Not `mutate`: that discards the created `Session`, and selecting it
         // needs the id `createSession` hands back.
         Task {
@@ -1418,9 +1465,9 @@ public final class AppState {
                     }
                     return try client.createSession(req)
                 }
-                if !hint.isEmpty { self.hint = hint }
+                if !hint.isEmpty { sessionHints[session.id] = hint }
                 await refresh()
-                if autoFocusNewSession { selectedSessionID = session.id }
+                if autoFocusNewSession && focus() { selectedSessionID = session.id }
             } catch {
                 failed("Creating session", error)
             }
@@ -1450,7 +1497,7 @@ public final class AppState {
                 let hint = try await withoutBlockingTheUI { [client] in
                     try client.review(id: session.id)
                 }
-                self.hint = hint.isEmpty ? "Opened a review window." : hint
+                sessionHints[session.id] = hint.isEmpty ? "Opened a review window." : hint
             } catch {
                 // A parked session answers "<name> is parked; open it before
                 // reviewing" rather than reviving itself — asking for a diff
@@ -1792,7 +1839,7 @@ public final class AppState {
                 let hint = try await withoutBlockingTheUI({ [client] in
                     try client.ensureTmux(id: session.id)
                 })
-                if !hint.isEmpty { self.hint = hint }
+                if !hint.isEmpty { sessionHints[session.id] = hint }
                 // Attach only once the snapshot agrees the session is live:
                 // `SessionTerminal` spawns its `tmux attach` on appear, and a
                 // stale "parked" view would also keep the row's dot grey.
