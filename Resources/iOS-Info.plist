@@ -34,6 +34,12 @@
 	     here to put words on the prompt. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Moomux connects to the moomux core running on your Mac.</string>
+	<!-- canOpenURL answers false for any scheme not listed here, which would
+	     hide "Open in MergeRight" on a phone that has it. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>mergeright</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
