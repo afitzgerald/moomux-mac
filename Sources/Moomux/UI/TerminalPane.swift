@@ -60,6 +60,26 @@ struct TerminalPane: NSViewRepresentable {
             }
         }
 
+        /// ghostty reports a wheel to tmux at the last pointer position it was
+        /// given, and drops it when there is none — and libghostty-spm only
+        /// hands one over on a move or a click (Ghostty.app also does it on
+        /// `mouseEntered`). A pane that appears under a still pointer, as it
+        /// does after clicking Attach, has no position, and a trackpad scroll
+        /// never moves the pointer, so every scroll vanished until the mouse
+        /// happened to move. Measured: tmux stayed out of copy-mode without
+        /// this, entered it with. The scroll event carries its own location —
+        /// but only trusted inside the view: momentum keeps arriving after the
+        /// pointer drifts out, and passing that on would undo `mouseExited`
+        /// and land the wheel on whichever tmux pane sits at the clamped edge.
+        /// Delete this once libghostty-spm's AppKit `scrollWheel` sends a
+        /// position itself, as its UIKit one already does.
+        override func scrollWheel(with event: NSEvent) {
+            if bounds.contains(convert(event.locationInWindow, from: nil)) {
+                mouseMoved(with: event)
+            }
+            super.scrollWheel(with: event)
+        }
+
         /// Dropping Finder files onto a terminal types their shell-quoted
         /// paths, the same convention iTerm and Terminal.app use. libghostty's
         /// own drop handling is UIKit-only, so this stays ours.
