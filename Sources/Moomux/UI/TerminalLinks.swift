@@ -165,6 +165,14 @@ extension AppState {
     /// which both apps link, and `TerminalLink` is AppKit — `NSWorkspace` and
     /// a Mac's installed apps. The `Sheet.web` case stays on the store, since
     /// what a front end does about a link is the part that differs.
+    /// `mergeRightLink(for:)`, or nil on a Mac without MergeRight, where the
+    /// custom scheme would open nothing — so the action is hidden, not dead.
+    func installedMergeRightLink(for session: Session) -> URL? {
+        guard let link = mergeRightLink(for: session),
+              TerminalLink.schemeHasHandler("mergeright") else { return nil }
+        return link
+    }
+
     public func openTag(_ link: String) {
         guard let url = TerminalLink.resolve(link) else { return }
         if url.isFileURL || TerminalLink.asanaDesktop(url) != nil {

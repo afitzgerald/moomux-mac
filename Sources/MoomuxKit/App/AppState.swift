@@ -1483,6 +1483,15 @@ public final class AppState {
 
     static let autoFocusNewSessionKey = "autoFocusNewSession"
 
+    /// Offer "Open in MergeRight" on a session with a PR or Asana ticket. Off
+    /// by default: MergeRight is one person's PR app, not something every
+    /// moomux user has. `UserDefaults` for the same reason as `diffTool`.
+    public var mergeRightLinks: Bool = UserDefaults.standard.bool(forKey: mergeRightLinksKey) {
+        didSet { UserDefaults.standard.set(mergeRightLinks, forKey: Self.mergeRightLinksKey) }
+    }
+
+    static let mergeRightLinksKey = "mergeRightLinks"
+
     /// Group the sidebar by folder rather than by project. `UserDefaults` for
     /// the same reason as `diffTool`: which way this window is looking at the
     /// same list is not something the core or the TUI has any use for.
