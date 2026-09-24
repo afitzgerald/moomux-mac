@@ -38,6 +38,10 @@ public struct NewSessionForm: Equatable, Sendable {
     public var pr = ""
     public var prompt = ""
     public var autoSubmit = false
+    /// What `applyProjectDefaults` last chose, so `agentNamesChanged` can tell
+    /// a value the user picked from one it seeded.
+    private var seededAgent = ""
+    private var seededDangerous = false
 
     /// The one string that means "pass nothing" in both the model and thinking
     /// lists. It is the core's spelling, not ours — see `agentOptionsTable`.
@@ -67,6 +71,23 @@ public struct NewSessionForm: Equatable, Sendable {
             // valid selection; claude is the TUI's fallback too.
             agent = agentNames.contains(p.agentName) ? p.agentName : (agentNames.first ?? "claude")
             dangerous = p.dangerous
+        }
+        seededAgent = agent
+        seededDangerous = dangerous
+    }
+
+    /// The core's agent table arrived or changed under an open form — it lands
+    /// one round trip after the window, so a form opened in that gap was
+    /// seeded against the fallback table. Re-seed only if the user has not
+    /// touched the agent controls: a late table must never flip a choice they
+    /// made, least of all the dangerous flag. A chosen agent the table no
+    /// longer offers is cleared rather than replaced, which blocks Create until
+    /// they pick again instead of silently choosing for them.
+    public mutating func agentNamesChanged(_ p: Project?, agentNames: [String]) {
+        if agent == seededAgent && dangerous == seededDangerous {
+            applyProjectDefaults(p, agentNames: agentNames)
+        } else if !agent.isEmpty && !agentNames.contains(agent) {
+            agent = ""
         }
     }
 
@@ -150,6 +171,25 @@ public struct NewSessionForm: Equatable, Sendable {
         switching.modelText = "anthropic/claude-x"
         assert(switching.modelToSend(hasModelList: false) == "anthropic/claude-x")
         assert(switching.modelToSend(hasModelList: true) == "gpt")
+
+        // A table arriving late re-seeds an untouched form: seeded against the
+        // fallback ["claude"], a codex project gets codex once the real one lands.
+        let codexProject = Project(repo: "/src", agent: "codex", dangerous: true)
+        var late = NewSessionForm()
+        late.applyProjectDefaults(codexProject, agentNames: ["claude"])
+        assert(late.agent == "claude")
+        late.agentNamesChanged(codexProject, agentNames: names)
+        assert(late.agent == "codex" && late.dangerous)
+        // ...but never overrides a choice, and never re-arms dangerous.
+        late.agent = "opencode"
+        late.dangerous = false
+        late.agentNamesChanged(codexProject, agentNames: names)
+        assert(late.agent == "opencode" && !late.dangerous, "a late table must not undo the user")
+        // A chosen agent the table dropped is cleared, which blocks Create.
+        late.name = "x"
+        late.project = "moomux"
+        late.agentNamesChanged(codexProject, agentNames: ["claude", "codex"])
+        assert(late.agent.isEmpty && !late.canCreate && !late.dangerous)
     }
 }
 
