@@ -83,7 +83,7 @@ private struct AttachedTerminal: UIViewRepresentable {
     let onEnded: () -> Void
 
     func makeUIView(context: Context) -> UITerminalView {
-        let view = UITerminalView(frame: .init(x: 0, y: 0, width: 390, height: 600))
+        let view = LinkTapView(frame: .init(x: 0, y: 0, width: 390, height: 600))
         view.delegate = context.coordinator
         view.controller = controller
         view.configuration = TerminalSurfaceOptions(
@@ -120,9 +120,49 @@ private struct AttachedTerminal: UIViewRepresentable {
         Coordinator(client: client, sessionID: sessionID, onEnded: onEnded)
     }
 
+    /// A tap on a link opens it.
+    ///
+    /// ghostty follows a link only on a ⌘-click — its URL matcher's hover mods
+    /// are `ctrlOrSuper`, and the `link` config that would change that "can't
+    /// currently be set" — and a finger tap carries no modifiers, so no link
+    /// ever opened on the phone. So a clean tap (the one the package would
+    /// spend toggling the keyboard) first asks ghostty what is under it as if
+    /// ⌘ were held. `mouse_over_link` answers synchronously on the main thread.
+    ///
+    /// Shift as well while the program captures the mouse, which tmux with
+    /// `mouse on` does: ghostty only refreshes links under capture when shift
+    /// is held and not being reported, then strips it before matching. The
+    /// off-screen positions either side reset its `link_point` cache — a probe
+    /// at the cell it last checked would otherwise be skipped — and clear the
+    /// underline afterwards. Ceiling: `link-previews = false` in the user's
+    /// config suppresses `mouse_over_link` for plain URLs, so taps stop finding
+    /// them; the upgrade is a ⌘-click through `open_url` instead.
+    final class LinkTapView: UITerminalView {
+        private var tap: CGPoint?
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            tap = touches.first?.location(in: self)
+            super.touchesEnded(touches, with: event)
+            tap = nil
+        }
+
+        override func toggleSoftwareKeyboard() {
+            guard let tap, let coordinator = delegate as? Coordinator else {
+                return super.toggleSoftwareKeyboard()
+            }
+            sendMousePos(x: -1, y: -1)
+            coordinator.hoverLink = nil
+            sendMousePos(x: tap.x, y: tap.y, modifiers: isMouseCaptured ? [.super_, .shift] : .super_)
+            let link = coordinator.hoverLink
+            sendMousePos(x: -1, y: -1)
+            guard let link, Coordinator.open(link) else { return super.toggleSoftwareKeyboard() }
+        }
+    }
+
     @MainActor
     final class Coordinator: NSObject, TerminalSurfaceResizeDelegate,
                              TerminalSurfaceOpenURLDelegate,
+                             TerminalSurfaceHoverLinkDelegate,
                              TerminalSurfaceClipboardConfirmationDelegate {
         private let client: MoomuxClient
         private let sessionID: Session.ID
@@ -151,6 +191,9 @@ private struct AttachedTerminal: UIViewRepresentable {
         }
         private var pendingSize: Size?
         private var attachedSize: Size?
+        /// Whether a channel has ever landed — from then on, every reattach
+        /// checks the session is still alive first (`Reattach`).
+        private var everAttached = false
 
         /// The live channel, reachable without the main actor.
         ///
@@ -257,6 +300,9 @@ private struct AttachedTerminal: UIViewRepresentable {
         /// change, so a core restarting or a tailnet blip left the pane on
         /// "attach failed:" until the screen was popped and re-pushed.
         ///
+        /// Also how a dropped link comes back, with `start` checking the
+        /// session survived before each attempt.
+        ///
         /// Rides the settle slot, so a genuine resize arriving first cancels
         /// it and wins. Fixed 2s and forever, like `AppState`'s own retry
         /// loops — the task dies with the screen. Back off if a down core ever
@@ -282,7 +328,29 @@ private struct AttachedTerminal: UIViewRepresentable {
             let client = client
             let id = sessionID
             let done = done
+            let everAttached = everAttached
             reader = Task.detached(priority: .userInitiated) {
+                // Every reattach, whatever caused it — a dropped link, a
+                // rotation, the keyboard — goes through here, so this is the
+                // one place the gate has to be. A session killed between this
+                // check and the attach below still gets recreated; the window
+                // is one round trip.
+                let alive = everAttached ? (try? client.capture(ids: [id])).map { $0[id] != nil } : nil
+                guard !Task.isCancelled else { return }
+                switch Reattach.decide(everAttached: everAttached, alive: alive) {
+                case .attach:
+                    break
+                case .wait:
+                    await MainActor.run { [weak self] in
+                        self?.attachedSize = nil
+                        self?.retry(Size(columns: columns, rows: rows))
+                    }
+                    return
+                case .end:
+                    done.set()
+                    await MainActor.run { [weak self] in self?.onEnded() }
+                    return
+                }
                 let channel: AttachChannel
                 do {
                     channel = try client.attach(id: id, cols: columns, rows: rows)
@@ -319,6 +387,7 @@ private struct AttachedTerminal: UIViewRepresentable {
                 await MainActor.run { [weak self] in
                     guard let self, !Task.isCancelled else { return channel.close() }
                     self.channel = channel
+                    self.everAttached = true
                     self.live.install(channel)
                     // The bytes that arrived with the response line are the
                     // first frame tmux drew. Feeding them before the read loop
@@ -336,13 +405,20 @@ private struct AttachedTerminal: UIViewRepresentable {
                     await MainActor.run { [weak self] in self?.session.receive(data) }
                 }
                 // A read that *failed* is not a detach: the link died under
-                // us. Say so and stay, because dismissing looks exactly like
-                // tmux having exited cleanly — Back is one tap away and the
-                // words are the only thing that explains what happened.
+                // us — the phone slept, the app sat behind Safari long enough
+                // for its socket to be reclaimed, the tailnet blipped. Say so
+                // and reattach once the core answers; `start`'s gate ends the
+                // screen instead if the session died meanwhile. `stop` first,
+                // so keys typed in the gap buffer rather than hit a dead socket.
                 if let lost, !Task.isCancelled {
-                    done.set()
-                    let message = "\r\n  connection lost: \(lost.localizedDescription)\r\n"
-                    await MainActor.run { [weak self] in self?.session.receive(message) }
+                    let message = "\r\n  connection lost: \(lost.localizedDescription) — reconnecting\r\n"
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.session.receive(message)
+                        self.stop()
+                        self.attachedSize = nil
+                        self.retry(Size(columns: columns, rows: rows))
+                    }
                     return
                 }
                 // After `{"ok":true}` the wire has nowhere to put an error, so
@@ -376,12 +452,26 @@ private struct AttachedTerminal: UIViewRepresentable {
             channel = nil
         }
 
-        /// A surface with no `TerminalSurfaceOpenURLDelegate` does not refuse
-        /// links — ghostty core opens them itself, straight past any allowlist.
-        /// Conforming and refusing is the only way to actually say no, and pane
-        /// output is attacker-influenceable, so no is the answer until there is
-        /// a reason and an allowlist to say otherwise.
-        func terminalDidRequestOpenURL(_: String, kind _: TerminalOpenURLKind) {}
+        /// Read back by `LinkTapView`'s probe.
+        var hoverLink: String?
+
+        func terminalDidUpdateHoverLink(_ url: String?) { hoverLink = url }
+
+        /// A ⌘-click from a hardware mouse or trackpad. The delegate must exist
+        /// even so: without one ghostty core opens the link itself, straight
+        /// past the allowlist in `open`.
+        func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
+            Coordinator.open(url)
+        }
+
+        /// Through `WebLink`, the allowlist. `UIApplication.open` hands an
+        /// https link to the app that claims it (GitHub, Asana) before Safari.
+        @discardableResult
+        static func open(_ link: String) -> Bool {
+            guard let url = WebLink.url(link) else { return false }
+            UIApplication.shared.open(url)
+            return true
+        }
 
         /// With no delegate the bridge answers `false` silently, which breaks
         /// the user's own paste with no dialog and nothing logged. Split on
