@@ -1,0 +1,60 @@
+# Archive and upload the iPhone app to TestFlight from a runner instead of a
+# laptop. Same `make testflight` as locally; the only thing CI adds is the
+# credential a laptop gets from Xcode ▸ Settings ▸ Accounts, handed over as
+# XC_AUTH.
+#
+# Manual only. A TestFlight build is something you decide to cut, and a macOS
+# runner is ten times the minutes of a Linux one.
+#
+# iPhone only. The Mac app ships through release.yml and the cask; when it joins
+# TestFlight it goes on the same App Store Connect record (the shared bundle id
+# is what allows that) and this grows a platform input, as MergeRight's did.
+name: TestFlight
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The image ships several Xcodes and the default may be older than the
+      # project format. Pick the newest and print it, so "this Xcode is too old"
+      # says so instead of looking like a code error. Passed as XCODE rather
+      # than `xcode-select`ed, so the macOS steps of the build (the icon
+      # rasterizer) stay on the toolchain they always use.
+      - name: Pick Xcode
+        id: xcode
+        run: |
+          dir="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)/Contents/Developer"
+          DEVELOPER_DIR="$dir" xcodebuild -version
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      # The App Store Connect API key is the only credential. With
+      # -allowProvisioningUpdates and an *Admin*-role key this is cloud
+      # signing: Apple mints the distribution certificate and profile and the
+      # key authenticates the upload. No .p12 on purpose — an automatic export
+      # ignores the local keychain, so importing one only looks like signing.
+      # An App Manager key archives fine and then fails at export with what
+      # reads like a missing profile (MergeRight learned that twice).
+      - name: Write the App Store Connect key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          echo "$ASC_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc.p8"
+          chmod 600 "$RUNNER_TEMP/asc.p8"
+
+      - name: Upload the iPhone build
+        run: |
+          make testflight XCODE="${{ steps.xcode.outputs.dir }}" \
+            XC_AUTH="-authenticationKeyPath $RUNNER_TEMP/asc.p8 \
+              -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
+              -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}"
+
+      - name: Shred the credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/asc.p8"
