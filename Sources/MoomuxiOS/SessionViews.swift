@@ -35,6 +35,9 @@ struct SessionListView: View {
     /// rather than the Mac's sheet: one field, one question.
     @State private var renaming: String?
     @State private var renameTo = ""
+    /// `-newSession YES` opens the sheet at launch — the screenshot seam, same
+    /// idea as `-openSession` below.
+    @State private var creating = UserDefaults.standard.bool(forKey: "newSession")
     /// Screenshot seam. There is no way to tap a row from `simctl`, so
     /// `-openSession <id>` opens one straight away and `make ios-shot
     /// SESSION=<id>` can photograph the detail screen. A `UserDefaults` key,
@@ -261,6 +264,11 @@ struct SessionListView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge(app: app) }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { creating = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("New Session")
+                        .disabled(app.connection.isDown || app.config == nil)
+                }
             }
             .alert("Rename folder", isPresented: Binding(
                 get: { renaming != nil },
@@ -281,6 +289,10 @@ struct SessionListView: View {
                 Text("Folders are global — this renames it everywhere.")
             }
             .onChange(of: renaming) { _, folder in renameTo = folder ?? "" }
+            // Go to the new session only if the user is still on the list: a create
+            // takes tens of seconds, and by then they may be typing in another
+            // session's terminal, which a jump would detach.
+            .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { path.isEmpty }) }
             // A tapped banner is a request to go to that session, and
             // `Notifier` has no way to reach the stack — it sets the
             // selection, which on the Mac *is* the navigation. Cleared after,
@@ -510,6 +522,13 @@ struct SessionDetailView: View {
                     showTerminal(session.id)
                 } label: {
                     Label("Attach", systemImage: "terminal")
+                }
+            }
+            // What the last action on this session had to say — a create's
+            // userscript warnings or a first prompt that did not land.
+            if let hint = app.sessionHints[session.id] {
+                Section("Last action") {
+                    Text(hint).font(.caption.monospaced()).textSelection(.enabled)
                 }
             }
             Section {

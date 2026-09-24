@@ -172,10 +172,9 @@ struct RootView: View {
             }
         }
         .task { app.start() }
-        // A hint is what the *last action* had to say, and it is rendered in a
-        // session's Info pane. Nothing else clears it, so without this an
-        // "Opened a review window in moomux-a-1f2e." stays pinned under session
-        // B indefinitely, describing something that happened to session A.
+        // `hint` is what the last *session-less* action had to say, rendered
+        // in whichever Info pane is showing, so it must not outlive the
+        // selection. Per-session ones live in `sessionHints` and stay put.
         .onChange(of: app.selectedSessionID) { _, _ in app.hint = nil }
         // Every modal hangs off the root, not off a row: the Session menu can
         // fire any of them with no row on screen at all.
@@ -252,10 +251,7 @@ private struct NewSessionSheet: View {
     private var project: Project? { app.config?.projects[form.project] }
     private var models: [String] { app.models(for: form.agent) }
     private var thinking: [String] { app.thinking(for: form.agent) }
-    /// opencode has no fixed model list, so its control is a text field. Keyed
-    /// off the list being empty rather than off the agent's name, so a future
-    /// agent in the same position needs no change here.
-    private var hasModelList: Bool { !models.isEmpty && form.agent != "opencode" }
+    private var hasModelList: Bool { app.hasModelList(for: form.agent) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -277,7 +273,7 @@ private struct NewSessionSheet: View {
                 TextField("Existing branch", text: $form.existingBranch,
                           prompt: Text("resume, don't cut"))
                 TextField("Base branch", text: $form.baseBranch,
-                          prompt: Text(project?.baseBranch ?? "the project's default"))
+                          prompt: Text(project?.baseBranch.flatMap { $0.isEmpty ? nil : $0 } ?? "the project's default"))
                     .disabled(project?.isPlain == true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("First prompt")
@@ -355,12 +351,7 @@ private struct NewSessionSheet: View {
                 // userscripts: `app.busy` reports progress in the toolbar, and
                 // a refusal lands in the error alert either way.
                 Button("Create") {
-                    app.create(project: form.project, name: form.name,
-                               existingBranch: form.existingBranch, baseBranch: form.baseBranch,
-                               agent: form.agent, dangerous: form.dangerous,
-                               model: form.modelToSend(hasModelList: hasModelList),
-                               thinking: form.thinking, ticket: form.ticket, pr: form.pr,
-                               prompt: form.prompt, autoSubmit: form.autoSubmit)
+                    app.create(form)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -372,21 +363,12 @@ private struct NewSessionSheet: View {
         // Seeded from the row being looked at — a second session in the same
         // project is the common case.
         .onAppear {
-            form.project = app.session(id: app.selectedSessionID)?.project ?? ""
-            form.autoSubmit = app.config?.autoSubmitDefault ?? false
-            applyProject()
+            form = app.newSessionForm(project: app.session(id: app.selectedSessionID)?.project ?? "")
         }
         // The agent, and with it every list below it, belongs to the project.
-        .onChange(of: form.project) { _, _ in applyProject() }
-        .onChange(of: form.agent) { _, _ in form.clampChoices(models: models, thinking: thinking) }
-        // The table arrives one round trip after the window, so a sheet opened
-        // in that gap would seed its agent against an empty list.
-        .onChange(of: app.agentNames) { _, _ in applyProject() }
-    }
-
-    private func applyProject() {
-        form.applyProjectDefaults(project, agentNames: app.agentNames)
-        form.clampChoices(models: models, thinking: thinking)
+        .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
+        .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
+        .onChange(of: app.agentNames) { _, _ in app.agentNamesChanged(in: &form) }
     }
 }
 
@@ -1215,7 +1197,7 @@ private struct SessionInfo: View {
                     }
                 }
 
-                if let hint = app.hint {
+                if let hint = app.sessionHints[session.id] ?? app.hint {
                     Text(hint).font(Theme.mono).textSelection(.enabled)
                 }
 
