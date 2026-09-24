@@ -3,8 +3,9 @@
 # credential a laptop gets from Xcode ▸ Settings ▸ Accounts, handed over as
 # XC_AUTH.
 #
-# Manual only. A TestFlight build is something you decide to cut, and a macOS
-# runner is ten times the minutes of a Linux one.
+# Release calls this with the tag it just shipped to the cask, so every brew
+# release has a TestFlight build of the same commit under the same version.
+# Dispatching it by hand still works, and builds whatever branch it is run on.
 #
 # iPhone only. The Mac app ships through release.yml and the cask; when it joins
 # TestFlight it goes on the same App Store Connect record (the shared bundle id
@@ -13,6 +14,12 @@ name: TestFlight
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build (vX.Y.Z); release.yml has already validated it"
+        type: string
+        required: true
 
 jobs:
   upload:
@@ -20,6 +27,16 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # Same stamp release.yml gives the Mac plist, so the TestFlight build and
+      # the cask report one version. The build number is XC_BUILD's, unchanged.
+      - name: Stamp iOS version
+        if: inputs.tag != ''
+        env:
+          TAG: ${{ inputs.tag }}
+        run: /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${TAG#v}" Resources/iOS-Info.plist
 
       # The image ships several Xcodes and the default may be older than the
       # project format. Pick the newest and print it, so "this Xcode is too old"
