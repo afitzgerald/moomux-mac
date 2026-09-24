@@ -36,9 +36,12 @@ around, and if you genuinely need `xcodebuild` say so first, because switching i
 every other worktree too.
 
 - `xcodebuild` errors out as things stand ("requires Xcode, but active developer directory
-  … is a command line tools instance"). `swift build` is the only build, so there is **no
-  `.xcodeproj`** and there is no reason to add one. `make app` assembles and signs the bundle
-  by hand.
+  … is a command line tools instance"). `swift build` is the only build, and `make app` assembles
+  and signs the bundle by hand. The one `.xcodeproj` is `Moomux.xcodeproj`, an iOS-only target
+  that exists solely so `make testflight` can archive and upload (Xcode does the certificates and
+  profiles); those targets pass `DEVELOPER_DIR` themselves rather than needing Xcode selected.
+  Nothing else builds through it, and the Mac app stays out of it until it ships via TestFlight
+  too — on the same record, which is why the iPhone app's bundle id is `app.moomux.Moomux`.
 - **`#Preview` and XCTest/`Testing` compile only if Xcode is selected.** Both shipped as
   hard "cannot be done" facts for most of this app's life, and the code still assumes neither
   exists: there are no SwiftUI previews and no test target. See "the harness is `demo()`" below —

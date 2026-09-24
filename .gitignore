@@ -1,8 +1,11 @@
 .build/
 .swiftpm/
 dist/
-*.xcodeproj
 .DS_Store
 /Makefile.local
 .wt-seed-env-mise-install.log
 .moomux-panes.toml
+# Rasterized from Resources/icons by the Makefile, so they cannot drift from the SVGs.
+/Sources/MoomuxiOS/moomux-terminal-nose.png
+/Sources/MoomuxiOS/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+xcuserdata/
