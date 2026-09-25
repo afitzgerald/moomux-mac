@@ -102,6 +102,23 @@ enum TerminalLink {
         return NSWorkspace.shared.urlForApplication(toOpen: probe) != nil
     }
 
+    /// Whether an event gets a Shift added so a ⌘-click reaches ghostty's
+    /// link check past mouse capture — see `AttachedTerminalView.mouseDown`.
+    /// Only while captured: uncaptured, ghostty keeps the Shift, so ⌘ plus a
+    /// Shift no longer matches its ⌘-only link hover and nothing opens. Only
+    /// real mouse events: `scrollWheel` forwards a scroll event to
+    /// `mouseMoved`, and rebuilding that as a mouse event throws. And only
+    /// ⌘'s own key: added to a Shift key's release, it would read as a press.
+    static func addsShift(type: NSEvent.EventType, keyCode: UInt16,
+                          flags: NSEvent.ModifierFlags, captured: Bool) -> Bool {
+        guard captured, flags.contains(.command), !flags.contains(.shift) else { return false }
+        switch type {
+        case .leftMouseDown, .leftMouseUp, .mouseMoved: return true
+        case .flagsChanged: return keyCode == 0x37 || keyCode == 0x36
+        default: return false
+        }
+    }
+
     static func demo() {
         let fake: (String) -> Bool = { $0 == "/private/tmp/x.png" || $0 == "/etc/hosts" }
 
@@ -142,6 +159,20 @@ enum TerminalLink {
         assert(asanaDesktop(URL(string: "https://github.com/a/b/pull/1")!, installed: yes) == nil)
         assert(asanaDesktop(URL(string: "https://asana.com/pricing")!, installed: yes) == nil,
                "only the app host, not the marketing site")
+
+        // ⌘-click past mouse capture.
+        let cmd: NSEvent.ModifierFlags = .command
+        assert(addsShift(type: .leftMouseDown, keyCode: 0, flags: cmd, captured: true))
+        assert(addsShift(type: .mouseMoved, keyCode: 0, flags: cmd, captured: true))
+        assert(addsShift(type: .flagsChanged, keyCode: 0x37, flags: cmd, captured: true))
+        assert(!addsShift(type: .leftMouseDown, keyCode: 0, flags: cmd, captured: false),
+               "uncaptured, the Shift would break ghostty's own ⌘-click")
+        assert(!addsShift(type: .scrollWheel, keyCode: 0, flags: cmd, captured: true),
+               "a scroll event rebuilt as a mouse event throws")
+        assert(!addsShift(type: .flagsChanged, keyCode: 0x38, flags: cmd, captured: true),
+               "a Shift key's release must not become a press")
+        assert(!addsShift(type: .leftMouseDown, keyCode: 0, flags: [], captured: true))
+        assert(!addsShift(type: .leftMouseDown, keyCode: 0, flags: [.command, .shift], captured: true))
     }
 
     // The detector itself is no longer ours to check. SwiftTerm's `Terminal`
