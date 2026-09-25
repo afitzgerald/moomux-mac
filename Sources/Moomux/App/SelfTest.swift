@@ -40,6 +40,7 @@ enum SelfTest {
         MergeRight.demo()
         WebLink.demo()
         GhosttyResourceBundle.demo()
+        PromptImages.demo()
 
         print("selftest: ok")
         exit(0)
