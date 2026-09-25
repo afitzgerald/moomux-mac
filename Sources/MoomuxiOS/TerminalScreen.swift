@@ -140,6 +140,22 @@ private struct AttachedTerminal: UIViewRepresentable {
     final class LinkTapView: UITerminalView {
         private var tap: CGPoint?
 
+        /// ghostty reports a wheel to tmux at the last pointer position and
+        /// drops it when there is none — and the package's finger-scroll pan
+        /// sends no position (its trackpad one does), while the probe below
+        /// parks the pointer off-screen after every tap. So a swipe never
+        /// reached tmux at all. Aim the pointer at the finger as it lands,
+        /// before the pan begins; momentum after lift keeps that position.
+        /// The Mac pane's `scrollWheel` override is the same fix. Delete once
+        /// `handleTouchScrollGesture` sends a position itself.
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            if let touch = touches.first, touch.type == .direct {
+                let point = touch.location(in: self)
+                sendMousePos(x: point.x, y: point.y)
+            }
+            super.touchesBegan(touches, with: event)
+        }
+
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
             tap = touches.first?.location(in: self)
             super.touchesEnded(touches, with: event)
