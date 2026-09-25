@@ -60,6 +60,68 @@ struct TerminalPane: NSViewRepresentable {
             }
         }
 
+        /// `NSView` answers true for any non-opaque view, and the package's
+        /// Metal layer is non-opaque, so a press on the pane's top rows — the
+        /// band nearest the toolbar — dragged the window instead of reaching
+        /// the terminal: no link click, no selection.
+        override var mouseDownCanMoveWindow: Bool { false }
+
+        /// With tmux's `mouse on`, ghostty reports every click to tmux and
+        /// never checks for a link — so ⌘-click did nothing, while ⇧⌘-click
+        /// worked, because Shift is ghostty's bypass for mouse capture
+        /// (`mouse-shift-capture`). So while the pane's program has captured
+        /// the mouse, ⌘ gets a Shift added on the way in. Not just on the
+        /// click: ghostty decides it is over a link while hovering, so the
+        /// moves and the ⌘ key itself need it too. `TerminalLink.addsShift`
+        /// decides which events.
+        ///
+        /// Ceiling: every ⌘-click bypasses tmux while captured, link or not,
+        /// and a ⌘ keystroke (⌘C) drops the hover until the pointer moves.
+        /// Delete all of this once ghostty checks for a link before reporting
+        /// a click under capture.
+        override func mouseDown(with event: NSEvent) {
+            // Decided once per click, so a ⌘ pressed or released mid-click
+            // cannot send tmux a press without its release.
+            shiftedClick = shifts(event)
+            super.mouseDown(with: shiftedClick ? Self.withShift(event) : event)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            super.mouseUp(with: shiftedClick ? Self.withShift(event) : event)
+            shiftedClick = false
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            super.mouseMoved(with: shifts(event) ? Self.withShift(event) : event)
+        }
+
+        override func flagsChanged(with event: NSEvent) {
+            super.flagsChanged(with: shifts(event) ? Self.withShift(event) : event)
+        }
+
+        private var shiftedClick = false
+
+        private func shifts(_ event: NSEvent) -> Bool {
+            TerminalLink.addsShift(type: event.type, keyCode: event.keyCode,
+                                   flags: event.modifierFlags, captured: isMouseCaptured)
+        }
+
+        private static func withShift(_ event: NSEvent) -> NSEvent {
+            let flags = event.modifierFlags.union(.shift)
+            if event.type == .flagsChanged {
+                return NSEvent.keyEvent(
+                    with: .flagsChanged, location: event.locationInWindow, modifierFlags: flags,
+                    timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
+                    characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+                    keyCode: event.keyCode) ?? event
+            }
+            return NSEvent.mouseEvent(
+                with: event.type, location: event.locationInWindow, modifierFlags: flags,
+                timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
+                eventNumber: event.eventNumber, clickCount: event.clickCount,
+                pressure: event.pressure) ?? event
+        }
+
         /// ghostty reports a wheel to tmux at the last pointer position it was
         /// given, and drops it when there is none — and libghostty-spm only
         /// hands one over on a move or a click (Ghostty.app also does it on
