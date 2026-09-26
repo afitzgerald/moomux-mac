@@ -116,6 +116,13 @@ public struct NewSessionForm: Equatable, Sendable {
         return prompt.trimmed.isEmpty ? "assigned" : "from the prompt"
     }
 
+    /// Adds an attached file's path to the end of the prompt, spaced off
+    /// whatever is there, the way a file dropped on a terminal lands.
+    public mutating func appendPath(_ path: String) {
+        let lead = prompt.last.map { $0.isWhitespace ? "" : " " } ?? ""
+        prompt += lead + path + " "
+    }
+
     /// Only a new branch is cut from the base, so a resume sends none.
     public var baseBranchToSend: String { existingBranch.isEmpty ? baseBranch : "" }
 
@@ -184,6 +191,18 @@ public struct NewSessionForm: Equatable, Sendable {
         assert(unnamed.namePlaceholder == "from the prompt")
         unnamed.existingBranch = "alan/x"
         assert(unnamed.namePlaceholder == "from the branch")
+
+        // An attached file lands at the end, one space either side.
+        var attach = NewSessionForm()
+        attach.appendPath("/t/a.png")
+        attach.appendPath("/t/b.pdf")
+        assert(attach.prompt == "/t/a.png /t/b.pdf ", attach.prompt)
+        attach.prompt = "look at\n"
+        attach.appendPath("/t/c.jpg")
+        assert(attach.prompt == "look at\n/t/c.jpg ", attach.prompt)
+        attach.prompt = "look at"
+        attach.appendPath("/t/c.jpg")
+        assert(attach.prompt == "look at /t/c.jpg ", attach.prompt)
 
         // The base branch follows the project until the user types over it.
         var base = NewSessionForm()
