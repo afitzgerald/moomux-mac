@@ -153,6 +153,15 @@ Traps when checking by screenshot:
   `screencapture -R` and `NSRunningApplication.activate` brings the build to the front, both
   without AX — but nothing can be clicked or typed, so a screen that needs driving has to be
   reached another way (a throwaway `MOOMUX_*` env hook in the build, reverted afterwards).
+- **Screen Recording goes wrong the same way, and `Scripts/shot.sh` routes around it.** It is also
+  checked against the tmux server, and Homebrew's tmux is ad-hoc signed, so the grant is pinned to
+  one build: after a `brew upgrade tmux`, or for a server started before the grant, `screencapture`
+  fails with "could not create image" while System Settings shows tmux switched on. `shot.sh`
+  then reruns the capture as a child of Ghostty (`open -na Ghostty --args -e shot.sh --capture …`),
+  which has its own grant, so a Ghostty window flashes up for a second. That fallback also
+  reads the window frame from `CGWindowListCopyWindowInfo` when `ui.swift frame` has no AX.
+  Re-adding tmux in System Settings and restarting the server fixes it properly, but restarting
+  kills every live session.
 
 ## Verifying a terminal change
 
