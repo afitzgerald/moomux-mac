@@ -102,7 +102,10 @@ struct TerminalPane: NSViewRepresentable {
         private var shiftedClick = false
 
         private func shifts(_ event: NSEvent) -> Bool {
-            TerminalLink.addsShift(type: event.type, keyCode: event.keyCode,
+            // `keyCode` throws on anything but a key event, and `scrollWheel`
+            // routes scroll events through `mouseMoved`.
+            TerminalLink.addsShift(type: event.type,
+                                   keyCode: event.type == .flagsChanged ? event.keyCode : 0,
                                    flags: event.modifierFlags, captured: isMouseCaptured)
         }
 
