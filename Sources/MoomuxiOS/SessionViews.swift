@@ -631,6 +631,7 @@ struct SessionDetailView: View {
                 }
             }
         }
+        .labelStyle(RowLabel())
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
         // One alert, and the information *is* the safeguard — the Mac asks
@@ -743,6 +744,32 @@ private struct StatusBadge: View {
     }
 }
 
+/// Icon-and-text rows in a `List` or `Form`. A list gives a `Label` a wide
+/// icon column and centres each glyph in it, so the text lines up but the gap
+/// does not: the pencil sits far from "Rename…", the ticket close to "Tags…",
+/// and Photos further from its text than Files. Glyphs pinned
+/// to the trailing edge of a column as wide as the widest one make every gap
+/// the same 8pt; the price is a slightly ragged left edge of icons.
+struct RowLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Row(configuration: configuration)
+    }
+
+    /// A view of its own so the column can grow with Dynamic Type — a fixed
+    /// 30pt is overrun by a large glyph at accessibility sizes.
+    private struct Row: View {
+        let configuration: Configuration
+        @ScaledMetric private var width = 30.0
+
+        var body: some View {
+            HStack(spacing: 8) {
+                configuration.icon.imageScale(.large).frame(width: width, alignment: .trailing)
+                configuration.title
+            }
+        }
+    }
+}
+
 /// A failed call must not read as "no sessions" — `AppState.refresh` keeps the
 /// last good list and reports through `connection`, so this row is the only
 /// thing that changes when the core goes away.
@@ -752,6 +779,7 @@ private struct ConnectionRow: View {
     var body: some View {
         if case let .down(why) = app.connection {
             Label(why, systemImage: "bolt.horizontal.circle")
+                .labelStyle(RowLabel())
                 .font(.caption)
                 .foregroundStyle(.orange)
         }
