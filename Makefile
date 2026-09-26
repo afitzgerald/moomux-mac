@@ -82,8 +82,10 @@ STAGE := .build/dmg
 # notarytool takes a zip, not a bundle — a .app is a directory.
 APPZIP := .build/Moomux.zip
 # Deferred (=) rather than immediate (:=): `dev` sets CONFIG per-target, and :=
-# would bake in the release path at parse time.
-BINDIR = $(shell swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) --show-bin-path)
+# would bake in the release path at parse time. The `eval` memoizes it on first
+# expansion: each `--show-bin-path` is a ~0.7s swift invocation, and `app`
+# expands this seven times, which was 5s of every `make dev` doing nothing.
+BINDIR = $(eval BINDIR := $(shell swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) --show-bin-path))$(BINDIR)
 BIN = $(BINDIR)/Moomux
 # Where libghostty's resource bundle keeps its payload. The `swiftbuild` engine
 # (Swift 6.4's default) emits a Contents/Resources-style bundle; the older
@@ -339,7 +341,8 @@ IOS_SDKFLAGS  = -Xswiftc -sdk -Xswiftc $(IOS_SDK) -Xcc -isysroot -Xcc $(IOS_SDK)
 # macos-26 runner, which is how this passed here and failed there. Overridable
 # for a toolchain that lacks it.
 IOS_BUILD_SYSTEM ?= --build-system swiftbuild
-IOS_PRODUCTS  = $(shell env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) $(IOS_BUILD_SYSTEM) $(IOS_SDKFLAGS) --show-bin-path)
+# Memoized on first expansion, like BINDIR — it is expanded six times.
+IOS_PRODUCTS  = $(eval IOS_PRODUCTS := $(shell env -u SDKROOT swift build -c release --triple $(IOS_TRIPLE) $(SWIFT_BUILD_FLAGS) $(IOS_BUILD_SYSTEM) $(IOS_SDKFLAGS) --show-bin-path))$(IOS_PRODUCTS)
 # The C module the Swift wrapper imports. SwiftPM knows where the xcframework
 # slice is; a bare `swiftc` does not, and the failure reads as
 # "missing required module 'libghostty'".
