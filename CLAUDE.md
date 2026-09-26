@@ -163,6 +163,32 @@ Traps when checking by screenshot:
   Re-adding tmux in System Settings and restarting the server fixes it properly, but restarting
   kills every live session.
 
+## The iPhone app in the simulator
+
+**The Simulator app is DeviceHub now.** This Xcode ships no `Simulator.app` — `open -a Simulator`
+fails and `mdfind` finds nothing. Its replacement is
+`/Applications/Xcode.app/Contents/Applications/DeviceHub.app` (`com.apple.dt.Devices`); open that
+to see the booted device. `simctl` itself is unchanged.
+
+```sh
+make ios                                     # build + sign .build/Moomux-iOS.app for the simulator
+make ios-shot HOST=127.0.0.1 PORT=8765       # install, launch, screenshot to .build/ios-shot.png
+xcrun simctl launch booted app.moomux.Moomux -coreHost 127.0.0.1 -corePort 8765 -newSession YES
+```
+
+`-newSession YES` opens the New Session sheet at launch — the screenshot seam; `make ios-run`
+does not pass it, so launch by hand for that screen.
+
+**Reaching a scratch core takes a bridge.** The phone talks TCP, and the core only listens on TCP at
+this machine's tailnet address (`ipc.TailnetPort`), which the real core already holds.
+`python3 Scripts/corebridge.py /tmp/mmx2.sock 8765` exposes a scratch core's unix socket on
+localhost instead. The client half-closes after every request, so a bridge that closes both
+directions on EOF drops every reply — the app connects, sends `Config` every 2s, and sits on
+"choose one" with nothing in the pickers. That one looks exactly like an app bug.
+
+The first launch on a fresh simulator puts a notification prompt over the middle of the screen,
+and nothing here can dismiss it — tap it in DeviceHub.
+
 ## Verifying a terminal change
 
 A screenshot proves a terminal *drew* something. It does not prove keystrokes arrive, that the
@@ -368,7 +394,8 @@ core new enough to serve them** — there is no fallback to the old local paths.
 - **A `DisclosureGroup` in a grouped `Form` ignores a click at its centre.** Only the chevron
   responds, and the AX element spans the whole row, so `Scripts/ui.swift click` lands on empty
   space and the value stays 0 — indistinguishable from a disclosure that does not work. `press`
-  exists for this; it aims at the leading edge.
+  exists for this; it aims at the leading edge. For a user, the fix is New Session's "More
+  options": bind `isExpanded` and make the label a plain `Button` spanning the row.
 - **`Scripts/ui.swift click` matches the first element with that label, which is rarely the alert's.**
   A "Remove" in an alert over a pane whose button is also "Remove" gets the pane's, behind the
   alert, and the stray click dismisses the alert — so the action silently never runs. Click an
@@ -755,10 +782,21 @@ Decisions, not oversights. Don't "fix" these without being asked.
   **No drag-to-reorder**, though, for sessions or projects: `MoveSession`/`MoveProject` take a ±1
   delta, the lists are plain `List`s, and `onMove` wants index sets over a bound array, so ⌃⌘↑/↓ and
   two chevron buttons are the whole feature for a day less work.
+- **The project sheet follows New Session's shape.** Repo path first, with a Choose… folder
+  picker; the name is optional and defaults to the folder's (`ProjectForm.nameToSend` — whitespace
+  becomes hyphens, nothing else is touched); base branch, then agent and skip-permissions, on the
+  face; branch prefix, no-worktrees and emoji under More options. "Ask every time" is an entry in
+  the agent menu, not a toggle; choosing it greys out skip-permissions, since New Session then asks
+  that per session and the project's value would never be used.
 - **No client-side validation beyond `ProjectForm.problem`.** No `sanitizeName`, no `~` expansion,
-  no duplicate-name check, no `IsRepo`, no base-branch defaulting, no worktree-mode-flip check: the
-  core does all of it and its refusal is the message the user reads. Two validators are two rules to
-  drift, and `problem`'s strings are `validateProjectLocked`'s verbatim for the same reason.
+  no duplicate-name check, no `IsRepo`, no worktree-mode-flip check: the core does all of it and its
+  refusal is the message the user reads. Two validators are two rules to drift, and `problem`'s
+  strings are `validateProjectLocked`'s verbatim for the same reason. Two exceptions, both
+  *defaults* the user can see and overwrite rather than rules that refuse anything: a form's base
+  branch is filled in with the project's configured one (the config's value, not a computed guess),
+  and an empty *project* name is derived from its folder, turning whitespace into hyphens and
+  nothing else; the core still validates what arrives. A session's empty name is sent empty — the
+  core names it (see New Session).
 - **Project management is a sheet, and everything it can raise is hosted on that sheet.** One
   `.sheet(item:)` presents one thing, so the project form hangs off `SettingsSheet`'s own
   `@State`, not off `app.sheet` — and the two alerts it can raise (`not_git_repo`, remove
@@ -797,11 +835,21 @@ Decisions, not oversights. Don't "fix" these without being asked.
   palette *indices*, which nothing here can resolve, so `ThemePalette.resolved` hands back
   "default" for it; and `warn` — the ± / ↑ git badges — is amber in every theme, split out of
   `done` precisely because `done` is now green everywhere.
-- **The New Session sheet asks three questions up front and hides the other nine.** Project, name
-  and first prompt are the fast path; agent, the dangerous flag, model, thinking level, existing
-  branch, base branch, ticket and PR live under a `DisclosureGroup`, which opens by itself only for
-  a `prompt_agent` project — where nothing can be submitted until an agent is chosen, so a collapsed
-  section would hide the only control that unblocks it.
+- **The New Session sheet asks only what changes per session**, on the Mac and the iPhone alike.
+  Project, first prompt, thinking level, name, existing branch, base branch, ticket and PR are on
+  the face; the agent override, model and the send toggle sit under a collapsed "More options". A
+  `prompt_agent` project moves the agent up onto the face, required, **with a skip-permissions
+  toggle beside it** — the TUI asks both for such a project and inherits neither, and so does
+  this. Any other project sends `Dangerous: nil`, so its own flag applies. The send toggle starts
+  at `auto_submit_default` and is this session's only: nothing writes it back (Settings owns the
+  default). The base branch arrives filled in with the project's (`seedBaseBranch`), follows a
+  project switch until the user types over it, and is not sent for a resumed branch. The name is
+  optional and **sent empty**: the core names the session after the existing branch, else the
+  prompt, else assigns one, de-duplicating all three — only it can see which names are taken. The
+  placeholder says which ("from the branch", "from the prompt", "assigned"), not the name itself,
+  because computing that here is the second copy of the rule this replaced. It needs a core with
+  erickgnclvs/moomux#298; an older one refuses an empty name with "name required", which reads
+  as its own message in the error alert. Neither sheet has a title.
   **The rule for growing this form is unchanged: the core must be able to hand over the list it
   validates against.** That is now true of the picker-shaped fields — `AgentOptions` serves
   `internal/app`'s own table, and `AppState.agentNames`/`models(for:)`/`thinking(for:)` mirror
@@ -814,11 +862,9 @@ Decisions, not oversights. Don't "fix" these without being asked.
   typed into the pane. This app replayed all of it step by step until the core owned it, and
   drifting from the TUI's copy of the same sequence is exactly how `moomux spawn` ended up storing
   no prompt at all. Do not reintroduce any of those steps here.
-  The two things still on this side: a changed auto-submit toggle is persisted as the new default
-  (best effort — a failed config write must not block a session), and `Dangerous` is sent as an
-  explicit `true`/`false` rather than left nil. Nil means "the project's default", which is a
-  different answer from the one the form just showed the user. `OpenTerminal` stays unset, so a new
-  session lands in the sidebar rather than in iTerm.
+  What is still on this side is the three rules in the bullet above: `AutoSubmit` from the form,
+  `Dangerous` only for a `prompt_agent` project, and no base branch for a resume. `OpenTerminal`
+  stays unset, so a new session lands in the sidebar rather than in iTerm.
 - **A slow write reports in the toolbar, not in its sheet.** `AppState.busy` is set by `mutate` for
   every action and rendered by `ConnectionBadge`, so the New Session sheet closes on Create rather
   than sitting there for the tens of seconds a worktree plus the worktree-create userscripts take.
