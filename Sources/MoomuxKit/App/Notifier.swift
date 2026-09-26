@@ -35,9 +35,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// The phone's answer to the Mac's dock tile. Driven by
     /// `AppState.updateDockBadge` and **not** from `report`, which only runs
     /// when the view map changed: `needsInputCount` filters `visibleSessions`,
-    /// so archiving the one waiting session — or flipping Show Archived —
-    /// leaves the views identical and would strand the badge at 1. Needs the
-    /// `.badge` authorization `init` asks for, same as the dock tile does.
+    /// so archiving the one waiting session leaves the views identical and
+    /// would strand the badge at 1. Needs the `.badge` authorization `init` asks for, same as the dock tile does.
     public func setBadge(_ count: Int) {
         guard let center else { return }
         Task { try? await center.setBadgeCount(count) }

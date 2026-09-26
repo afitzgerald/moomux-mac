@@ -248,7 +248,7 @@ struct SessionListView: View {
                             set: { app.folderFirst = $0 }
                         ))
                         .disabled(app.folderRows.isEmpty)
-                        Toggle("Show Archived", isOn: $app.showArchived)
+                        Toggle("Archived Only", isOn: $app.showArchived)
                         Toggle("Open in MergeRight", isOn: $app.mergeRightLinks)
                         Picker("Terminal size", selection: $fontSize) {
                             ForEach(TerminalFontSize.choices, id: \.self) { size in
@@ -680,8 +680,8 @@ struct SessionDetailView: View {
 /// merge/CI state), then `internal/tui/list.go`'s two git icons — ± for a
 /// dirty worktree, ↑ for commits not on the remote. Both git icons can show at
 /// once; they are different work in different places and collapsing them would
-/// hide one. Archived last, because those rows are only on screen when the
-/// Archived toggle is on and otherwise look identical to live ones.
+/// hide one. Archived last, and only in a search — the one list that mixes
+/// archived rows in with live ones.
 private struct Badges: View {
     let app: AppState
     let session: Session
@@ -709,7 +709,7 @@ private struct Badges: View {
                         .accessibilityLabel("Unpushed commits")
                 }
             }
-            if session.archived {
+            if session.archived && app.searching {
                 Image(systemName: "archivebox")
                     .foregroundStyle(.tertiary)
                     .accessibilityLabel("Archived")
