@@ -146,6 +146,9 @@ public final class AttachQueue {
         })
     }
 
+    /// For an alert that shows `error` and is dismissed before the next batch.
+    public func clearError() { error = nil }
+
     public func cancelAll() {
         tasks.forEach { $0.cancel() }
         tasks = []
