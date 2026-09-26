@@ -742,8 +742,9 @@ public struct CreateRequest: Encodable, Sendable {
     public var prompt: String
     public var autoSubmit: Bool
     /// nil means "use the project's own default" — which is why the Go field
-    /// is a pointer. This app sends an explicit choice, since its form shows
-    /// one; it never opens a terminal tab, so `OpenTerminal` is never sent.
+    /// is a pointer. Both apps send nil — neither form asks — so the project's
+    /// own flag applies. `OpenTerminal` is never sent: neither app opens a
+    /// terminal tab.
     public var dangerous: Bool?
 
     enum CodingKeys: String, CodingKey {

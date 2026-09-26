@@ -17,75 +17,87 @@ struct NewSessionSheet: View {
     private var thinking: [String] { app.thinking(for: form.agent) }
     private var hasModelList: Bool { app.hasModelList(for: form.agent) }
     /// Anything typed. Pickers are cheap to redo; a half-written prompt is not.
+    /// The base branch counts once it differs from the project's, which it
+    /// arrives filled in with.
     private var edited: Bool {
-        ![form.name, form.prompt, form.existingBranch, form.baseBranch, form.ticket, form.pr]
-            .allSatisfy(\.isEmpty)
+        form.baseBranchEdited
+            || ![form.name, form.prompt, form.existingBranch, form.ticket, form.pr].allSatisfy(\.isEmpty)
+    }
+
+    private var agentPicker: some View {
+        Picker("Agent", selection: $form.agent) {
+            // Only for a `prompt_agent` project, which must not silently pick one.
+            if form.agent.isEmpty { Text("choose one").tag("") }
+            ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
+        }
+    }
+
+    private func field(_ label: String, _ text: Binding<String>, prompt: String) -> some View {
+        LabeledContent(label) {
+            TextField(label, text: text, prompt: Text(prompt))
+                .multilineTextAlignment(.trailing)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        }
     }
 
     var body: some View {
         NavigationStack {
+            // The Mac's layout: what changes per session on the face, the
+            // agent override and model folded under More options.
             Form {
                 Section {
                     Picker("Project", selection: $form.project) {
                         Text("choose one").tag("")
                         ForEach(projects, id: \.self) { Text($0).tag($0) }
                     }
-                    TextField("Name", text: $form.name)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-                Section("First prompt") {
-                    TextField("What should the agent do?", text: $form.prompt, axis: .vertical)
-                        .lineLimit(3...8)
-                    Toggle("Send it (press Enter)", isOn: $form.autoSubmit)
+                    // Up here only when the project asks every time — and then
+                    // it asks about permissions too, as the TUI does.
+                    if project?.promptAgent == true {
+                        agentPicker
+                        Toggle("Skip permission prompts", isOn: $form.dangerous)
+                    }
+                } footer: {
+                    if project?.promptAgent == true && form.agent.isEmpty {
+                        Text("This project asks for an agent every time — pick one.")
+                    }
                 }
                 Section {
-                    Picker("Agent", selection: $form.agent) {
-                        // Only for a `prompt_agent` project, which must not
-                        // silently pick one.
-                        if form.agent.isEmpty { Text("choose one").tag("") }
-                        ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
-                    }
-                    if hasModelList {
-                        Picker("Model", selection: $form.model) {
-                            ForEach(models, id: \.self) { Text($0).tag($0) }
-                        }
-                    } else {
-                        TextField("Model", text: $form.modelText, prompt: Text("Model (default)"))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    }
+                    TextField("What should the agent do?", text: $form.prompt, axis: .vertical)
+                        .lineLimit(3...8)
                     if !thinking.isEmpty {
                         Picker("Thinking", selection: $form.thinking) {
                             ForEach(thinking, id: \.self) { Text($0).tag($0) }
                         }
                     }
-                    Toggle("Skip permission prompts", isOn: $form.dangerous)
-                } header: {
-                    Text("Agent")
-                } footer: {
-                    if !form.project.isEmpty && project?.promptAgent == true && form.agent.isEmpty {
-                        Text("This project asks for an agent every time — pick one.")
+                }
+                Section {
+                    // Labelled rows rather than bare fields: the base branch
+                    // arrives filled in, so a placeholder could not name it.
+                    field("Name", $form.name, prompt: form.namePlaceholder)
+                    field("Existing branch", $form.existingBranch, prompt: "resume, don't cut")
+                    field("Base branch", $form.baseBranch, prompt: "the repo's default")
+                        .disabled(project?.isPlain == true || !form.existingBranch.isEmpty)
+                }
+                Section {
+                    field("Ticket", $form.ticket, prompt: "")
+                    field("PR", $form.pr, prompt: "")
+                }
+                Section {
+                    DisclosureGroup("More options") {
+                        if project?.promptAgent != true { agentPicker }
+                        if hasModelList {
+                            Picker("Model", selection: $form.model) {
+                                ForEach(models, id: \.self) { Text($0).tag($0) }
+                            }
+                        } else {
+                            field("Model", $form.modelText, prompt: "default")
+                        }
+                        // Starts at the config's default; this session only.
+                        Toggle("Send the prompt", isOn: $form.autoSubmit)
                     }
                 }
-                Section("Branch") {
-                    // On iOS the prompt *is* the label, so it has to name the field.
-                    TextField("Existing branch (resume, don't cut)", text: $form.existingBranch)
-                    TextField("Base branch", text: $form.baseBranch,
-                              prompt: Text("Base branch (\(project?.baseBranch.flatMap { $0.isEmpty ? nil : $0 } ?? "project default"))"))
-                        .disabled(project?.isPlain == true)
-                }
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                Section("Tags") {
-                    TextField("Ticket", text: $form.ticket)
-                    TextField("PR", text: $form.pr)
-                }
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
             }
-            .navigationTitle("New Session")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
