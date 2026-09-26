@@ -1,5 +1,6 @@
 import GhosttyTerminal
 import MoomuxKit
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -28,12 +29,18 @@ struct TerminalScreen: View {
     /// slot in the pane's toolbar. It has to be here as well because the
     /// package reads the size when the surface is built.
     @AppStorage(TerminalFontSize.key) private var fontSize = TerminalFontSize.default
+    @State private var pane = PaneHandle()
+    @State private var photos: [PhotosPickerItem] = []
+    @State private var pickingPhotos = false
+    @State private var importingFiles = false
+    @State private var attachments = AttachQueue()
 
     var body: some View {
         AttachedTerminal(controller: app.terminalController,
                          client: app.client,
                          sessionID: sessionID,
                          fontSize: fontSize,
+                         pane: pane,
                          // The far end going away is the end of the screen's
                          // reason to exist: tmux exited, the session was
                          // killed, the core went down. Leaving a dead pane up
@@ -71,8 +78,66 @@ struct TerminalScreen: View {
                         Image(systemName: "info.circle")
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if attachments.pending > 0 {
+                        ProgressView()
+                    } else {
+                        Menu {
+                            // A `Button` and not a `PhotosPicker`: inside a
+                            // `Menu` the picker lays its label out itself, so
+                            // its icon sat at a different gap from Files'.
+                            Button { pickingPhotos = true } label: {
+                                Label("Photos", systemImage: "photo.on.rectangle")
+                            }
+                            Button { importingFiles = true } label: {
+                                Label("Files", systemImage: "folder")
+                            }
+                        } label: {
+                            Image(systemName: "paperclip")
+                        }
+                        .accessibilityLabel("Attach")
+                    }
+                }
             }
+            // The New Session sheet's pickers, with the path pasted into the
+            // pane rather than appended to a form: the agent is already
+            // running, so this is a file dropped on its terminal.
+            .photosPicker(isPresented: $pickingPhotos, selection: $photos, matching: .images)
+            .onChange(of: photos) { _, items in
+                guard !items.isEmpty else { return }
+                photos = []
+                attach(app.attachJobs(items))
+            }
+            .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item],
+                          allowsMultipleSelection: true) { attach(app.attachJobs($0)) }
+            // No form to put it under, and the pane is the program's screen.
+            .alert("Couldn't attach",
+                   isPresented: Binding(get: { attachments.error != nil },
+                                        set: { if !$0 { attachments.clearError() } })) {
+                Button("OK") {}
+            } message: {
+                Text(attachments.error ?? "")
+            }
+            // No `onDisappear` cancel, unlike the sheet: pushing the info
+            // screen disappears this one too, and would drop a batch mid-way.
+            // A batch outliving the pane pastes into a nil view — the files
+            // still land on the core, and its temp sweep takes them.
     }
+
+    /// A paste, not keystrokes: `paste(text:)` frames it as bracketed paste
+    /// when the program asked for that, which is how claude tells a dropped
+    /// file from typing — an image path pasted becomes `[Image #1]`. It goes
+    /// out through the surface's `write`, so it keeps its place among keys.
+    /// The core names the file with nothing that needs shell quoting.
+    private func attach(_ jobs: [AttachJob]) {
+        attachments.run(jobs) { pane.view?.paste(text: $0 + " ") }
+    }
+}
+
+/// The live surface, for the toolbar to paste into. A class so rebuilding the
+/// surface on a font change repoints it without re-rendering the screen.
+final class PaneHandle {
+    weak var view: UITerminalView?
 }
 
 private struct AttachedTerminal: UIViewRepresentable {
@@ -80,10 +145,12 @@ private struct AttachedTerminal: UIViewRepresentable {
     let client: MoomuxClient
     let sessionID: Session.ID
     let fontSize: Double
+    let pane: PaneHandle
     let onEnded: () -> Void
 
     func makeUIView(context: Context) -> UITerminalView {
         let view = LinkTapView(frame: .init(x: 0, y: 0, width: 390, height: 600))
+        pane.view = view
         view.delegate = context.coordinator
         view.controller = controller
         view.configuration = TerminalSurfaceOptions(
