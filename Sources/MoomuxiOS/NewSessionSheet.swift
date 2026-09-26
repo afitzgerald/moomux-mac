@@ -70,14 +70,18 @@ struct NewSessionSheet: View {
                 Section {
                     TextField("What should the agent do?", text: $form.prompt, axis: .vertical)
                         .lineLimit(3...8)
-                    // Rows of their own: two buttons sharing a Form row both
-                    // fire on any tap in it.
-                    PhotosPicker(selection: $photos, matching: .images) {
-                        Label("Attach Photos", systemImage: "photo.on.rectangle")
+                    // Borderless, or two buttons sharing a Form row both fire
+                    // on any tap in it.
+                    HStack {
+                        PhotosPicker(selection: $photos, matching: .images) {
+                            Label("Photos", systemImage: "photo.on.rectangle")
+                        }
+                        Spacer()
+                        Button { importingFiles = true } label: {
+                            Label("Files", systemImage: "paperclip")
+                        }
                     }
-                    Button { importingFiles = true } label: {
-                        Label("Attach Files", systemImage: "paperclip")
-                    }
+                    .buttonStyle(.borderless)
                     if attachments.pending > 0 {
                         LabeledContent("Uploading…") { ProgressView() }
                     }
