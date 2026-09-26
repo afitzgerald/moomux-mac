@@ -125,6 +125,8 @@ public final class MoomuxClient: Sendable {
         /// `SaveFile`'s contents — base64 on the wire, which is both
         /// `JSONEncoder`'s default for `Data` and Go's for `[]byte`.
         var data: Data?
+        /// `ReadFile`'s path, as tapped in a pane.
+        var path: String?
 
         // Every `ipc.Args` key this app sends already matches its property
         // name. A missing entry here would be invisible in both directions —
@@ -134,7 +136,7 @@ public final class MoomuxClient: Sendable {
             case newName = "new_name"
             case project
             case cols, rows
-            case data
+            case data, path
         }
     }
 
@@ -177,11 +179,13 @@ public final class MoomuxClient: Sendable {
         var unpushed: Bool?
         var files: Int?
         var commits: Int?
-        /// `SaveFile`: where the upload landed on the core's machine.
+        /// `SaveFile`: where the upload landed; `ReadFile`: the path it resolved to.
         var path: String?
+        /// `ReadFile`'s contents, base64 on the wire.
+        var data: Data?
 
         enum CodingKeys: String, CodingKey {
-            case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path
+            case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path, data
             case screens
             case projectEmoji = "project_emoji"
         }
@@ -285,6 +289,38 @@ public final class MoomuxClient: Sendable {
         }
         guard let path = result.path else { throw Failure.emptyResponse }
         return path
+    }
+
+    /// A file on the core's machine, for a path tapped in a session's pane.
+    /// The core resolves it — a relative path against the pane's directory and
+    /// then the worktree, `~` expanded, a trailing `:line:col` dropped — and
+    /// serves only the worktree, its own upload dir and `/tmp`, so this is the
+    /// one place the phone reads the core's disk.
+    public func readFile(id: String, path: String) throws -> (path: String, data: Data) {
+        let result: CallResult
+        do {
+            result = try call("ReadFile", Args(id: id, path: path))
+        } catch let Failure.server(message) where message.hasPrefix("unknown method") {
+            throw Failure.server("this moomux core is too old to open files — upgrade it")
+        }
+        // No `data` key is an empty file: Go's `omitempty` drops a zero-length
+        // `[]byte`. The path is always there on success.
+        guard let resolved = result.path else { throw Failure.emptyResponse }
+        return (resolved, result.data ?? Data())
+    }
+
+    /// `readFile`'s resolution without the bytes, for the Mac: it shares the
+    /// core's disk and opens the file itself, but only the core knows the
+    /// pane's directory a relative path was printed against.
+    public func resolveFile(id: String, path: String) throws -> String {
+        let result: CallResult
+        do {
+            result = try call("ResolveFile", Args(id: id, path: path))
+        } catch let Failure.server(message) where message.hasPrefix("unknown method") {
+            throw Failure.server("this moomux core is too old to open relative paths — upgrade it")
+        }
+        guard let resolved = result.path else { throw Failure.emptyResponse }
+        return resolved
     }
 
     /// The largest file `saveFile` sends — the core's `maxSaveFile`, copied so

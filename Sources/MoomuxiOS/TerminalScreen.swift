@@ -1,6 +1,7 @@
 import GhosttyTerminal
 import MoomuxKit
 import PhotosUI
+import QuickLook
 import SwiftUI
 import UIKit
 
@@ -35,6 +36,14 @@ struct TerminalScreen: View {
     @State private var importingFiles = false
     @State private var attachments = AttachQueue()
 
+    /// A tapped file, fetched from the core and shown in Quick Look — which
+    /// already does images, PDFs, text and code, with zoom and a share sheet.
+    @State private var preview: URL?
+    /// The fetch in flight, so a second tap supersedes the first for what is
+    /// shown. Only for what is shown: the detached read cannot be interrupted
+    /// and runs to the end, and the next fetch clears what it wrote.
+    @State private var fetch: Task<Void, Never>?
+
     var body: some View {
         AttachedTerminal(controller: app.terminalController,
                          client: app.client,
@@ -45,7 +54,8 @@ struct TerminalScreen: View {
                          // reason to exist: tmux exited, the session was
                          // killed, the core went down. Leaving a dead pane up
                          // makes the user dismiss a window to learn nothing.
-                         onEnded: { dismiss() })
+                         onEnded: { dismiss() },
+                         onFile: open(file:))
             // Rebuilding the surface is the whole mechanism: the package takes
             // its font size from `TerminalSurfaceOptions` at construction and
             // publishes no setter, so changing it means a new surface — which
@@ -58,6 +68,10 @@ struct TerminalScreen: View {
             // and the cursor at the bottom, which is exactly what goes
             // missing. Reported as "the cursor is two lines below where it
             // should be", which is precisely the inset in rows.
+            .quickLookPreview($preview)
+            // Leaving the pane abandons its fetch, or a late refusal raises
+            // "Couldn't do that" over whatever screen is next.
+            .onDisappear { fetch?.cancel() }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // The cow, saying the session's quip — the Mac's `CowQuip`,
@@ -124,6 +138,35 @@ struct TerminalScreen: View {
             // still land on the core, and its temp sweep takes them.
     }
 
+    /// Quick Look needs a local file, named so it knows what it is showing
+    /// (`PreviewFile.name`). Each fetch writes its own directory off the main
+    /// actor; only the one that is still current is shown, and it clears the
+    /// rest — a preview is looked at and dismissed, never kept. A refusal
+    /// goes to `actionError`, whose alert is on the stack above this screen.
+    private func open(file path: String) {
+        let client = app.client
+        let id = sessionID
+        fetch?.cancel()
+        fetch = Task {
+            do {
+                let url = try await Task.detached {
+                    let (resolved, data) = try client.readFile(id: id, path: path)
+                    let dir = PreviewFile.root.appending(path: UUID().uuidString)
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let url = dir.appending(path: PreviewFile.name(for: resolved, data: data))
+                    try data.write(to: url)
+                    return url
+                }.value
+                guard !Task.isCancelled else { return }
+                PreviewFile.clear(keeping: url.deletingLastPathComponent())
+                preview = url
+            } catch {
+                guard !Task.isCancelled else { return }
+                app.actionError = error.localizedDescription
+            }
+        }
+    }
+
     /// A paste, not keystrokes: `paste(text:)` frames it as bracketed paste
     /// when the program asked for that, which is how claude tells a dropped
     /// file from typing — an image path pasted becomes `[Image #1]`. It goes
@@ -147,6 +190,7 @@ private struct AttachedTerminal: UIViewRepresentable {
     let fontSize: Double
     let pane: PaneHandle
     let onEnded: () -> Void
+    let onFile: (String) -> Void
 
     func makeUIView(context: Context) -> UITerminalView {
         let view = LinkTapView(frame: .init(x: 0, y: 0, width: 390, height: 600))
@@ -184,7 +228,7 @@ private struct AttachedTerminal: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(client: client, sessionID: sessionID, onEnded: onEnded)
+        Coordinator(client: client, sessionID: sessionID, onEnded: onEnded, onFile: onFile)
     }
 
     /// A tap on a link opens it.
@@ -238,7 +282,7 @@ private struct AttachedTerminal: UIViewRepresentable {
             sendMousePos(x: tap.x, y: tap.y, modifiers: isMouseCaptured ? [.super_, .shift] : .super_)
             let link = coordinator.hoverLink
             sendMousePos(x: -1, y: -1)
-            guard let link, Coordinator.open(link) else { return super.toggleSoftwareKeyboard() }
+            guard let link, coordinator.follow(link) else { return super.toggleSoftwareKeyboard() }
         }
     }
 
@@ -250,6 +294,7 @@ private struct AttachedTerminal: UIViewRepresentable {
         private let client: MoomuxClient
         private let sessionID: Session.ID
         private let onEnded: () -> Void
+        private let onFile: (String) -> Void
         private var channel: AttachChannel?
         private var reader: Task<Void, Never>?
         private var settle: Task<Void, Never>?
@@ -336,10 +381,12 @@ private struct AttachedTerminal: UIViewRepresentable {
             resize: { _ in }
         )
 
-        init(client: MoomuxClient, sessionID: Session.ID, onEnded: @escaping () -> Void) {
+        init(client: MoomuxClient, sessionID: Session.ID, onEnded: @escaping () -> Void,
+             onFile: @escaping (String) -> Void) {
             self.client = client
             self.sessionID = sessionID
             self.onEnded = onEnded
+            self.onFile = onFile
         }
 
         /// The attach follows the surface's size, and the *settled* one.
@@ -542,17 +589,23 @@ private struct AttachedTerminal: UIViewRepresentable {
 
         /// A ⌘-click from a hardware mouse or trackpad. The delegate must exist
         /// even so: without one ghostty core opens the link itself, straight
-        /// past the allowlist in `open`.
+        /// past the allowlist in `follow`.
         func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
-            Coordinator.open(url)
+            follow(url)
         }
 
         /// Through `WebLink`, the allowlist. `UIApplication.open` hands an
-        /// https link to the app that claims it (GitHub, Asana) before Safari.
+        /// https link to the app that claims it (GitHub, Asana) before Safari;
+        /// a path is on the core's disk, so it goes to `ReadFile` instead.
         @discardableResult
-        static func open(_ link: String) -> Bool {
-            guard let url = WebLink.url(link) else { return false }
-            UIApplication.shared.open(url)
+        func follow(_ link: String) -> Bool {
+            if let url = WebLink.url(link) {
+                UIApplication.shared.open(url)
+            } else if let path = WebLink.filePath(link) {
+                onFile(path)
+            } else {
+                return false
+            }
             return true
         }
 

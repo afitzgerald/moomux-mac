@@ -82,6 +82,7 @@ struct NewSessionSheet: View {
                         }
                     }
                     .buttonStyle(.borderless)
+                    .labelStyle(RowLabel())
                     if attachments.pending > 0 {
                         LabeledContent("Uploading…") { ProgressView() }
                     }

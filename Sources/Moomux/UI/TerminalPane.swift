@@ -35,7 +35,9 @@ struct TerminalPane: NSViewRepresentable {
     /// Called when the tmux client exits — detached, or the session went away.
     var onExit: () -> Void = {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onExit: onExit) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onExit: onExit) { [pool, sessionID] link in pool.openPaneLink(link, in: sessionID) }
+    }
 
     /// A terminal nobody can type into is not a terminal, and SwiftUI leaves
     /// first responder on the sidebar list when this pane appears — the
@@ -256,8 +258,12 @@ struct TerminalPane: NSViewRepresentable {
                              TerminalSurfaceOpenURLDelegate,
                              TerminalSurfaceClipboardConfirmationDelegate {
         var onExit: () -> Void
+        private let openLink: (String) -> Void
 
-        init(onExit: @escaping () -> Void) { self.onExit = onExit }
+        init(onExit: @escaping () -> Void, openLink: @escaping (String) -> Void) {
+            self.onExit = onExit
+            self.openLink = openLink
+        }
 
         /// The tmux client went away: the user pressed the prefix key and `d`,
         /// or the session ended under them.
@@ -267,8 +273,10 @@ struct TerminalPane: NSViewRepresentable {
         /// payloads — and asks before opening one. `TerminalLink` is the
         /// allowlist. Without a delegate nothing opens at all, so this is the
         /// only thing standing between `cat hostile.txt` and the system.
+        /// `AppState.openPaneLink` runs it first, and asks the core only about
+        /// the relative paths it cannot place.
         func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
-            TerminalLink.open(url)
+            openLink(url)
         }
 
         /// ghostty asks before a protected clipboard operation, and with no
