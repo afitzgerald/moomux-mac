@@ -17,8 +17,8 @@ import Foundation
 public struct NewSessionForm: Equatable, Sendable {
     public var project = ""
     public var name = ""
-    /// A branch that already exists, to resume rather than cut. Either this or
-    /// `name` is enough — the core names the session after whichever it gets.
+    /// A branch that already exists, to resume rather than cut. With no name,
+    /// the core names the session after it.
     public var existingBranch = ""
     /// Empty means the project's own base branch.
     public var baseBranch = ""
@@ -37,11 +37,17 @@ public struct NewSessionForm: Equatable, Sendable {
     public var ticket = ""
     public var pr = ""
     public var prompt = ""
+    /// Press Enter after typing the prompt. Starts at the config's
+    /// `auto_submit_default` and is changed per session under More options —
+    /// never written back, so one session's choice is not the next one's.
     public var autoSubmit = false
     /// What `applyProjectDefaults` last chose, so `agentNamesChanged` can tell
     /// a value the user picked from one it seeded.
     private var seededAgent = ""
     private var seededDangerous = false
+    /// The project's base branch as last filled in, so switching project
+    /// replaces it only while the user has not typed over it.
+    private var seededBaseBranch = ""
 
     /// The one string that means "pass nothing" in both the model and thinking
     /// lists. It is the core's spelling, not ours — see `agentOptionsTable`.
@@ -91,6 +97,28 @@ public struct NewSessionForm: Equatable, Sendable {
         }
     }
 
+    /// Fills the base branch in with the project's own, so it can be edited
+    /// rather than guessed at from a placeholder — unless the user has already
+    /// typed one, which a project switch must not silently undo. Not part of
+    /// `applyProjectDefaults`, which a late agent table re-runs.
+    public mutating func seedBaseBranch(_ p: Project?) {
+        let value = p?.isPlain == false ? p?.baseBranch ?? "" : ""
+        if baseBranch == seededBaseBranch { baseBranch = value }
+        seededBaseBranch = value
+    }
+
+    /// The base branch differs from what the project filled in.
+    public var baseBranchEdited: Bool { baseBranch != seededBaseBranch }
+
+    /// What the Name field shows when empty: where the core will get one.
+    public var namePlaceholder: String {
+        if !existingBranch.isEmpty { return "from the branch" }
+        return prompt.trimmed.isEmpty ? "assigned" : "from the prompt"
+    }
+
+    /// Only a new branch is cut from the base, so a resume sends none.
+    public var baseBranchToSend: String { existingBranch.isEmpty ? baseBranch : "" }
+
     /// Keeps the model and thinking selections valid after the agent changes:
     /// the lists differ per agent, and a stale selection would be sent as a
     /// flag value the new agent has never heard of.
@@ -109,11 +137,11 @@ public struct NewSessionForm: Equatable, Sendable {
         hasModelList ? model : modelText
     }
 
-    /// A name or an existing branch is enough, but not neither — and a project
-    /// with `prompt_agent` blocks until an agent is chosen. The same two checks
-    /// the TUI's Enter handler makes before it will submit.
+    /// Every field but the project is optional: an empty name is the core's
+    /// to fill — from the branch, else the prompt, else an assigned one — so
+    /// only a `prompt_agent` project blocks, until an agent is chosen.
     public var canCreate: Bool {
-        !project.isEmpty && !(name.isEmpty && existingBranch.isEmpty) && !agent.isEmpty
+        !project.isEmpty && !agent.isEmpty
     }
 
     public static func demo() {
@@ -146,13 +174,34 @@ public struct NewSessionForm: Equatable, Sendable {
         form.applyProjectDefaults(Project(repo: "/src", agent: "gone"), agentNames: names)
         assert(form.agent == "claude")
 
-        // Either a name or a branch to resume, but not neither.
-        var empty = NewSessionForm()
-        empty.project = "moomux"
-        empty.agent = "claude"
-        assert(!empty.canCreate)
-        empty.existingBranch = "alan/x"
-        assert(empty.canCreate, "resuming a branch needs no name")
+
+        // No name is fine: the core names it, and the placeholder says from what.
+        var unnamed = NewSessionForm()
+        unnamed.project = "moomux"
+        unnamed.agent = "claude"
+        assert(unnamed.canCreate && unnamed.namePlaceholder == "assigned")
+        unnamed.prompt = "Add dark mode"
+        assert(unnamed.namePlaceholder == "from the prompt")
+        unnamed.existingBranch = "alan/x"
+        assert(unnamed.namePlaceholder == "from the branch")
+
+        // The base branch follows the project until the user types over it.
+        var base = NewSessionForm()
+        base.seedBaseBranch(Project(repo: "/a", baseBranch: "main"))
+        assert(base.baseBranch == "main" && !base.baseBranchEdited)
+        base.seedBaseBranch(Project(repo: "/b", baseBranch: "develop"))
+        assert(base.baseBranch == "develop", "untouched, it follows the project")
+        base.baseBranch = "release/2"
+        assert(base.baseBranchEdited)
+        base.seedBaseBranch(Project(repo: "/a", baseBranch: "main"))
+        assert(base.baseBranch == "release/2", "a typed base branch survives a project switch")
+        base.seedBaseBranch(Project(kind: "plain", repo: "/p", baseBranch: "main"))
+        assert(base.baseBranch == "release/2")
+        var plain = NewSessionForm()
+        plain.seedBaseBranch(Project(kind: "plain", repo: "/p", baseBranch: "main"))
+        assert(plain.baseBranch.isEmpty, "a plain project has no branches")
+        base.existingBranch = "alan/x"
+        assert(base.baseBranchToSend.isEmpty, "resuming cuts nothing")
 
         // Switching agents must not carry a model the new one has never heard of.
         var switching = NewSessionForm()
@@ -261,11 +310,24 @@ public struct ProjectForm: Equatable, Sendable {
                 collapsed: collapsed)
     }
 
+    /// The typed name, else the repo folder's own, with whitespace turned
+    /// into hyphens: "~/src/Gift Cards/" → "Gift-Cards". Editing keeps the
+    /// name it has — the core has no rename.
+    public var nameToSend: String {
+        let typed = name.trimmed
+        guard typed.isEmpty, editing == nil else { return typed }
+        // NSString, not URL: `URL(fileURLWithPath:)` resolves "." against the
+        // working directory, which is nothing to do with where the core runs.
+        let folder = (repo.trimmed as NSString).lastPathComponent
+        guard !repo.trimmed.isEmpty, !["/", "~", ".", ".."].contains(folder) else { return "" }
+        return folder.split(whereSeparator: \.isWhitespace).joined(separator: "-")
+    }
+
     /// nil when the form is submittable, otherwise why it isn't. The strings
     /// match `validateProjectLocked`'s wording so the same mistake reads the
     /// same in both front ends.
     public var problem: String? {
-        let name = self.name.trimmed
+        let name = nameToSend
         if name.isEmpty { return "project name required" }
         if name.contains(where: { " \t/\\".contains($0) }) {
             return "project name cannot contain spaces or slashes"
@@ -275,6 +337,18 @@ public struct ProjectForm: Equatable, Sendable {
     }
 
     public static func demo() {
+        // No name: the repo folder names it.
+        var derived = ProjectForm()
+        assert(derived.nameToSend.isEmpty)
+        derived.repo = "~/src/Gift Cards/"
+        assert(derived.nameToSend == "Gift-Cards" && derived.problem == nil)
+        for vague in ["~", ".", "..", "./"] {
+            derived.repo = vague
+            assert(derived.problem == "project name required", "\(vague) names nothing")
+        }
+        derived.name = "typed"
+        assert(derived.nameToSend == "typed")
+
         var form = ProjectForm()
         assert(form.problem == "project name required")
         form.name = "my project"

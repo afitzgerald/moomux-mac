@@ -287,54 +287,95 @@ struct ProjectSheet: View {
     /// nil to add, a name to edit.
     let editing: String?
     @State private var form = ProjectForm()
+    @State private var showMore = false
+    @State private var choosingFolder = false
 
     private var isPlain: Bool { app.config?.projects[editing ?? ""]?.isPlain == true }
 
+    /// "Ask every time" as an entry in the agent menu rather than a toggle
+    /// beside it: they are one question, and the toggle greyed the picker out.
+    private static let askTag = "\u{0}ask"
+    private var agentChoice: Binding<String> {
+        Binding(get: { form.askAgent ? Self.askTag : form.agent },
+                set: {
+                    form.askAgent = $0 == Self.askTag
+                    if !form.askAgent { form.agent = $0 }
+                })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(editing == nil ? "Add project" : "Edit “\(editing!)”").font(.headline)
+            // Laid out like New Session: where it is and what runs there on the
+            // face, the rarely-touched settings folded under More options.
             Form {
-                TextField("Name", text: $form.name)
+                Section {
+                    HStack {
+                        TextField("Repo path", text: $form.repo, prompt: Text("~/src/thing"))
+                        Button("Choose…") { choosingFolder = true }
+                    }
                     // The core keys projects by name and has no rename, so
                     // editing one is a remove plus an add — not this form.
-                    .disabled(editing != nil)
-                TextField("Repo path", text: $form.repo, prompt: Text("~/src/thing"))
-                Picker("Agent", selection: $form.agent) {
-                    ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
+                    TextField("Name", text: $form.name,
+                              prompt: Text(form.nameToSend.isEmpty ? "from the folder" : form.nameToSend))
+                        .disabled(editing != nil)
+                    if !isPlain {
+                        TextField("Base branch", text: $form.baseBranch, prompt: Text("main"))
+                    }
                 }
-                .disabled(form.askAgent)
-                Toggle("Ask which agent every time", isOn: $form.askAgent)
-                    .help("New sessions in this project start with no agent chosen")
-                Toggle("Skip permission prompts", isOn: $form.dangerous)
-                    .disabled(form.askAgent)
-                    .help("The default for new sessions in this project")
-                if !isPlain {
-                    TextField("Base branch", text: $form.baseBranch, prompt: Text("main"))
-                    TextField("Branch prefix", text: $form.branchPrefix,
-                              prompt: Text("optional, e.g. alan/"))
-                    Toggle("One folder, no worktrees", isOn: $form.noWorktree)
-                        .help("Sessions run in the repo itself, sharing its checkout. "
-                              + "Can't be changed while the project has sessions.")
+                Section {
+                    Picker("Agent", selection: agentChoice) {
+                        ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
+                        Divider()
+                        Text("Ask every time").tag(Self.askTag)
+                    }
+                    .help("“Ask every time” starts each new session with no agent chosen")
+                    // "Ask every time" asks this per session too, so the project's
+                    // own value would never be used.
+                    Toggle("Skip permission prompts", isOn: $form.dangerous)
+                        .disabled(form.askAgent)
+                        .help(form.askAgent ? "Asked for each session, with the agent"
+                              : "claude: --dangerously-skip-permissions, codex: --yolo")
                 }
-                TextField("Emoji", text: $form.emoji, prompt: Text("none"))
-                    // No palette picker: the core serves the *resolved* glyph
-                    // (`project_emoji`), not the palette behind it, and a copy
-                    // of that Go table here would be a second one to drift.
-                    // ⌃⌘Space is macOS's own picker.
-                    .help("Shown in place of the name in the TUI's compact views, "
-                          + "and beside it here. Left empty, both front ends draw "
-                          + "the same glyph picked from the project's name.")
+                Section {
+                    DisclosureGroup(isExpanded: $showMore) {
+                        // A disclosure's rows sit tighter than the Form's, which
+                        // clips a bordered field's top edge; `.padding` gives it back.
+                        if !isPlain {
+                            TextField("Branch prefix", text: $form.branchPrefix,
+                                      prompt: Text("optional, e.g. alan/"))
+                                .padding(.top, 6).padding(.bottom, 2)
+                            Toggle("One folder, no worktrees", isOn: $form.noWorktree)
+                                .help("Sessions run in the repo itself, sharing its checkout. "
+                                      + "Can't be changed while the project has sessions.")
+                        }
+                        TextField("Emoji", text: $form.emoji, prompt: Text("none"))
+                            .padding(.vertical, 2)
+                            // No palette picker: the core serves the *resolved*
+                            // glyph (`project_emoji`), not the palette behind
+                            // it, and a copy of that Go table here would be a
+                            // second one to drift. ⌃⌘Space is macOS's own picker.
+                            .help("Shown in place of the name in the TUI's compact views, "
+                                  + "and beside it here. Left empty, both front ends draw "
+                                  + "the same glyph picked from the project's name.")
+                    } label: {
+                        MoreOptionsLabel(isExpanded: $showMore)
+                    }
+                }
             }
             .formStyle(.grouped)
             .textFieldStyle(.roundedBorder)
-            if let problem = form.problem {
-                Text(problem).font(.caption).foregroundStyle(.secondary)
-            } else if isPlain {
-                Text("A plain project has no branches or worktrees, so it has no base branch.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            // Grows with More options instead of scrolling it out of sight —
+            // see the same pair on New Session.
+            .frame(maxHeight: 660)
+            .fixedSize(horizontal: false, vertical: true)
             HStack {
+                if let problem = form.problem, !form.repo.isEmpty || !form.name.isEmpty {
+                    Text(problem).font(.caption).foregroundStyle(.secondary)
+                } else if isPlain {
+                    Text("A plain project has no branches or worktrees.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -342,7 +383,7 @@ struct ProjectSheet: View {
                     if let editing {
                         app.updateProject(name: editing, form.project)
                     } else {
-                        app.addProject(name: form.name.trimmed, form.project)
+                        app.addProject(name: form.nameToSend, form.project)
                     }
                     dismiss()
                 }
@@ -352,6 +393,13 @@ struct ProjectSheet: View {
         }
         .padding(20)
         .frame(width: 460)
+        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
+            // `~` rather than /Users/…: it is what anyone would type, and the
+            // core expands it.
+            if case let .success(url) = result {
+                form.repo = (url.path as NSString).abbreviatingWithTildeInPath
+            }
+        }
         .onAppear {
             if let editing, let p = app.config?.projects[editing] {
                 form = ProjectForm(editing: editing, p)

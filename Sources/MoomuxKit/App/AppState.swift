@@ -834,9 +834,11 @@ public final class AppState {
         return form
     }
 
-    /// The project changed: its agent defaults replace the form's.
+    /// The project changed: its agent defaults and base branch replace the form's.
     public func applyProject(to form: inout NewSessionForm) {
-        form.applyProjectDefaults(config?.projects[form.project], agentNames: agentNames)
+        let project = config?.projects[form.project]
+        form.seedBaseBranch(project)
+        form.applyProjectDefaults(project, agentNames: agentNames)
         clampChoices(of: &form)
     }
 
@@ -1268,6 +1270,14 @@ public final class AppState {
             app.sessions = [row("a", "one"), row("a", "two"), row("b", "three")]
             assert(app.sessionsByProject.map(\.project) == ["a", "b"])
 
+            // The base branch arrives filled in, and follows a project switch.
+            app.config?.projects["a"]?.baseBranch = "release/1"
+            var form = app.newSessionForm(project: "a")
+            assert(form.baseBranch == "release/1", "got \(form.baseBranch.debugDescription)")
+            form.project = "b"
+            app.applyProject(to: &form)
+            assert(form.baseBranch.isEmpty)
+
             // The Archived toggle swaps the list for the archived ones alone;
             // a search still reaches both.
             app.sessions[1].archived = true
@@ -1462,15 +1472,18 @@ public final class AppState {
     ///
     /// `focus` is asked when the create *finishes*, tens of seconds later, so a
     /// front end can decline to move a user who has since gone elsewhere.
+    /// The permission flag is the project's (`nil`) unless the project asks
+    /// for an agent every time — then the sheet asks this too, as the TUI
+    /// does, and its answer is sent. The send toggle is never written back to
+    /// the config: it overrides `auto_submit_default` for this session only.
     public func create(_ form: NewSessionForm, focus: @escaping @MainActor () -> Bool = { true }) {
-        let autoSubmit = form.autoSubmit
-        let rememberAutoSubmit = autoSubmit != (config?.autoSubmitDefault ?? false)
-        let req = CreateRequest(project: form.project, name: form.name, agent: form.agent,
-                                branch: form.existingBranch, baseBranch: form.baseBranch,
+        let req = CreateRequest(project: form.project, name: form.name.trimmed, agent: form.agent,
+                                branch: form.existingBranch, baseBranch: form.baseBranchToSend,
                                 ticket: form.ticket, pr: form.pr,
                                 model: form.modelToSend(hasModelList: hasModelList(for: form.agent)),
                                 thinking: form.thinking, prompt: form.prompt,
-                                autoSubmit: autoSubmit, dangerous: form.dangerous)
+                                autoSubmit: form.autoSubmit,
+                                dangerous: config?.projects[form.project]?.promptAgent == true ? form.dangerous : nil)
         // Not `mutate`: that discards the created `Session`, and selecting it
         // needs the id `createSession` hands back.
         Task {
@@ -1478,12 +1491,7 @@ public final class AppState {
             defer { busy = nil }
             do {
                 let (session, hint) = try await withoutBlockingTheUI { [client] in
-                    if rememberAutoSubmit {
-                        // Best effort, exactly as the TUI treats it: remembering a
-                        // toggle is not worth failing a session creation over.
-                        try? client.setAutoSubmitDefault(autoSubmit)
-                    }
-                    return try client.createSession(req)
+                    try client.createSession(req)
                 }
                 if !hint.isEmpty { sessionHints[session.id] = hint }
                 await refresh()
