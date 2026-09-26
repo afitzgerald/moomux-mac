@@ -34,6 +34,7 @@ enum SelfTest {
         TerminalLink.demo()
         WebSheet.demo()
         String.shellQuotedDemo()
+        TerminalPane.commandDemo()
         AppState.ghosttyConfigDemo()
         Theme.demo()
         SessionTheme.demo()
