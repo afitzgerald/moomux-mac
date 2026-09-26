@@ -68,9 +68,13 @@ jobs:
           P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
+          # A stray return in either secret fails only as "passphrase not
+          # correct"; base64 has no whitespace and a password no line break.
+          P12_BASE64=$(printf '%s' "$P12_BASE64" | tr -d ' \t\r\n')
+          P12_PASSWORD=${P12_PASSWORD%%[$'\r\n']*}
           keychain="$RUNNER_TEMP/signing.keychain-db"
           keychain_password="$(uuidgen)"
-          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
 
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
