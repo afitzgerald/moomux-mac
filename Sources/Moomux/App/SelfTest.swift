@@ -39,6 +39,7 @@ enum SelfTest {
         SessionTheme.demo()
         MergeRight.demo()
         WebLink.demo()
+        PreviewFile.demo()
         GhosttyResourceBundle.demo()
         PromptDrop.demo()
         Attachments.demo()

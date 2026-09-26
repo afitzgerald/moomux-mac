@@ -46,9 +46,10 @@ enum TerminalLink {
         }
 
         // No scheme: the implicit detector also matches bare paths. Only ones
-        // that are absolute (or ~-rooted) and actually exist are openable — a
-        // relative path has no cwd to resolve against, since tmux does not emit
-        // OSC 7 for us to have tracked one.
+        // that are absolute (or ~-rooted) and actually exist are openable here
+        // — a relative path has no cwd to resolve against on this side, since
+        // tmux does not emit OSC 7. `AppState.openPaneLink` hands those to the
+        // core, which can ask tmux for the pane's directory.
         let path = NSString(string: text).expandingTildeInPath
         guard path.hasPrefix("/"), exists(path) else { return nil }
         return fileURL(path)
@@ -202,6 +203,26 @@ extension AppState {
         guard let link = mergeRightLink(for: session),
               TerminalLink.schemeHasHandler("mergeright") else { return nil }
         return link
+    }
+
+    /// A ⌘-clicked link in a session's pane. A URL or an absolute path that
+    /// exists opens exactly as `TerminalLink.open` always did. A path it cannot
+    /// resolve alone — relative, or ending in `:line:col` — goes to the core's
+    /// `ResolveFile`, which knows the pane's directory and applies the same
+    /// rules as the phone's viewer; the answer is opened here, locally.
+    /// Only the file opens, not the line: `NSWorkspace` has no way to say one.
+    public func openPaneLink(_ link: String, in id: Session.ID) {
+        if TerminalLink.resolve(link) != nil { return TerminalLink.open(link) }
+        guard let path = WebLink.filePath(link) else { return }
+        let client = client
+        Task {
+            do {
+                let resolved = try await Task.detached { try client.resolveFile(id: id, path: path) }.value
+                TerminalLink.open(resolved)
+            } catch {
+                actionError = error.localizedDescription
+            }
+        }
     }
 
     public func openTag(_ link: String) {
