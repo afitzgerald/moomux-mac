@@ -246,6 +246,7 @@ private struct NewSessionSheet: View {
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
     @State private var form = NewSessionForm()
+    @State private var showMore = false
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
@@ -253,74 +254,118 @@ private struct NewSessionSheet: View {
     private var thinking: [String] { app.thinking(for: form.agent) }
     private var hasModelList: Bool { app.hasModelList(for: form.agent) }
 
+    private var agentPicker: some View {
+        Picker("Agent", selection: $form.agent) {
+            // Only for a `prompt_agent` project, which starts with no agent
+            // chosen and must not silently pick one.
+            if form.agent.isEmpty { Text("choose one").tag("") }
+            ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("New session").font(.headline)
+            // What gets typed on every session first; what almost never
+            // changes (model, base branch) folded away under More options.
             Form {
-                // ponytail: no `.focused()` here — a menu-style Picker
-                // (NSPopUpButton) silently ignores FocusState on macOS.
-                // Forcing it needs a custom NSViewRepresentable; not worth it
-                // for focus-on-open alone.
-                Picker("Project", selection: $form.project) {
-                    Text("choose one").tag("")
-                    ForEach(projects, id: \.self) { Text($0).tag($0) }
+                Section {
+                    // No `.focused()` here — a menu-style Picker
+                    // (NSPopUpButton) silently ignores FocusState on macOS.
+                    // Forcing it needs a custom NSViewRepresentable; not worth
+                    // it for focus-on-open alone.
+                    Picker("Project", selection: $form.project) {
+                        Text("choose one").tag("")
+                        ForEach(projects, id: \.self) { Text($0).tag($0) }
+                    }
+                    // Up here only when the project asks every time — and then
+                    // it asks about permissions too, as the TUI does; otherwise
+                    // the project's own agent and flag are right, and
+                    // overriding the agent lives under More options.
+                    if project?.promptAgent == true {
+                        agentPicker
+                        Toggle("Skip permission prompts", isOn: $form.dangerous)
+                            .help(form.agent == "opencode"
+                                  ? "opencode has no permission-skipping flag — this does nothing for it"
+                                  : "claude: --dangerously-skip-permissions, codex: --yolo")
+                    }
                 }
-                TextField("Name", text: $form.name)
-                    .help("Names the branch, the worktree and the tmux session")
-                // A short placeholder on purpose: a long one pushes the
-                // field onto its own line in a grouped Form and the row
-                // stops looking like the ones above it.
-                TextField("Existing branch", text: $form.existingBranch,
-                          prompt: Text("resume, don't cut"))
-                TextField("Base branch", text: $form.baseBranch,
-                          prompt: Text(project?.baseBranch.flatMap { $0.isEmpty ? nil : $0 } ?? "the project's default"))
-                    .disabled(project?.isPlain == true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("First prompt")
+                Section {
                     PromptEditor(text: $form.prompt)
                         .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 160)
+                        // `.roundedBorder` reaches TextFields, not this
+                        // NSTextView, and without an edge typed text floats
+                        // in the row.
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
-                        .help("Drop or paste an image to add its path")
-                }
-                TextField("Ticket", text: $form.ticket)
-                TextField("PR", text: $form.pr)
-
-                Picker("Agent", selection: $form.agent) {
-                    // Only for a `prompt_agent` project, which starts with
-                    // no agent chosen and must not silently pick one.
-                    if form.agent.isEmpty { Text("choose one").tag("") }
-                    ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
-                }
-                if hasModelList {
-                    Picker("Model", selection: $form.model) {
-                        ForEach(models, id: \.self) { Text($0).tag($0) }
+                        // An NSTextView has no placeholder of its own.
+                        .overlay(alignment: .topLeading) {
+                            if form.prompt.isEmpty {
+                                Text("What should the agent do?")
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.leading, 7).padding(.top, 5)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .help("Drop or paste an image to add its path. Leave it empty to start the agent idle.")
+                    if !thinking.isEmpty {
+                        Picker("Thinking", selection: $form.thinking) {
+                            ForEach(thinking, id: \.self) { Text($0).tag($0) }
+                        }
+                        // The core decides which; opencode is the one agent
+                        // with no launch flag for it (`reasoningEffortFlag`).
+                        .help(form.agent == "opencode"
+                              ? "Prepended to the first prompt — opencode has no flag for it"
+                              : "Passed to \(form.agent) as its reasoning-effort flag")
                     }
-                } else {
-                    TextField("Model", text: $form.modelText, prompt: Text("default"))
-                        .help("\(form.agent) has no fixed model list — type one or leave it empty")
                 }
-                if !thinking.isEmpty {
-                    Picker("Thinking", selection: $form.thinking) {
-                        ForEach(thinking, id: \.self) { Text($0).tag($0) }
+                Section {
+                    // The placeholder is the name the prompt will give it, so
+                    // typing one is only for overriding that.
+                    TextField("Name", text: $form.name, prompt: Text(form.namePlaceholder))
+                        .help("Names the branch, the worktree and the tmux session")
+                    TextField("Existing branch", text: $form.existingBranch,
+                              prompt: Text("resume, don't cut"))
+                    // Only a new branch is cut from it, so it steps aside
+                    // while one is being resumed.
+                    TextField("Base branch", text: $form.baseBranch, prompt: Text("the repo's default"))
+                        .disabled(project?.isPlain == true || !form.existingBranch.isEmpty)
+                }
+                Section {
+                    TextField("Ticket", text: $form.ticket)
+                    TextField("PR", text: $form.pr)
+                }
+                Section {
+                    DisclosureGroup(isExpanded: $showMore) {
+                        if project?.promptAgent != true { agentPicker }
+                        if hasModelList {
+                            Picker("Model", selection: $form.model) {
+                                ForEach(models, id: \.self) { Text($0).tag($0) }
+                            }
+                        } else {
+                            TextField("Model", text: $form.modelText, prompt: Text("default"))
+                                .padding(.vertical, 2)  // see ProjectSheet's More options
+                                .help("\(form.agent) has no fixed model list — type one or leave it empty")
+                        }
+                        Toggle("Send the prompt (press Enter)", isOn: $form.autoSubmit)
+                            .help("Starts at Settings → Sessions' default; this session only")
+                    } label: {
+                        MoreOptionsLabel(isExpanded: $showMore)
                     }
-                    .help(form.agent == "codex"
-                          ? "codex takes this as a real reasoning-effort flag"
-                          : "Prepended to the first prompt — there is no CLI flag for it")
                 }
-                Toggle("Skip permission prompts", isOn: $form.dangerous)
-                    .help(form.agent == "opencode"
-                          ? "opencode has no permission-skipping flag — this does nothing for it"
-                          : "claude: --dangerously-skip-permissions, codex: --yolo")
-                Toggle("Send it (press Enter)", isOn: $form.autoSubmit)
-                    .help("Off leaves the prompt typed but unsent, so you can look before it runs")
             }
             .formStyle(.grouped)
+            // Its ideal height is its content's, so the sheet grows when More
+            // options opens instead of scrolling the new rows out of sight — a
+            // sheet otherwise keeps the size it opened at. Capped so a short
+            // window scrolls rather than pushing Create off the bottom.
+            .frame(maxHeight: 660)
+            .fixedSize(horizontal: false, vertical: true)
             // An empty `TextField` in a grouped Form draws no box at all, so a
-            // blank field reads as a static label — the multi-line prompt field
-            // as a large blank void. A border is the whole fix.
+            // blank field reads as a static label. A border is the whole fix.
             .textFieldStyle(.roundedBorder)
+            // Its own line: beside the buttons at this width it truncated,
+            // and it is the only explanation for a disabled Create.
             if !form.project.isEmpty && project?.promptAgent == true && form.agent.isEmpty {
-                Text("This project asks for an agent every time — pick one above.")
+                Text("This project asks for an agent every time — pick one.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -343,14 +388,31 @@ private struct NewSessionSheet: View {
         .padding(20)
         .frame(width: 460)
         // Seeded from the row being looked at — a second session in the same
-        // project is the common case.
+        // project is the common case — else the first project, as on the
+        // phone: "choose one" left every project-derived field blank.
         .onAppear {
-            form = app.newSessionForm(project: app.session(id: app.selectedSessionID)?.project ?? "")
+            form = app.newSessionForm(project: app.session(id: app.selectedSessionID)?.project
+                                      ?? projects.first ?? "")
         }
         // The agent, and with it every list below it, belongs to the project.
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
         .onChange(of: app.agentNames) { _, _ in app.agentNamesChanged(in: &form) }
+    }
+}
+
+/// The label of a "More options" disclosure in a grouped Form, where a
+/// DisclosureGroup answers only its chevron: a plain button over the whole row.
+struct MoreOptionsLabel: View {
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        Button { withAnimation { isExpanded.toggle() } } label: {
+            Text("More options")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
