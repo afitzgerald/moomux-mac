@@ -32,7 +32,7 @@ struct TerminalPane: NSViewRepresentable {
     /// The tmux session name to attach to, e.g. `moomux-macos-1a2b`.
     let tmuxSession: String
     let pool: AppState
-    /// Called when the tmux client exits — detached, or the session went away.
+    /// Called when the surface closes — see `Coordinator.terminalDidClose`.
     var onExit: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
@@ -213,7 +213,7 @@ struct TerminalPane: NSViewRepresentable {
             // then the same behaviour as before.
             envVars: GhosttyRuntimeResources.terminfoDirectoryURL
                 .map { ["TERMINFO": $0.path] } ?? [:],
-            command: "\(executable.shellQuoted) -u attach -t \(tmuxSession.shellQuoted)",
+            command: Self.command(tmux: executable, session: tmuxSession),
             // Explicit `false`, not nil. Nil means "whatever the user's ghostty
             // config says", and a user with `wait-after-command = true` would
             // keep the surface open after the tmux client exits — so
@@ -227,8 +227,10 @@ struct TerminalPane: NSViewRepresentable {
             // not handle, so ghostty writes "Process exited. Press any key to
             // close the terminal." into the grid and keeps the surface
             // whatever this says. `AppState.adopt` detaches off the snapshot
-            // for that reason; a keypress here is the only thing that gets a
-            // `terminalDidClose` out of a pane whose tmux is still alive.
+            // for that reason; a keypress over "Process exited" is the only
+            // thing that gets a `terminalDidClose` out of a pane whose tmux is
+            // still alive — and `reattachLoop` keeps bash running through a
+            // detach, so that screen only appears once the loop ends.
             waitAfterCommand: false,
             // ~96ms, on the dependency's own advice for this exact workload:
             // ghostty's IO thread coalesces resizes on a 25ms trailing-only
@@ -241,6 +243,65 @@ struct TerminalPane: NSViewRepresentable {
         )
         pool.plainPanes[sessionID] = view
         return view
+    }
+
+    /// `tmux attach`, inside a loop that survives being kicked. tmux and the
+    /// session ride as `$1`/`$2`, so neither is quoted into the script twice.
+    ///
+    /// A kicked client must not leave a dead pane. The phone's `Attach` runs
+    /// `tmux attach -d` core-side (so a phone does not shrink the desktop's
+    /// window), which detaches this client too; ghostty then shows "Process
+    /// exited" and — `SHOW_CHILD_EXITED` being unhandled, see
+    /// `waitAfterCommand` — nothing here hears about it. So while the session
+    /// lives the pane offers a key to reattach, and `q` to close. Not
+    /// automatic: reattaching at once takes the size straight back from the
+    /// phone that just attached. Each line is a measured failure:
+    ///
+    /// - `=` makes both targets exact. tmux otherwise falls back to a prefix
+    ///   match, so with `cmtest` killed and `cmtest2` alive the loop would go
+    ///   on into somebody else's session.
+    /// - `attach … || break`: an attach that fails (the ~70ms terminfo death)
+    ///   keeps tmux's own message on screen instead of reading as "Detached".
+    /// - The drain after `read -n1`: an arrow key is three bytes and a paste
+    ///   is many, and whatever `read` leaves goes to the reattached pane —
+    ///   usually an agent's prompt box. `/bin/bash` is 3.2, which refuses a
+    ///   fractional `read -t`, hence `stty time 1` (0.1s) and `dd`.
+    /// - `break`, never `exit`: `exec -l` makes this a login shell, and its
+    ///   `exit` builtin runs the user's `~/.bash_logout` inside the pane.
+    ///
+    /// `q` costs a second key: bash ends, ghostty draws "Process exited", and
+    /// only a keypress there reaches `terminalDidClose`.
+    static let reattachLoop = """
+        t=$1 s="=$2"
+        while :; do
+          "$t" -u attach -t "$s" || break
+          "$t" has-session -t "$s" 2>/dev/null || break
+          printf '\\r\\nDetached. Press any key to reattach, or q to close.\\r\\n'
+          read -rsn1 k || break
+          tty=$(stty -g); stty -echo -icanon min 0 time 1
+          while [ "$(dd bs=1024 count=1 2>/dev/null | wc -c)" -gt 0 ]; do :; done
+          stty "$tty"
+          [ "$k" = q ] && break
+        done
+        """
+
+    /// The line the surface's shell runs, after `exec -l`.
+    static func command(tmux: String, session: String) -> String {
+        "/bin/bash --noprofile --norc -c \(reattachLoop.shellQuoted) moomux "
+            + "\(tmux.shellQuoted) \(session.shellQuoted)"
+    }
+
+    /// The session name comes off the socket, so what matters is that it stays
+    /// one argument however hostile — and that it lands as `$2`, not in the
+    /// script.
+    static func commandDemo() {
+        let hostile = #"x'; touch /tmp/pwned; '"#
+        let line = command(tmux: "/opt/home brew/bin/tmux", session: hostile)
+        assert(line.hasPrefix("/bin/bash --noprofile --norc -c '"), line)
+        assert(line.hasSuffix(" moomux '/opt/home brew/bin/tmux' " + hostile.shellQuoted), line)
+        assert(!reattachLoop.contains(hostile), line)
+        assert(!reattachLoop.contains("exit"), "exit runs ~/.bash_logout")
+        assert(reattachLoop.components(separatedBy: "attach -t").count == 2, "one attach line")
     }
 
     func updateNSView(_ view: AttachedTerminalView, context: Context) {
@@ -265,8 +326,9 @@ struct TerminalPane: NSViewRepresentable {
             self.openLink = openLink
         }
 
-        /// The tmux client went away: the user pressed the prefix key and `d`,
-        /// or the session ended under them.
+        /// The surface closed: a key pressed over "Process exited", after the
+        /// session ended or the user chose `q` at the reattach prompt. A kick
+        /// or prefix-`d` alone does not get here — see `reattachLoop`.
         func terminalDidClose(processAlive: Bool) { onExit() }
 
         /// libghostty finds the links — its own implicit-URL matcher plus OSC 8
@@ -357,8 +419,8 @@ extension String {
 struct SessionTerminal: View {
     @Environment(AppState.self) private var app
     let session: Session
-    /// The tmux client went away — the user pressed the prefix key and `d`, or
-    /// the session ended under them.
+    /// The pane closed — the session ended, or the user closed it from the
+    /// reattach prompt (`TerminalPane.reattachLoop`).
     var onDetach: () -> Void
 
     var body: some View {
