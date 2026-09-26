@@ -6,6 +6,7 @@ import UIKit
 import Foundation
 import GhosttyTerminal
 import Observation
+import UniformTypeIdentifiers
 
 /// One-way flow, no exceptions:
 ///
@@ -1453,6 +1454,18 @@ public final class AppState {
     /// `connection` belongs to the poll loop and to nothing else.
     private func failed(_ what: String, _ error: Error) {
         actionError = "\(what) failed: \(error.localizedDescription)"
+    }
+
+    /// Puts a file where the agent can read it and returns its path for the
+    /// prompt: re-encoded if the agent could not read it as it is
+    /// (`Attachments.prepare`), then uploaded (`MoomuxClient.saveFile`). Both
+    /// off the main actor — decoding a 12MP photo is not free either.
+    public func attach(name: String, type: UTType?, data: Data) async throws -> String {
+        try await withoutBlockingTheUI { [client] in
+            let file = Attachments.prepare(name: name, type: type, data: data)
+            guard file.data.count <= MoomuxClient.maxSaveFile else { throw MoomuxClient.Failure.tooLarge }
+            return try client.saveFile(name: file.name, data: file.data)
+        }
     }
 
     /// Creates a session. One call: the core cuts the worktree and branch,

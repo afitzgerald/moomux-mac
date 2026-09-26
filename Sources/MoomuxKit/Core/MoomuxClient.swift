@@ -23,6 +23,8 @@ public final class MoomuxClient: Sendable {
         case notGitRepo(String)
         case emptyResponse
         case disconnected
+        /// An attachment over `maxSaveFile`, refused before it is uploaded.
+        case tooLarge
 
         public var errorDescription: String? {
             switch self {
@@ -30,6 +32,7 @@ public final class MoomuxClient: Sendable {
             case let .notGitRepo(message): return message
             case .emptyResponse: return "the server closed the connection without answering"
             case .disconnected: return "the status stream ended"
+            case .tooLarge: return "larger than \(MoomuxClient.maxSaveFile >> 20) MB"
             }
         }
     }
@@ -119,6 +122,9 @@ public final class MoomuxClient: Sendable {
         /// phone wants.
         var cols: Int?
         var rows: Int?
+        /// `SaveFile`'s contents — base64 on the wire, which is both
+        /// `JSONEncoder`'s default for `Data` and Go's for `[]byte`.
+        var data: Data?
 
         // Every `ipc.Args` key this app sends already matches its property
         // name. A missing entry here would be invisible in both directions —
@@ -128,6 +134,7 @@ public final class MoomuxClient: Sendable {
             case newName = "new_name"
             case project
             case cols, rows
+            case data
         }
     }
 
@@ -170,9 +177,11 @@ public final class MoomuxClient: Sendable {
         var unpushed: Bool?
         var files: Int?
         var commits: Int?
+        /// `SaveFile`: where the upload landed on the core's machine.
+        var path: String?
 
         enum CodingKeys: String, CodingKey {
-            case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits
+            case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path
             case screens
             case projectEmoji = "project_emoji"
         }
@@ -259,6 +268,29 @@ public final class MoomuxClient: Sendable {
     public func themes() throws -> [ThemePalette] {
         try call("Themes").themes ?? []
     }
+
+    /// Uploads a file to the core's machine and returns the path it was
+    /// written to — how both front ends attach a file to a first prompt. A
+    /// photo picked on the phone has no path an agent on the Mac could open,
+    /// and the Mac sends its dropped files the same way so there is one path.
+    ///
+    /// A core from before `SaveFile` answers "unknown method", which says
+    /// nothing to someone attaching a photo; that one is reworded.
+    public func saveFile(name: String, data: Data) throws -> String {
+        let result: CallResult
+        do {
+            result = try call("SaveFile", Args(name: name, data: data))
+        } catch let Failure.server(message) where message.hasPrefix("unknown method") {
+            throw Failure.server("this moomux core is too old to take attachments — upgrade it")
+        }
+        guard let path = result.path else { throw Failure.emptyResponse }
+        return path
+    }
+
+    /// The largest file `saveFile` sends — the core's `maxSaveFile`, copied so
+    /// a phone can refuse a video before uploading all of it just to hear no.
+    /// The core still enforces its own; if the two drift, the core's wins.
+    public static let maxSaveFile = 32 << 20
 
     public func sessions() throws -> [Session] {
         try call("Sessions").sessions ?? []
@@ -672,6 +704,17 @@ public final class MoomuxClient: Sendable {
                 Request(method: "ReorderSessions", args: Args(ids: ["a", "b"]))),
             as: UTF8.self)
         assert(order == #"{"args":{"ids":["a","b"]},"method":"ReorderSessions"}"#, order)
+
+        // An upload's bytes go as base64, which is what Go's []byte decodes;
+        // its answer comes back on `path`.
+        let upload = String(
+            decoding: try! encoder.encode(
+                Request(method: "SaveFile", args: Args(name: "a.png", data: Data([0, 1, 0xff])))),
+            as: UTF8.self)
+        assert(upload == #"{"args":{"data":"AAH/","name":"a.png"},"method":"SaveFile"}"#, upload)
+        let saved = try! Wire.decoder.decode(
+            Response.self, from: Data(#"{"result":{"path":"/tmp/moomux-images/ab-a.png"}}"#.utf8))
+        assert(saved.result?.path == "/tmp/moomux-images/ab-a.png")
 
         // The theme call is the only one sending both of these, and clearing
         // the appearance override means sending "" rather than dropping it.
