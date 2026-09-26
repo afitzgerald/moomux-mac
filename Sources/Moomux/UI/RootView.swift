@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import MoomuxKit
 
 /// Loaded once and shared by every view that draws the cow mark — reading
@@ -247,6 +248,12 @@ private struct NewSessionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var form = NewSessionForm()
     @State private var showMore = false
+    @State private var attachments = AttachQueue()
+    @State private var importingFiles = false
+
+    private func upload(name: String, type: UTType?, data: Data) async throws -> String {
+        try await app.attach(name: name, type: type, data: data)
+    }
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
@@ -290,7 +297,7 @@ private struct NewSessionSheet: View {
                     }
                 }
                 Section {
-                    PromptEditor(text: $form.prompt)
+                    PromptEditor(text: $form.prompt, attachments: attachments, upload: upload)
                         .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 160)
                         // `.roundedBorder` reaches TextFields, not this
                         // NSTextView, and without an edge typed text floats
@@ -305,7 +312,19 @@ private struct NewSessionSheet: View {
                                     .allowsHitTesting(false)
                             }
                         }
-                        .help("Drop or paste an image to add its path. Leave it empty to start the agent idle.")
+                        .help("Drop or paste a file to add its path. Leave it empty to start the agent idle.")
+                    HStack {
+                        Button("Attach Files…", systemImage: "paperclip") { importingFiles = true }
+                        if attachments.pending > 0 { ProgressView().controlSize(.small) }
+                    }
+                    // Here and not in an alert: the sheet is still open, and
+                    // the paths that did land are right above it.
+                    if let error = attachments.error {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if !thinking.isEmpty {
                         Picker("Thinking", selection: $form.thinking) {
                             ForEach(thinking, id: \.self) { Text($0).tag($0) }
@@ -382,7 +401,8 @@ private struct NewSessionSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!form.canCreate)
+                // Until every attachment's path is in the prompt.
+                .disabled(!form.canCreate || attachments.pending > 0)
             }
         }
         .padding(20)
@@ -398,6 +418,17 @@ private struct NewSessionSheet: View {
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
         .onChange(of: app.agentNames) { _, _ in app.agentNamesChanged(in: &form) }
+        .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls):
+                attachments.run(urls.map { PromptDrop.item(for: $0).job(upload: upload) }) { form.appendPath($0) }
+            case .failure(let error):
+                // Shown where an upload's failure would be.
+                attachments.run([{ throw error }]) { _ in }
+            }
+        }
+        .onDisappear { attachments.cancelAll() }
     }
 }
 

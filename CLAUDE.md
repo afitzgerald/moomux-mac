@@ -347,12 +347,15 @@ Core/Models.swift        the wire types + JSON coding + Wire.demo()
 Core/MoomuxClient.swift  the Swift half of internal/ipc
 Core/ToolPath.swift      finding tmux without a shell's PATH
 App/Forms.swift          the two multi-field forms' state and defaulting rules, pure
+App/Attachments.swift    first-prompt attachments, both front ends: re-encode, upload
+                         through `SaveFile`, and the queue each New Session sheet runs
 App/AppState.swift       the single root store, snapshot loop, config poll
 App/Notifier.swift       the only file allowed to touch UNUserNotificationCenter
 App/MoomuxApp.swift      scenes: main window + MenuBarExtra
 App/SelfTest.swift       --selftest
 App/GhosttyResourceBundle.swift  makes Bundle.module resolvable from inside the .app
 UI/RootView.swift        split view, rows, detail, inspector, menu-bar content
+UI/PromptEditor.swift    the first-prompt NSTextView: drop/paste → upload → path at the caret
 UI/TerminalPane.swift    libghostty hosting a plain `tmux attach`
 UI/TerminalLinks.swift   what a ⌘-clicked link in a pane is allowed to open
 UI/SettingsView.swift    project CRUD and the shared config flags, on two tabs
@@ -949,6 +952,12 @@ Decisions, not oversights. Don't "fix" these without being asked.
   columns and a tile is nearer 50, so wrapping shows the bottom quarter of the last few lines as
   mush. It also drops the trailing blank rows `capture-pane` returns below the cursor, which would
   otherwise scroll the content out of a short tile.
+- **Every attached file goes through the core, the Mac's included.** A file dropped, pasted or
+  picked into a first prompt is uploaded (`SaveFile`) and the core's path for it goes into the
+  prompt — on the phone because a phone path means nothing to an agent on the Mac, and on the Mac
+  so there is one path rather than two. The cost is that a dropped repo file arrives as a copy in
+  the core's temp directory, not as the original, and that folders cannot be attached at all.
+  It needs a core that serves `SaveFile`; an older one gets a "too old" message in the sheet.
 - **No notification actions, and no "Approve" button.** Tapping a banner selects the session and
   brings the app forward; that is the whole interaction. An action button would have to send keys
   into the agent's pane, and there is no write path for that. A banner already *is* an Open button.

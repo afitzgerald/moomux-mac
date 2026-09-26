@@ -1,5 +1,7 @@
 import MoomuxKit
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Mac's New Session sheet on a phone: the same `NewSessionForm`, the same
 /// pickers off the core's `AgentOptions`, the same one `CreateSession` call.
@@ -10,6 +12,9 @@ struct NewSessionSheet: View {
     let focus: @MainActor () -> Bool
     @Environment(\.dismiss) private var dismiss
     @State private var form = NewSessionForm()
+    @State private var photos: [PhotosPickerItem] = []
+    @State private var importingFiles = false
+    @State private var attachments = AttachQueue()
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
@@ -65,11 +70,24 @@ struct NewSessionSheet: View {
                 Section {
                     TextField("What should the agent do?", text: $form.prompt, axis: .vertical)
                         .lineLimit(3...8)
+                    // Rows of their own: two buttons sharing a Form row both
+                    // fire on any tap in it.
+                    PhotosPicker(selection: $photos, matching: .images) {
+                        Label("Attach Photos", systemImage: "photo.on.rectangle")
+                    }
+                    Button { importingFiles = true } label: {
+                        Label("Attach Files", systemImage: "paperclip")
+                    }
+                    if attachments.pending > 0 {
+                        LabeledContent("Uploading…") { ProgressView() }
+                    }
                     if !thinking.isEmpty {
                         Picker("Thinking", selection: $form.thinking) {
                             ForEach(thinking, id: \.self) { Text($0).tag($0) }
                         }
                     }
+                } footer: {
+                    if let error = attachments.error { Text(error).foregroundStyle(.red) }
                 }
                 Section {
                     // Labelled rows rather than bare fields: the base branch
@@ -109,13 +127,14 @@ struct NewSessionSheet: View {
                         app.create(form, focus: focus)
                         dismiss()
                     }
-                    .disabled(!form.canCreate)
+                    .disabled(!form.canCreate || attachments.pending > 0)
                 }
             }
         }
         // A swipe down is too easy to make by accident while scrolling a form;
         // once something is typed, Cancel is the only way out.
-        .interactiveDismissDisabled(edited)
+        .interactiveDismissDisabled(edited || attachments.pending > 0)
+        .onDisappear { attachments.cancelAll() }
         // No selection to seed from on a phone, so the first project — the
         // picker is the top row, so a wrong guess is one tap away.
         .onAppear { form = app.newSessionForm(project: projects.first ?? "") }
@@ -124,8 +143,42 @@ struct NewSessionSheet: View {
         .onChange(of: projects) { _, projects in
             if form.project.isEmpty && !edited { form = app.newSessionForm(project: projects.first ?? "") }
         }
+        .onChange(of: photos) { _, items in
+            guard !items.isEmpty else { return }
+            photos = []
+            attach(items.map { item in {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw CocoaError(.fileReadUnknown)
+                }
+                let type = item.supportedContentTypes.first
+                return try await app.attach(name: "photo.\(type?.preferredFilenameExtension ?? "jpg")",
+                                            type: type, data: data)
+            } })
+        }
+        .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            switch result {
+            case .failure(let error):
+                // Shown where an upload's failure would be.
+                attachments.run([{ throw error }]) { _ in }
+            case .success(let urls):
+                attach(urls.map { url in {
+                    try await app.attach(name: url.lastPathComponent,
+                                         type: UTType(filenameExtension: url.pathExtension),
+                                         data: try await Attachments.read(url))
+                } })
+            }
+        }
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
         .onChange(of: app.agentNames) { _, _ in app.agentNamesChanged(in: &form) }
+    }
+
+    // MARK: - Attachments
+
+    /// A file on the phone has no path an agent on the Mac could open, so
+    /// every one is uploaded and its path appended to the prompt.
+    private func attach(_ jobs: [AttachJob]) {
+        attachments.run(jobs) { form.appendPath($0) }
     }
 }

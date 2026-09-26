@@ -1,16 +1,19 @@
 import AppKit
-import ImageIO
+import MoomuxKit
 import SwiftUI
 import UniformTypeIdentifiers
 
 /// The New Session sheet's first-prompt box: a plain `NSTextView` that turns
-/// a dropped or pasted image into a path in the prompt, the way dropping a file
+/// a dropped or pasted file into a path in the prompt, the way dropping a file
 /// on a terminal does — which is how claude, codex and friends take images.
+/// Every file goes through the core first (`AppState.attach`), as on the phone.
 ///
 /// Not SwiftUI's `TextEditor`, because its `NSTextView` answers every drag
 /// itself, before a SwiftUI `.dropDestination` is ever consulted.
 struct PromptEditor: NSViewRepresentable {
     @Binding var text: String
+    let attachments: AttachQueue
+    let upload: @MainActor (String, UTType?, Data) async throws -> String
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
@@ -28,6 +31,8 @@ struct PromptEditor: NSViewRepresentable {
         view.textContainer?.widthTracksTextView = true
         view.delegate = context.coordinator
         view.string = text
+        view.attachments = attachments
+        view.upload = upload
 
         let scroll = NSScrollView()
         scroll.documentView = view
@@ -40,8 +45,10 @@ struct PromptEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         // A re-keyed parent can hand over a new binding; typing into the old one is lost.
         context.coordinator.text = $text
-        guard let view = scroll.documentView as? NSTextView, view.string != text else { return }
-        view.string = text
+        guard let view = scroll.documentView as? PromptTextView else { return }
+        view.attachments = attachments
+        view.upload = upload
+        if view.string != text { view.string = text }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -55,6 +62,23 @@ struct PromptEditor: NSViewRepresentable {
 }
 
 private final class PromptTextView: NSTextView {
+    var attachments: AttachQueue?
+    var upload: (@MainActor (String, UTType?, Data) async throws -> String)?
+    /// Where each pending drop's paths will go, kept in step with every edit
+    /// made while its uploads run — typing before the drop point, or a second
+    /// drop landing first, would otherwise put paths mid-word.
+    private var anchors: [Anchor] = []
+    private final class Anchor { var range: NSRange; init(_ range: NSRange) { self.range = range } }
+
+    override func shouldChangeText(in affected: NSRange, replacementString: String?) -> Bool {
+        guard super.shouldChangeText(in: affected, replacementString: replacementString) else { return false }
+        let length = (replacementString as NSString?)?.length ?? 0
+        for anchor in anchors {
+            anchor.range = PromptDrop.shift(anchor.range, by: affected, replacementLength: length)
+        }
+        return true
+    }
+
     // Return has to stay a newline — the core sends the prompt as one
     // paste-like `send-keys -l` chunk, so a multi-line prompt arrives intact —
     // so Tab is what gives, or this box is a keyboard trap.
@@ -78,96 +102,116 @@ private final class PromptTextView: NSTextView {
     private func insertPaths(from pboard: NSPasteboard) -> Bool {
         // The drop point during a drag, the selection on a paste.
         let at = rangeForUserTextChange
-        guard at.location != NSNotFound else { return false }
-        let paths = PromptImages.paths(from: pboard)
-        guard !paths.isEmpty else { return false }
-        let before = at.location > 0 ? (string as NSString).substring(with: NSRange(location: at.location - 1, length: 1)) : " "
-        let lead = before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
-        insertText(lead + paths.joined(separator: " ") + " ", replacementRange: at)
+        guard at.location != NSNotFound, let attachments, let upload else { return false }
+        let drops = PromptDrop.items(from: pboard)
+        guard !drops.isEmpty else { return false }
+        // Read now: a screenshot dragged off its floating thumbnail is a file
+        // macOS deletes moments later, too soon to wait its turn in the queue.
+        let jobs = drops.map { $0.job(upload: upload, readNow: true) }
+        // Paths land a moment later, in order, each one after the last — so
+        // the first replaces what a paste had selected and the rest follow it.
+        let anchor = Anchor(at)
+        anchors.append(anchor)
+        attachments.run(jobs, landed: { [weak self] path in
+            self?.insert(path, at: anchor)
+        }, finished: { [weak self] in
+            self?.anchors.removeAll { $0 === anchor }
+        })
         return true
+    }
+
+    /// Inserts `path` spaced off the word before it, and moves the anchor to
+    /// just past it, where the next one goes. Clamped as a last resort.
+    private func insert(_ path: String, at anchor: Anchor) {
+        // Out of the list while its own insertion runs, or `shouldChangeText`
+        // would shift it by the very text it is inserting.
+        anchors.removeAll { $0 === anchor }
+        defer { anchors.append(anchor) }
+        anchor.range = insert(path, replacing: anchor.range)
+    }
+
+    private func insert(_ path: String, replacing range: NSRange) -> NSRange {
+        let length = (string as NSString).length
+        let location = min(range.location, length)
+        let at = NSRange(location: location, length: min(range.length, length - location))
+        let before = location > 0 ? (string as NSString).substring(with: NSRange(location: location - 1, length: 1)) : " "
+        let lead = before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
+        let inserted = lead + path + " "
+        insertText(inserted, replacementRange: at)
+        return NSRange(location: location + (inserted as NSString).length, length: 0)
     }
 }
 
-/// Where a dropped image lives until the agent reads it.
-public enum PromptImages {
-    /// Every image is copied here, file drops included: a screenshot dragged
-    /// straight off its floating thumbnail is a file macOS deletes moments
-    /// later, and a copy also gives every path a name with nothing to quote.
-    /// The ceiling is the system's temp sweep (~3 days unread) — long after the
-    /// agent has looked.
-    static let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("moomux-images", isDirectory: true)
+/// What a drop, a paste or the Attach button hands the prompt, before anything
+/// is uploaded. Pure over its inputs, so `demo()` can pin it.
+enum PromptDrop: Equatable {
+    /// A file, image or not; read when its job says.
+    case file(URL, type: UTType?)
+    /// Raw image data straight off the pasteboard — a clipboard screenshot.
+    case data(name: String, type: UTType, Data)
+    /// Not supported: an upload is one file's bytes.
+    case folder
 
-    /// What claude and codex will actually look at. Anything else ImageIO can
-    /// decode (HEIC, TIFF, PSD, BMP…) is re-encoded as PNG on the way in.
-    static let agentReadable: Set<String> = ["png", "jpg", "jpeg", "gif", "webp"]
+    /// The upload that turns this into a path for the prompt. `readNow`
+    /// starts reading the file at once, off the main actor, rather than when
+    /// the queue reaches it — at the cost of holding every file of the batch
+    /// in memory until its turn, which is why only a drop asks for it.
+    func job(upload: @escaping @MainActor (String, UTType?, Data) async throws -> String,
+             readNow: Bool = false) -> AttachJob {
+        switch self {
+        case let .file(url, type):
+            if readNow {
+                let read = Task { try await Attachments.read(url) }
+                return { try await upload(url.lastPathComponent, type, try await read.value) }
+            }
+            return { try await upload(url.lastPathComponent, type, try await Attachments.read(url)) }
+        case let .data(name, type, data):
+            return { try await upload(name, type, data) }
+        case .folder:
+            return { throw MoomuxClient.Failure.server("folders can't be attached") }
+        }
+    }
 
-    /// One prompt-ready path per file or image on `pboard`; empty when there
-    /// are none, which hands the paste or drop back to the text view. A
-    /// non-image file is its own path, quoted if it needs it, the way a
-    /// terminal takes a dropped file.
-    static func paths(from pboard: NSPasteboard, into dir: URL = directory) -> [String] {
+    /// Metadata only — the bytes are `job`'s to read.
+    static func item(for url: URL) -> PromptDrop {
+        let values = try? url.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey])
+        return values?.isDirectory == true ? .folder : .file(url, type: values?.contentType)
+    }
+
+    /// Empty when there is nothing to attach, which hands the paste or drop
+    /// back to the text view.
+    static func items(from pboard: NSPasteboard) -> [PromptDrop] {
         let files = pboard.readObjects(forClasses: [NSURL.self],
                                        options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        if !files.isEmpty {
-            return files.map { src in
-                let type = (try? src.resourceValues(forKeys: [.contentTypeKey]))?.contentType
-                if type?.conforms(to: .image) == true, let saved = save(file: src, into: dir) { return saved }
-                return src.path.contains(where: { $0.isWhitespace || "'\"\\$`".contains($0) })
-                    ? src.path.shellQuoted : src.path
-            }
-        }
+        if !files.isEmpty { return files.map(item(for:)) }
 
         // Raw image data only when there is no text beside it: Office and
         // friends put a picture of the copied text on the pasteboard too, and a
         // text paste must stay a text paste.
         guard pboard.string(forType: .string) == nil else { return [] }
-        if let png = pboard.data(forType: .png), let dst = destination("png", in: dir),
-           (try? png.write(to: dst)) != nil {
-            return [dst.path]
+        if let png = pboard.data(forType: .png) { return [.data(name: "clipboard.png", type: .png, png)] }
+        if let tiff = pboard.data(forType: .tiff) { return [.data(name: "clipboard.tiff", type: .tiff, tiff)] }
+        return []
+    }
+
+    /// Where a pending insertion point ends up after an edit replaced
+    /// `edit` with `replacementLength` characters: shifted by an edit before
+    /// it, untouched by one after it, and collapsed to just past one that
+    /// overlaps it — the text it was going to replace is gone anyway.
+    static func shift(_ r: NSRange, by edit: NSRange, replacementLength: Int) -> NSRange {
+        // Typing exactly at the insertion point counts as before it, so the
+        // path lands after what was typed rather than splitting it.
+        if edit.location + edit.length <= r.location {
+            return NSRange(location: r.location + replacementLength - edit.length, length: r.length)
         }
-        guard let tiff = pboard.data(forType: .tiff),
-              let source = CGImageSourceCreateWithData(tiff as CFData, nil),
-              let dst = destination("png", in: dir), writePNG(source, to: dst) else { return [] }
-        return [dst.path]
-    }
-
-    private static func save(file src: URL, into dir: URL) -> String? {
-        let ext = src.pathExtension.lowercased()
-        if agentReadable.contains(ext) {
-            guard let dst = destination(ext, in: dir), (try? FileManager.default.copyItem(at: src, to: dst)) != nil
-            else { return nil }
-            return dst.path
-        }
-        guard let source = CGImageSourceCreateWithURL(src as CFURL, nil),
-              let dst = destination("png", in: dir), writePNG(source, to: dst) else { return nil }
-        return dst.path
-    }
-
-    /// A fresh name in `dir`, which is created only once there is something to put in it.
-    private static func destination(_ ext: String, in dir: URL) -> URL? {
-        guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil
-        else { return nil }
-        return dir.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
-    }
-
-    /// The first frame, full size, turned upright — a phone's HEIC is stored
-    /// sideways with an EXIF flag, and PNG has nowhere to carry that flag.
-    private static func writePNG(_ source: CGImageSource, to dst: URL) -> Bool {
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
-              let out = CGImageDestinationCreateWithURL(dst as CFURL, UTType.png.identifier as CFString, 1, nil)
-        else { return false }
-        CGImageDestinationAddImage(out, image, nil)
-        return CGImageDestinationFinalize(out)
+        if edit.location >= r.location + r.length { return r }
+        return NSRange(location: edit.location + replacementLength, length: 0)
     }
 
     static func demo() {
         let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent("moomux-images-demo-\(UUID().uuidString)")
+        let dir = fm.temporaryDirectory.appendingPathComponent("moomux-drop-demo-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: dir) }
         let pb = NSPasteboard(name: .init("moomux-demo-\(UUID().uuidString)"))
         defer { pb.releaseGlobally() }
@@ -177,51 +221,59 @@ public enum PromptImages {
                                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
         let png = rep.representation(using: .png, properties: [:])!
         let tiff = rep.tiffRepresentation!
-        func isPNG(_ path: String) -> Bool {
-            path.hasSuffix(".png") && fm.contents(atPath: path)?.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47])
-        }
 
-        // Nothing to save creates nothing.
+        // Plain text is not an attachment.
         pb.clearContents()
         pb.setString("hello", forType: .string)
-        assert(paths(from: pb, into: dir).isEmpty && !fm.fileExists(atPath: dir.path))
+        assert(items(from: pb).isEmpty)
 
-        // Clipboard screenshot: raw data becomes a file, TIFF converted.
+        // Clipboard screenshot: raw data is uploaded as is; the core side
+        // (`Attachments.prepare`) turns TIFF into PNG.
         pb.clearContents()
         pb.setData(png, forType: .png)
-        let raw = paths(from: pb, into: dir)
-        assert(raw.count == 1 && fm.contents(atPath: raw[0]) == png)
+        assert(items(from: pb) == [.data(name: "clipboard.png", type: .png, png)])
         pb.clearContents()
         pb.setData(tiff, forType: .tiff)
-        let rawTiff = paths(from: pb, into: dir)
-        assert(rawTiff.count == 1 && isPNG(rawTiff[0]))
+        assert(items(from: pb) == [.data(name: "clipboard.tiff", type: .tiff, tiff)])
 
         // Text with a picture of itself beside it stays text.
         pb.clearContents()
         pb.setString("hello", forType: .string)
         pb.setData(tiff, forType: .tiff)
-        assert(paths(from: pb, into: dir).isEmpty)
+        assert(items(from: pb).isEmpty)
 
-        // Files: a readable image is copied as is, anything else ImageIO reads
-        // becomes PNG, a non-image is its own path — quoted — and nothing in a
-        // mixed drop goes missing.
+        // Files: every one is uploaded, image or not; a folder is refused;
+        // nothing in a mixed drop goes missing.
         let shot = dir.appendingPathComponent("a shot.png")
-        let scan = dir.appendingPathComponent("scan.tiff")
         let notes = dir.appendingPathComponent("my notes.txt")
+        let folder = dir.appendingPathComponent("a folder")
         try! png.write(to: shot)
-        try! tiff.write(to: scan)
         try! Data("x".utf8).write(to: notes)
+        try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
         pb.clearContents()
-        pb.writeObjects([shot as NSURL, scan as NSURL, notes as NSURL])
-        let mixed = paths(from: pb, into: dir)
-        assert(mixed.count == 3)
-        assert(mixed[0] != shot.path && !mixed[0].contains(" ") && fm.contents(atPath: mixed[0]) == png)
-        assert(isPNG(mixed[1]))
-        assert(mixed[2] == notes.path.shellQuoted)
+        pb.writeObjects([shot as NSURL, notes as NSURL, folder as NSURL])
+        assert(items(from: pb) == [.file(shot, type: .png), .file(notes, type: .plainText), .folder])
+
+        // An insertion point follows the edits made around it.
+        let r = NSRange(location: 10, length: 4)
+        assert(shift(r, by: NSRange(location: 2, length: 0), replacementLength: 3) == NSRange(location: 13, length: 4),
+               "typing before it pushes it along")
+        assert(shift(r, by: NSRange(location: 2, length: 5), replacementLength: 0) == NSRange(location: 5, length: 4),
+               "deleting before it pulls it back")
+        assert(shift(r, by: NSRange(location: 14, length: 0), replacementLength: 3) == r, "typing after it does nothing")
+        assert(shift(r, by: NSRange(location: 12, length: 0), replacementLength: 1) == NSRange(location: 13, length: 0),
+               "typing inside the selection it would replace collapses it past the typing")
+        let caret = NSRange(location: 5, length: 0)
+        assert(shift(caret, by: NSRange(location: 5, length: 0), replacementLength: 2) == NSRange(location: 7, length: 0),
+               "typing at it puts the path after the typing")
+        assert(shift(caret, by: NSRange(location: 5, length: 3), replacementLength: 0) == caret,
+               "deleting forward from it leaves it")
 
         MainActor.assumeIsolated {
             let v = PromptTextView()
             v.isRichText = false
+            v.attachments = AttachQueue()
+            v.upload = { name, _, _ in "/t/\(name)" }
 
             // The regression: text + TIFF pasted through the view's own type
             // choice must come out as the text, not U+FFFC.
@@ -233,16 +285,23 @@ public enum PromptImages {
             assert(v.readSelection(from: pb))
             assert(v.string == "xhello", "got \(v.string.debugDescription)")
 
-            // An image lands at the caret, spaced off the word before it.
+            // Attachments land at the caret, in order, spaced off the word
+            // before them, replacing what a paste had selected.
             pb.clearContents()
-            pb.setData(png, forType: .png)
-            v.string = "look at"
-            v.setSelectedRange(NSRange(location: 7, length: 0))
+            pb.writeObjects([shot as NSURL, notes as NSURL])
+            v.string = "look at THIS please"
+            v.setSelectedRange(NSRange(location: 8, length: 4))
             assert(v.readSelection(from: pb))
-            assert(v.string.hasPrefix("look at /") && v.string.hasSuffix(".png "))
-            try? fm.removeItem(atPath: String(v.string.dropFirst(8).dropLast()))
+            // Typed at the start before anything lands — the paths must still
+            // go where the drop was, not four characters early.
+            v.setSelectedRange(NSRange(location: 0, length: 0))
+            v.insertText("so, ", replacementRange: NSRange(location: 0, length: 0))
+            let deadline = Date().addingTimeInterval(2)
+            while v.attachments?.pending != 0 && Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
+            let want = "so, look at /t/a shot.png /t/my notes.txt  please"
+            assert(v.string == want, "got \(v.string.debugDescription)")
         }
-        _ = raw.map { try? fm.removeItem(atPath: $0) }
-        _ = rawTiff.map { try? fm.removeItem(atPath: $0) }
     }
 }
