@@ -151,29 +151,10 @@ struct NewSessionSheet: View {
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
             photos = []
-            attach(items.map { item in {
-                guard let data = try await item.loadTransferable(type: Data.self) else {
-                    throw CocoaError(.fileReadUnknown)
-                }
-                let type = item.supportedContentTypes.first
-                return try await app.attach(name: "photo.\(type?.preferredFilenameExtension ?? "jpg")",
-                                            type: type, data: data)
-            } })
+            attach(app.attachJobs(items))
         }
         .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item],
-                      allowsMultipleSelection: true) { result in
-            switch result {
-            case .failure(let error):
-                // Shown where an upload's failure would be.
-                attachments.run([{ throw error }]) { _ in }
-            case .success(let urls):
-                attach(urls.map { url in {
-                    try await app.attach(name: url.lastPathComponent,
-                                         type: UTType(filenameExtension: url.pathExtension),
-                                         data: try await Attachments.read(url))
-                } })
-            }
-        }
+                      allowsMultipleSelection: true) { attach(app.attachJobs($0)) }
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
         .onChange(of: app.agentNames) { _, _ in app.agentNamesChanged(in: &form) }
@@ -185,5 +166,35 @@ struct NewSessionSheet: View {
     /// every one is uploaded and its path appended to the prompt.
     private func attach(_ jobs: [AttachJob]) {
         attachments.run(jobs) { form.appendPath($0) }
+    }
+}
+
+/// One upload job per picked photo or file, shared by the New Session sheet and
+/// the terminal screen — they differ only in where the returned path lands.
+extension AppState {
+    func attachJobs(_ items: [PhotosPickerItem]) -> [AttachJob] {
+        items.map { item in {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            let type = item.supportedContentTypes.first
+            return try await self.attach(name: "photo.\(type?.preferredFilenameExtension ?? "jpg")",
+                                         type: type, data: data)
+        } }
+    }
+
+    /// A picker that failed becomes a job that fails, so its reason is shown
+    /// where an upload's failure would be.
+    func attachJobs(_ picked: Result<[URL], Error>) -> [AttachJob] {
+        switch picked {
+        case .failure(let error):
+            return [{ throw error }]
+        case .success(let urls):
+            return urls.map { url in {
+                try await self.attach(name: url.lastPathComponent,
+                                      type: UTType(filenameExtension: url.pathExtension),
+                                      data: try await Attachments.read(url))
+            } }
+        }
     }
 }
