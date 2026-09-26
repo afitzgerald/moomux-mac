@@ -527,18 +527,25 @@ public final class AppState {
         visibleSessions.filter { state(for: $0) == .needsInput }.count
     }
 
+    /// The working set: every session not archived. The Archived toggle does
+    /// not widen this — the menu bar, the grid and the Dock badge are about
+    /// what you are working on, whichever list the sidebar is showing.
     public var visibleSessions: [Session] {
-        showArchived ? sessions : sessions.filter { !$0.archived }
+        sessions.filter { !$0.archived }
     }
 
-    /// What the sidebar lists: the visible slice normally, and while a search
-    /// is running every session whose name matches — **archived ones
+    /// What the sidebar lists: the working set normally, *only* the archived
+    /// sessions while the Archived toggle is on — a list of its own rather
+    /// than archived rows mixed back into the live ones — and while a search
+    /// is running every session whose name matches, **archived ones
     /// included**, whatever the Archived toggle says. `internal/tui`'s
     /// `matchSessions` runs over the whole store for the same reason: the
     /// session you cannot remember is disproportionately likely to be one you
     /// archived and forgot.
     public var listedSessions: [Session] {
-        AppState.matchSessions(searching ? sessions : visibleSessions, query: searchQuery)
+        AppState.matchSessions(
+            searching ? sessions : showArchived ? sessions.filter(\.archived) : visibleSessions,
+            query: searchQuery)
     }
 
     public var searching: Bool {
@@ -1260,6 +1267,19 @@ public final class AppState {
             }
             app.sessions = [row("a", "one"), row("a", "two"), row("b", "three")]
             assert(app.sessionsByProject.map(\.project) == ["a", "b"])
+
+            // The Archived toggle swaps the list for the archived ones alone;
+            // a search still reaches both.
+            app.sessions[1].archived = true
+            assert(app.listedSessions.map(\.id) == ["a:one", "b:three"])
+            app.showArchived = true
+            assert(app.listedSessions.map(\.id) == ["a:two"])
+            assert(app.visibleSessions.map(\.id) == ["a:one", "b:three"], "badge and grid keep the working set")
+            app.searchQuery = "t"
+            assert(app.listedSessions.map(\.id) == ["a:two", "b:three"])
+            app.searchQuery = ""
+            app.showArchived = false
+            app.sessions[1].archived = false
 
             app.applyProjectCollapsed("a", true)
             assert(!app.projectExpanded("a") && app.projectExpanded("b"))

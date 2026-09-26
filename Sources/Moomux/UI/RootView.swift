@@ -152,7 +152,7 @@ struct RootView: View {
             }
             ToolbarItem {
                 Toggle(isOn: $app.showArchived) { Label("Archived", systemImage: "archivebox") }
-                    .help("Show archived sessions")
+                    .help("Show only archived sessions")
             }
             ToolbarItem {
                 Button {
@@ -573,10 +573,13 @@ private struct SessionList: View {
             if app.sessions.isEmpty {
                 EmptyState()
             } else if app.listedSessions.isEmpty {
-                // Only reachable while searching: with no query the list is
-                // `visibleSessions`, and an empty one of those means every
-                // session is archived, which the Archived toggle explains.
-                ContentUnavailableView.search(text: app.searchQuery)
+                if app.searching {
+                    ContentUnavailableView.search(text: app.searchQuery)
+                } else if app.showArchived {
+                    ContentUnavailableView("No Archived Sessions", systemImage: "archivebox")
+                }
+                // Otherwise every session is archived, which the Archived
+                // toggle explains.
             }
         }
     }
@@ -878,11 +881,9 @@ private struct SessionRow: View {
                             .help("Unpushed commits")
                     }
                 }
-                // Archived rows are only on screen because the Archived
-                // toggle is on, and without this they are indistinguishable
-                // from live ones — the toggle changes the list and nothing
-                // says which rows it added.
-                if session.archived {
+                // Only a search mixes archived rows in with live ones; the
+                // Archived toggle's own list is nothing but, so it goes unmarked.
+                if session.archived && app.searching {
                     Image(systemName: "archivebox")
                         .foregroundStyle(.tertiary)
                         .help("Archived")
