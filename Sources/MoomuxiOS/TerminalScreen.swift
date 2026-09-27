@@ -20,6 +20,9 @@ import UIKit
 struct TerminalScreen: View {
     let app: AppState
     let sessionID: Session.ID
+    /// Pushes onto the list's stack. The ⋯ menu's Details needs it: a
+    /// `NavigationLink` inside a `Menu` is not reliably a link.
+    let push: (Route) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -85,33 +88,46 @@ struct TerminalScreen: View {
                         CowQuip(saying: app.quip(for: session) ?? app.label(for: session))
                     }
                 }
-                // Attached is exactly when you want the branch, the PR state
-                // and the worktree — the swipe on the row reaches detail too,
-                // but not once you are already in here.
+                // The diff is one tap because "what has it changed?" is the
+                // question you attach to ask. Details and Attach share a menu:
+                // three icons beside the quip squeezed it to a word or two.
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(value: Route.detail(sessionID)) {
-                        Image(systemName: "info.circle")
+                    NavigationLink(value: Route.changes(sessionID)) {
+                        Image(systemName: "plus.forwardslash.minus")
                     }
+                    .accessibilityLabel("View Changes")
+                    .disabled(app.session(id: sessionID).map { !app.canDiff($0) } ?? true)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if attachments.pending > 0 {
-                        ProgressView()
-                    } else {
-                        Menu {
+                    Menu {
+                        // Attached is exactly when you want the branch, the PR
+                        // state and the worktree — the row's swipe reaches
+                        // detail too, but not once you are already in here.
+                        Button { push(.detail(sessionID)) } label: {
+                            Label("Details", systemImage: "info.circle")
+                        }
+                        Section {
                             // A `Button` and not a `PhotosPicker`: inside a
                             // `Menu` the picker lays its label out itself, so
                             // its icon sat at a different gap from Files'.
                             Button { pickingPhotos = true } label: {
-                                Label("Photos", systemImage: "photo.on.rectangle")
+                                Label("Attach Photos", systemImage: "photo.on.rectangle")
                             }
                             Button { importingFiles = true } label: {
-                                Label("Files", systemImage: "folder")
+                                Label("Attach Files", systemImage: "folder")
                             }
-                        } label: {
-                            Image(systemName: "paperclip")
                         }
-                        .accessibilityLabel("Attach")
+                        .disabled(attachments.pending > 0)
+                    } label: {
+                        // A spinner while a batch uploads, but still a menu:
+                        // Details must not wait on a photo.
+                        if attachments.pending > 0 {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "ellipsis.circle")
+                        }
                     }
+                    .accessibilityLabel("More")
                 }
             }
             // The New Session sheet's pickers, with the path pasted into the

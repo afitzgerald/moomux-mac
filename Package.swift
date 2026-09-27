@@ -45,7 +45,12 @@ let package = Package(
         // The binary is still upstream's: the fork's manifest downloads the
         // same release asset. Switch back to Lakr233's URL at the first
         // release that contains that PR.
-        .package(url: "https://github.com/afitzgerald/libghostty-spm.git", exact: "1.6.20260922-key-repeat.1")
+        .package(url: "https://github.com/afitzgerald/libghostty-spm.git", exact: "1.6.20260922-key-repeat.1"),
+        // Diff parsing, highlighting and `PatchView` for the iPhone's Changes
+        // screen — MergeRight's engine, extracted so both apps share it.
+        // `exact:` for libghostty's reason: pre-1.0, so a minor can break the
+        // API, and a bump here is a deliberate act with a screenshot behind it.
+        .package(url: "https://github.com/afitzgerald/DiffKit.git", exact: "0.1.0"),
     ],
     targets: [
         // Everything platform-independent: the wire types, the client, the
@@ -59,7 +64,10 @@ let package = Package(
         // reason the note at the top of this file gives.
         .target(
             name: "MoomuxKit",
-            dependencies: [.product(name: "GhosttyTerminal", package: "libghostty-spm")],
+            dependencies: [
+                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                .product(name: "DiffKit", package: "DiffKit"),
+            ],
             path: "Sources/MoomuxKit",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

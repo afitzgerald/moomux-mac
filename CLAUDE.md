@@ -165,6 +165,10 @@ Traps when checking by screenshot:
 
 ## The iPhone app in the simulator
 
+**Each worktree has its own simulator, `Moomux · <worktree>`** — `make ios-run` creates it and
+deletes the ones whose worktree is gone (`Scripts/sim.sh`); pass `IOS_DEVICE` for any other.
+Select it in DeviceHub: the stock `iPhone 18 Pro` is not where this worktree's build is.
+
 **The Simulator app is DeviceHub now.** This Xcode ships no `Simulator.app` — `open -a Simulator`
 fails and `mdfind` finds nothing. Its replacement is
 `/Applications/Xcode.app/Contents/Applications/DeviceHub.app` (`com.apple.dt.Devices`); open that
@@ -1001,6 +1005,12 @@ Decisions, not oversights. Don't "fix" these without being asked.
   diff must not relaunch an agent), and untracked files show as a
   `git status` listing rather than as patches — `git add -N` would get them into the diff and is not
   worth mutating a live worktree's index for.
+  **The iPhone is the exception, and it has a native viewer.** At phone width the pager is the
+  worse half, and MergeRight's renderer already existed, so it moved into `DiffKit` (its own
+  package, shared with MergeRight) and the core grew `Diff`: the same merge-base diff as raw text,
+  untracked files included via `--no-index` (no index writes), no tmux needed — so, unlike Review,
+  a parked session's diff opens (`canDiff`). `MoomuxiOS/ChangesScreen.swift` is the file list and
+  `PatchView`. The Mac still reviews in tmux.
   **The escape hatch is one field**: Settings → Preferences → Diff tool takes a command, and ⌘D
   runs it with the session's worktree appended as the last argument (`diffier`, `code --diff`).
   Split on whitespace and run through `ToolPath`, not a shell — nothing to quote, and a GUI app's

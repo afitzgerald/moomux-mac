@@ -1,6 +1,15 @@
 {
-  "originHash" : "5a5c8f690491138c23a2383e8592da878e85ac194f2ec7fb09a61ce8e7fb7a82",
+  "originHash" : "a95144e0899b5f6066d119437436c3fbab8ad680844edf7d1f721a6fc43faa97",
   "pins" : [
+    {
+      "identity" : "diffkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/afitzgerald/DiffKit.git",
+      "state" : {
+        "revision" : "8c3ca32d2c2eb6755263b221280172103ea95203",
+        "version" : "0.1.0"
+      }
+    },
     {
       "identity" : "libghostty-spm",
       "kind" : "remoteSourceControl",

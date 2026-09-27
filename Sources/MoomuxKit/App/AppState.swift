@@ -3,10 +3,21 @@ import AppKit
 #elseif canImport(UIKit)
 import UIKit
 #endif
+import DiffKit
 import Foundation
 import GhosttyTerminal
 import Observation
 import UniformTypeIdentifiers
+
+/// One session's changes against its merge base, in `FileTree` order —
+/// directories first, the same order MergeRight lists a PR's files in.
+public struct SessionDiff: Sendable {
+    public var files: [FileChange]
+    /// The ref the core diffed against; "HEAD" means uncommitted work only.
+    public var base: String
+    /// The core cut the patch at a file boundary to stay under its cap.
+    public var truncated: Bool
+}
 
 /// One-way flow, no exceptions:
 ///
@@ -65,6 +76,11 @@ public final class AppState {
     /// pane shows. Two shell-outs per entry, so it is fetched on selection
     /// rather than polled.
     public private(set) var statuses: [Session.ID: MoomuxClient.SessionStatus] = [:]
+    /// `Diff`, split into files, for sessions whose changes have been opened.
+    /// Fetched on open and on pull-to-refresh, never polled: each one is a
+    /// `git diff` on the core. nil inside means "not a git repo", which is not
+    /// the same as a clean worktree's empty list.
+    public private(set) var diffs: [Session.ID: SessionDiff?] = [:]
 
     public private(set) var connection: Connection = .connecting
     /// Set when the status stream drops. Without it the last states keep
@@ -525,6 +541,28 @@ public final class AppState {
     /// `isPlain` and not `usesWorktree`.
     public func canReview(_ session: Session) -> Bool {
         isAlive(session) && config?.projects[session.project]?.isPlain != true
+    }
+
+    /// The native diff needs git, not tmux, so unlike `canReview` a parked
+    /// session qualifies — looking at a diff never relaunches an agent.
+    public func canDiff(_ session: Session) -> Bool {
+        config?.projects[session.project]?.isPlain != true
+    }
+
+    /// Splitting happens off the main actor too: `files(fromGitDiff:)` walks
+    /// every line of a patch that can be megabytes.
+    public func loadDiff(_ id: Session.ID) async {
+        do {
+            let diff = try await withoutBlockingTheUI { [client] in
+                try client.diff(id: id).map {
+                    SessionDiff(files: FileTree.fileOrder(for: DiffParser.files(fromGitDiff: $0.patch)),
+                                base: $0.base, truncated: $0.truncated)
+                }
+            }
+            diffs[id] = .some(diff)
+        } catch {
+            failed("Loading the diff", error)
+        }
     }
 
     /// Sessions the user should look at. The menu bar's whole reason to exist.

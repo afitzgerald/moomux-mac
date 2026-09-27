@@ -183,9 +183,17 @@ public final class MoomuxClient: Sendable {
         var path: String?
         /// `ReadFile`'s contents, base64 on the wire.
         var data: Data?
+        /// `Diff`: raw `git diff` text, `diff --git` headers included, and
+        /// whether the core cut it at a file boundary to stay under its cap.
+        var patch: String?
+        var truncated: Bool?
+        /// `Diff`: the ref the patch was taken against — "HEAD" when no base
+        /// branch shares history with the session's, so uncommitted work only.
+        var base: String?
 
         enum CodingKeys: String, CodingKey {
             case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path, data
+            case patch, truncated, base
             case screens
             case projectEmoji = "project_emoji"
         }
@@ -374,6 +382,21 @@ public final class MoomuxClient: Sendable {
     /// Keyed by session id; no front end needs a tmux session name.
     public func capture(ids: [String]) throws -> [String: String] {
         try call("Capture", Args(ids: ids)).screens ?? [:]
+    }
+
+    /// The session's changes against its merge base, untracked files included —
+    /// what `Review` shows in tmux, as text. Needs no tmux, so a parked session
+    /// answers too. nil when the worktree is not a git repo (`ok=false`).
+    public func diff(id: String) throws -> (patch: String, base: String, truncated: Bool)? {
+        let result: CallResult
+        do {
+            result = try call("Diff", Args(id: id))
+        } catch let Failure.server(message) where message.hasPrefix("unknown method") {
+            throw Failure.server("this moomux core is too old to show diffs — upgrade it")
+        }
+        guard result.ok == true else { return nil }
+        // Every field is `omitempty`: no `patch` is a clean worktree.
+        return (result.patch ?? "", result.base ?? "", result.truncated ?? false)
     }
 
     /// Opens the review window in the session's tmux, reusing an existing one.

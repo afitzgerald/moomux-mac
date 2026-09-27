@@ -95,7 +95,7 @@ GHOSTTY_BUNDLE = $(BINDIR)/GhosttyKit_GhosttyTerminal.bundle
 GHOSTTY_RES = $(GHOSTTY_BUNDLE)$(if $(wildcard $(GHOSTTY_BUNDLE)/Contents/Resources),/Contents/Resources,)
 
 .PHONY: build app run dev lsclean selfcheck warnings install shot signapp dmg dist notarize clean \
-	ios ios-run ios-shot ios-archive testflight
+	ios ios-run ios-shot ios-prune-sims ios-archive testflight
 
 build:
 	swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS)
@@ -356,9 +356,13 @@ IOS_GHOSTTY   = .build/artifacts/libghostty-spm/libghostty/GhosttyKit.xcframewor
 IOS_APP       = .build/Moomux-iOS.app
 # The Mac app's identifier on purpose — see the comment on it in iOS-Info.plist.
 IOS_BUNDLE_ID = app.moomux.Moomux
-# Named rather than "booted": a second worktree's run would otherwise land in
-# whichever simulator happened to be open.
-IOS_DEVICE   ?= iPhone 18 Pro
+# Named rather than "booted", and one per worktree: every worktree installs
+# under the same bundle id, so on a shared device the last `ios-run` wins and
+# the other session is looking at someone else's build. `Scripts/sim.sh`
+# creates it on first use and deletes the ones whose worktree is gone, on every
+# `ios-run`. Override IOS_DEVICE to use an existing simulator as-is.
+IOS_DEVICE_TYPE ?= iPhone 18 Pro
+IOS_DEVICE   ?= Moomux · $(notdir $(CURDIR))
 IOS_SOURCES   = $(shell find Sources/MoomuxiOS -name '*.swift')
 IOS_KIT_SOURCES = $(shell find Sources/MoomuxKit -name '*.swift')
 # The icons are rasterized into the bundle, so the SVGs and the script that
@@ -388,7 +392,8 @@ $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.p
 		-o $(IOS_APP)/Moomux $(IOS_SOURCES) \
 		$(IOS_PRODUCTS)/libMoomuxKit.a \
 		$(IOS_PRODUCTS)/GhosttyTerminal.o $(IOS_PRODUCTS)/GhosttyKit.o \
-		$(IOS_PRODUCTS)/MSDisplayLink.o $(IOS_PRODUCTS)/libghostty.a -lc++
+		$(IOS_PRODUCTS)/MSDisplayLink.o $(IOS_PRODUCTS)/DiffKit.o \
+		$(IOS_PRODUCTS)/libghostty.a -lc++
 	cp Resources/iOS-Info.plist $(IOS_APP)/Info.plist
 	@# Nothing expands $(CURRENT_PROJECT_VERSION) on this path — the plist is
 	@# copied, not built.
@@ -418,6 +423,8 @@ $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.p
 	@touch $(IOS_APP)
 
 ios-run: ios
+	@bash Scripts/sim.sh prune
+	@bash Scripts/sim.sh ensure "$(IOS_DEVICE)" "$(IOS_DEVICE_TYPE)"
 	xcrun simctl boot "$(IOS_DEVICE)" 2>/dev/null || true
 	xcrun simctl bootstatus "$(IOS_DEVICE)" -b >/dev/null
 	xcrun simctl install "$(IOS_DEVICE)" $(IOS_APP)
@@ -432,6 +439,11 @@ ios-shot: ios-run
 	@sleep 4
 	xcrun simctl io "$(IOS_DEVICE)" screenshot .build/ios-shot.png
 	@echo ".build/ios-shot.png"
+
+# The per-worktree simulators of removed worktrees. `ios-run` does this too;
+# this is for a sweep without building.
+ios-prune-sims:
+	bash Scripts/sim.sh prune
 
 # MARK: - TestFlight
 #

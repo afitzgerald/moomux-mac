@@ -19,6 +19,8 @@ enum TerminalFontSize {
 enum Route: Hashable {
     case detail(Session.ID)
     case terminal(Session.ID)
+    case changes(Session.ID)
+    case fileDiff(Session.ID, String)
 }
 
 // MARK: - List
@@ -42,11 +44,16 @@ struct SessionListView: View {
     /// Screenshot seam. There is no way to tap a row from `simctl`, so
     /// `-openSession <id>` opens one straight away and `make ios-shot
     /// SESSION=<id>` can photograph the detail screen. A `UserDefaults` key,
-    /// so it costs nothing when unset.
+    /// so it costs nothing when unset. `-changes YES` goes on to the diff's
+    /// file list, and `-diffFile <path>` to one file in it.
     @State private var path: [Route] = {
-        guard let id = UserDefaults.standard.string(forKey: "openSession") else { return [] }
-        return UserDefaults.standard.bool(forKey: "attach")
-            ? [.detail(id), .terminal(id)] : [.detail(id)]
+        let defaults = UserDefaults.standard
+        guard let id = defaults.string(forKey: "openSession") else { return [] }
+        if defaults.bool(forKey: "attach") { return [.detail(id), .terminal(id)] }
+        if let file = defaults.string(forKey: "diffFile") {
+            return [.detail(id), .changes(id), .fileDiff(id, file)]
+        }
+        return defaults.bool(forKey: "changes") ? [.detail(id), .changes(id)] : [.detail(id)]
     }()
 
     /// The default lens: a section per project, with the core's folder
@@ -139,7 +146,13 @@ struct SessionListView: View {
             // Review is the one action worth taking *without* leaving the
             // list: it opens the diff in the session's own tmux, ready for
             // when you attach. Detail has it too.
+            // Changes sits beside it and needs git, not tmux, so it is there
+            // for a parked session too.
             .swipeActions(edge: .leading) {
+                if app.canDiff(session) {
+                    Button("Changes") { path.append(.changes(session.id)) }
+                        .tint(.teal)
+                }
                 if app.canReview(session) {
                     Button("Review") {
                         app.review(session)
@@ -233,7 +246,10 @@ struct SessionListView: View {
                 switch route {
                 case let .detail(id):
                     SessionDetailView(app: app, sessionID: id, showTerminal: showTerminal)
-                case let .terminal(id): TerminalScreen(app: app, sessionID: id)
+                case let .terminal(id):
+                    TerminalScreen(app: app, sessionID: id) { path.append($0) }
+                case let .changes(id): ChangesScreen(app: app, sessionID: id)
+                case let .fileDiff(id, file): FileDiffScreen(app: app, sessionID: id, path: file)
                 }
             }
             .searchable(text: $app.searchQuery, prompt: "Search names")
@@ -583,6 +599,12 @@ struct SessionDetailView: View {
             // start a tmux client you did not want. In detail they are full
             // rows with room to aim at.
             Section {
+                // A link, not `showTerminal`: nothing here attaches, and a
+                // parked session's diff is as readable as a live one's.
+                NavigationLink(value: Route.changes(session.id)) {
+                    Label("View Changes", systemImage: "doc.text.magnifyingglass")
+                }
+                .disabled(!app.canDiff(session))
                 Button {
                     app.review(session)
                     showTerminal(sessionID)
