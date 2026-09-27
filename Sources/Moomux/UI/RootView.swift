@@ -847,7 +847,7 @@ private struct ProjectHeader: View {
         .dropDestination(for: String.self) { ids, _ in
             app.drop(ids, into: "", project: name)
         } isTargeted: { targeted = $0 }
-        .listRowBackground(targeted ? Color.accentColor.opacity(0.25) : nil)
+        .listRowBackground(targeted ? SessionTheme.dropTarget : nil)
         .contextMenu {
             Button("New Folder…") { app.sheet = .newFolder(assign: nil) }
         }
@@ -894,7 +894,7 @@ private struct FolderHeader: View {
         .dropDestination(for: String.self) { ids, _ in
             app.drop(ids, into: name, project: project)
         } isTargeted: { targeted = $0 }
-        .listRowBackground(targeted ? Color.accentColor.opacity(0.25) : nil)
+        .listRowBackground(targeted ? SessionTheme.dropTarget : nil)
         .contextMenu {
             Button("Rename…") { app.sheet = .renameFolder(name: name) }
             Button("Archive All") { app.setArchived(project: project, folder: name, true) }
