@@ -12,6 +12,8 @@ import SwiftUI
 struct MoomuxiOSApp: App {
     @State private var endpoint = EndpointStore()
     @State private var app: AppState?
+    /// The release notes to show at launch; see `WhatsNew.takeUnseen`.
+    @State private var unseenNotes: [WhatsNew.Release]?
 
     var body: some Scene {
         WindowGroup {
@@ -22,7 +24,14 @@ struct MoomuxiOSApp: App {
                     ConnectView(endpoint: endpoint, connect: connect)
                 }
             }
-            .task { if endpoint.remembered { connect() } }
+            .task {
+                if endpoint.remembered { connect() }
+                let unseen = WhatsNew.takeUnseen()
+                if unseen.show { unseenNotes = WhatsNew.releases(after: unseen.seen) }
+            }
+            .sheet(isPresented: Binding(get: { unseenNotes != nil }, set: { if !$0 { unseenNotes = nil } })) {
+                WhatsNewSheet(releases: unseenNotes ?? [])
+            }
         }
     }
 

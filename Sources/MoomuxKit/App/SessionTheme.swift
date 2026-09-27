@@ -15,6 +15,9 @@ import SwiftUI
 /// out of `done` was meant to end.
 public enum SessionTheme {
 
+    /// A sidebar row a session is being dragged over, on both front ends.
+    public static let dropTarget = Color.accentColor.opacity(0.25)
+
     /// The agent-state colors, from the palette the core serves for the
     /// config's current theme. Nil before `Themes` has answered, which falls
     /// back to SwiftUI's own semantic colors — literally what the "default"

@@ -260,14 +260,14 @@ All verified at the **pinned** version, not at `main`:
 
 ```sh
 git clone --depth 1 https://github.com/Lakr233/libghostty-spm.git
-git fetch --depth 1 origin tag 1.5.20260906
-git show 1.5.20260906:Package.swift | sed -n '/platforms/,/]/p'
+git fetch --depth 1 origin tag 1.6.20260922
+git show 1.6.20260922:Package.swift | sed -n '/platforms/,/]/p'
 #   .iOS(.v15), .macOS(.v13), .macCatalyst(.v15), .visionOS(.v1)
-git ls-tree -r --name-only 1.5.20260906 Sources/GhosttyTerminal/Platform/UIKit/ | wc -l
-#   17
+git ls-tree -r --name-only 1.6.20260922 Sources/GhosttyTerminal/Platform/UIKit/ | wc -l
+#   21
 ```
 
-Seventeen files of `UITerminalView`: `UITextInput`, keyboard, pointer, scroll, pinch-zoom,
+Twenty-one files of `UITerminalView`: `UITextInput`, keyboard, pointer, scroll, pinch-zoom,
 clipboard, drop, key commands. No zig build, no hand-written key translation, no
 `xcodebuild -create-xcframework`. The whole reason `CLAUDE.md`'s dependency bullet chose this
 package over building libghostty from source applies a second time, for free.

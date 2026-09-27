@@ -193,6 +193,47 @@ directions on EOF drops every reply — the app connects, sends `Config` every 2
 The first launch on a fresh simulator puts a notification prompt over the middle of the screen,
 and nothing here can dismiss it — tap it in DeviceHub.
 
+**Driving the on-screen keyboard, holds included.** `simctl` has no touch injection, so post
+mouse events at DeviceHub's window instead — they land as touches. That takes the screen over
+(DeviceHub comes to the front and the pointer moves), so ask before doing it on a machine someone
+is using. DeviceHub's toolbar keyboard button shows the software keyboard and puts it in
+"Capturing Keyboard" mode, where Mac keystrokes go to the device too; click it again afterwards.
+The window rect comes from `CGWindowListCopyWindowInfo` (owner "Device Hub"); a screenshot of that
+rect gives key positions (divide Retina pixels by 2). A hold is just a delay between down and up:
+
+```swift
+// m.swift <x> <y> <seconds> — screen points; build once with swiftc
+import AppKit
+let a = CommandLine.arguments, p = CGPoint(x: Double(a[1])!, y: Double(a[2])!)
+NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dt.Devices").first?.activate()
+usleep(400_000)
+let src = CGEventSource(stateID: .hidSystemState)
+CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)
+usleep(UInt32(Double(a[3])! * 1_000_000))
+CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)
+```
+
+Check the result with `tmux capture-pane` on a scratch session, not the screenshot, and run a
+control against an ordinary text field (the session list's search) before blaming the terminal.
+Never click at (0,0) to "focus" something — that is the Apple menu. Once Mac keystrokes have
+reached the device through capture, iOS decides a hardware keyboard is attached and shows only the
+accessory bar from then on; nothing in DeviceHub undoes it, so boot a second simulator (`simctl
+boot "iPhone 17"`, then pick it in DeviceHub's sidebar) rather than rebooting a shared one. And a
+synthetic key event carrying `.maskCommand` can leave ⌘ "held" in the session state — every click
+then extends a selection. `CGEventSource.flagsState(.combinedSessionState)` shows it; posting a
+⌘ down/up pair (virtual key 55) clears it. To see what UIKit asks the
+terminal view, override the `UITextInput` methods in `LinkTapView` and log to a file in the app's
+`tmp/` (`simctl get_app_container booted app.moomux.Moomux data`) — `NSLog` does not help here
+either. That is how held ⌫ was traced: the keyboard asks for the position before the caret, and
+the caret sat at the start of libghostty-spm's always-empty document, so it never auto-repeated
+(fixed by Lakr233/libghostty-spm#59, which the fork below carries).
+
+**Trying a change to libghostty-spm.** `make ios` depends only on this repo's sources, so an edit
+under `.build/checkouts/libghostty-spm` is not rebuilt — `touch` a file in `Sources/MoomuxiOS`
+first. SwiftPM leaves the checkout read-only: `chmod u+w` the file, and afterwards
+`git -C .build/checkouts/libghostty-spm checkout -- <file>` plus `chmod u-w` so it matches the pin
+again. Save the diff somewhere first if it is meant to go upstream.
+
 ## Verifying a terminal change
 
 A screenshot proves a terminal *drew* something. It does not prove keystrokes arrive, that the
@@ -351,6 +392,8 @@ Core/Models.swift        the wire types + JSON coding + Wire.demo()
 Core/MoomuxClient.swift  the Swift half of internal/ipc
 Core/ToolPath.swift      finding tmux without a shell's PATH
 App/Forms.swift          the two multi-field forms' state and defaulting rules, pure
+App/WhatsNew.swift       release notes baked into the bundle, both apps; self-contained, so it copies
+                         to other apps
 App/Attachments.swift    first-prompt attachments, both front ends: re-encode, upload
                          through `SaveFile`, and the queue each New Session sheet runs
 App/AppState.swift       the single root store, snapshot loop, config poll
@@ -690,6 +733,30 @@ core new enough to serve them** — there is no fallback to the old local paths.
   believing the code is broken, and reset in System Settings → Notifications. Focus/DND does the
   same thing for a different reason.
 
+## Pull requests are release notes
+
+Every merge to `main` ships a release (`deploy.yml` tags it, `release.yml` builds it), and that
+release's notes are GitHub's generated notes: **each PR's title is its line, and its label picks the
+heading** (`.github/release.yml`). The same text, with the last nine releases', is baked into both
+apps as `WhatsNew.md` (`Scripts/release_notes.sh`) and shown after an upgrade — Help → What's New on
+the Mac, the ⋯ menu on the iPhone. One list serves both, so say which device a change is on. So a PR title is written for someone *using* the
+app, not for a reviewer, and it is final at merge time — there is no later step that rewrites it.
+
+- **Title**: what the user can now do or no longer suffers, as a sentence in the imperative —
+  "Drag sessions into folders on the iPhone", "Keep a held delete key repeating on the iPhone
+  keyboard". Say where it happens (Mac, iPhone, a pane, the sidebar) when it isn't everywhere. No
+  `feat:`/`fix:` prefix (the label says that), no file or type names, no ticket numbers, no
+  trailing period. Backticks render in the sheet, but a user rarely needs them.
+- **Label, exactly one**: `enhancement` (listed under **New**), `bug` (**Fixed**), or `internal`
+  for anything a user cannot notice — CI, the Makefile, refactors, dependency bumps — and
+  `documentation` for docs, both left out of the notes entirely. An unlabelled PR still ships,
+  under **Other changes**, which is the sign one was missed.
+  `gh pr create --label enhancement` sets it at creation; `gh pr edit <n> --add-label bug` fixes
+  one after.
+- **Before merging, read the title as a release note.** If it only makes sense with the diff open,
+  retitle it (`gh pr edit <n> --title "..."`). Retitling after the merge does not help: the release
+  has already been built with the old title.
+
 ## Conventions
 
 - `public` on anything crossing a file boundary; one module, so this documents intent.
@@ -741,6 +808,12 @@ Decisions, not oversights. Don't "fix" these without being asked.
   weekly `1.5.<YYYYMMDD>` snapshots of an API upstream says is not stable yet — a bump is a
   deliberate act with a screenshot behind it. The escape hatch if it ever goes stale is the source
   build above, which needs zig 0.16 (brew has exactly that) and Xcode selected.
+  **Currently pinned to a fork**, `afitzgerald/libghostty-spm` at `1.6.20260922-key-repeat.1`:
+  upstream 1.6.20260922 plus the one commit of Lakr233/libghostty-spm#59 — held keys repeat on iOS,
+  both Delete on the software keyboard and every key on a hardware keyboard, where UIKit sends one
+  `pressesBegan` and nothing more. The fork changes Swift only; its manifest downloads upstream's
+  own binary. Back to Lakr233's URL at the first release that contains #59 — `Package.swift` says
+  the same.
 - **The app is ~11MB rather than ~5MB**, all of it the statically linked engine (the archive's
   macOS slice is 39MB universal; the linker keeps about 6MB of it). One-time ~190MB in `.build`
   for the downloaded xcframework. Measured, and accepted knowingly: Homebrew cask users

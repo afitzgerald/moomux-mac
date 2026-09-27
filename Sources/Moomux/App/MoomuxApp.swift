@@ -130,6 +130,12 @@ struct SessionCommands: Commands {
             // A core too old to send the folder-first layout has none to draw.
             .disabled(app.folderRows.isEmpty)
         }
+        // Replaces "Moomux Help", which has no help book behind it and could
+        // only say help isn't available. Off in a local build with no notes.
+        CommandGroup(replacing: .help) {
+            Button("What's New in Moomux") { app.sheet = .whatsNew(after: "0") }
+                .disabled(WhatsNew.releases.isEmpty)
+        }
         CommandMenu("Session") {
             // The sidebar List's own up/down-arrow navigation stops working
             // the moment a terminal pane has focus (it always takes first

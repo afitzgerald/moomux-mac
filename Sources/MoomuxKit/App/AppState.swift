@@ -152,6 +152,10 @@ public final class AppState {
         /// place projects are managed from, and one host for the dialogs that
         /// managing them raises.
         case settings
+        /// Release notes for every release newer than `after`, the version last
+        /// seen; nil shows the running release alone. Help passes "0", which
+        /// every version is newer than, for the whole baked history.
+        case whatsNew(after: String?)
         public var id: Self { self }
     }
     public var sheet: Sheet?
@@ -1609,8 +1613,9 @@ public final class AppState {
 
     static let autoFocusNewSessionKey = "autoFocusNewSession"
 
-    /// Offer "Open in MergeRight" on a session with a PR or Asana ticket. Off
-    /// by default: MergeRight is one person's PR app, not something every
+    /// Offer "Open in MergeRight" on a session with a PR or Asana ticket, and
+    /// send a clicked PR or Asana task link there — a tag or one in a pane —
+    /// instead of the browser. Off by default: MergeRight is one person's PR app, not something every
     /// moomux user has. `UserDefaults` for the same reason as `diffTool`.
     public var mergeRightLinks: Bool = UserDefaults.standard.bool(forKey: mergeRightLinksKey) {
         didSet { UserDefaults.standard.set(mergeRightLinks, forKey: Self.mergeRightLinksKey) }
@@ -1762,10 +1767,14 @@ public final class AppState {
     public func drop(_ ids: [String], into folder: String, project: String) -> Bool {
         let moved = ids.compactMap(session(id:))
             .filter { $0.folder != folder && (!folder.isEmpty || $0.project == project) }
-        // One `mutate` per session would race on `busy` and on `refresh`; the
-        // sidebar is single-select, so one drop is one session in practice.
-        guard let session = moved.first else { return false }
-        setFolder(session, to: folder)
+        guard !moved.isEmpty else { return false }
+        // One `mutate` for the lot: one per session would race on `busy` and
+        // on `refresh`. The Mac sidebar drags one row, but iOS lets a drag
+        // pick up more by tapping other rows mid-drag.
+        mutate(folder.isEmpty ? "Remove from folder" : "Move to folder") { client in
+            for session in moved { try client.setSessionFolder(id: session.id, folder: folder) }
+            return nil
+        }
         return true
     }
 

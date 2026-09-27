@@ -133,6 +133,12 @@ app: build
 	cp Resources/PeekabooPlate.png $(APP)/Contents/Resources/PeekabooPlate.png
 	cp Resources/icons/moomux-terminal-nose.svg $(APP)/Contents/Resources/moomux-terminal-nose.svg
 	cp Resources/icons/moomux-menubar.svg $(APP)/Contents/Resources/MenuBarIcon.svg
+	# Release notes, written by the Release workflow and named by it. A variable
+	# rather than a file in Resources/ so a notes file generated once locally
+	# cannot ride along into every later build under a newer version. Unset in
+	# a local build, which just leaves the What's New sheet off; to try it,
+	# `make dev WHATS_NEW=/path/to/notes.md`.
+	if [ -n "$(WHATS_NEW)" ]; then cp "$(WHATS_NEW)" $(APP)/Contents/Resources/WhatsNew.md; fi
 	# libghostty's terminfo and shell integration, shipped as a SwiftPM resource
 	# bundle. `Bundle.module` finds it in Contents/Resources; without it a pane's
 	# child gets TERM=xterm-ghostty with no terminfo to match, and tmux attaches
@@ -410,6 +416,9 @@ $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.p
 	@# looks first — so no GhosttyResourceBundle.warm() hook is needed here.
 	rm -rf $(IOS_APP)/GhosttyKit_GhosttyTerminal.bundle
 	cp -R $(IOS_PRODUCTS)/GhosttyKit_GhosttyTerminal.bundle $(IOS_APP)/
+	@# Release notes, as for the Mac bundle: only when WHATS_NEW names them.
+	rm -f $(IOS_APP)/WhatsNew.md
+	if [ -n "$(WHATS_NEW)" ]; then cp "$(WHATS_NEW)" $(IOS_APP)/WhatsNew.md; fi
 	codesign --force --sign - $(IOS_APP)
 	@touch $(IOS_APP)
 
@@ -482,6 +491,11 @@ $(IOS_ICON): Resources/icons/moomux-terminal-nose-plate.svg Scripts/rasterize.sw
 	swift Scripts/rasterize.swift .build/icon-full-bleed.svg $@ 1024 --opaque
 
 ios-archive: $(IOS_NOSE) $(IOS_ICON)
+	@# Release notes: the target syncs Sources/MoomuxiOS, so a file there is a
+	@# bundle resource, the same way the rasterized PNGs are. Removed first so a
+	@# copy from an earlier archive never ships under a newer version.
+	rm -f Sources/MoomuxiOS/WhatsNew.md
+	if [ -n "$(WHATS_NEW)" ]; then cp "$(WHATS_NEW)" Sources/MoomuxiOS/WhatsNew.md; fi
 	$(XCODEBUILD) -project Moomux.xcodeproj -scheme Moomux \
 		-destination 'generic/platform=iOS' -configuration Release \
 		-archivePath $(XC_ARCHIVE) CURRENT_PROJECT_VERSION=$(XC_BUILD) $(XC_AUTH) \

@@ -59,6 +59,18 @@ jobs:
         run: |
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" Resources/Info.plist
 
+      # The GitHub release's body, and the What's New baked into the app —
+      # see Scripts/release_notes.sh. Baked in rather than fetched by the app:
+      # it works offline and always matches the build. `make notarize` below
+      # reads WHATS_NEW; testflight.yml runs the same script for the iPhone.
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Scripts/release_notes.sh "${{ steps.version.outputs.tag }}" "$RUNNER_TEMP"
+          echo "WHATS_NEW=$RUNNER_TEMP/WhatsNew.md" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/WhatsNew.md"
+
       # Imports the Developer ID cert into a throwaway keychain scoped to this
       # job. A random, job-local password is fine — the keychain never
       # outlives the runner. codesign/notarytool find it because `security
@@ -116,7 +128,7 @@ jobs:
             "${{ steps.archive.outputs.name }}" \
             "${{ steps.archive.outputs.name }}.sha256" \
             --title "${{ steps.version.outputs.tag }}" \
-            --generate-notes
+            --notes-file "$RUNNER_TEMP/notes.md"
 
       - name: Publish Homebrew cask
         env:

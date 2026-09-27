@@ -40,6 +40,7 @@ struct SessionListView: View {
     /// `-newSession YES` opens the sheet at launch — the screenshot seam, same
     /// idea as `-openSession` below.
     @State private var creating = UserDefaults.standard.bool(forKey: "newSession")
+    @State private var showingNotes = false
     /// Screenshot seam. There is no way to tap a row from `simctl`, so
     /// `-openSession <id>` opens one straight away and `make ios-shot
     /// SESSION=<id>` can photograph the detail screen. A `UserDefaults` key,
@@ -122,42 +123,48 @@ struct SessionListView: View {
     @ViewBuilder
     private func sessionRow(_ session: Session, indent: Int) -> some View {
         // `onTapGesture`, not a `Button`: a Button's own gesture recogniser
-        // wins the long press, so `.contextMenu` on it never fires —
-        // measured first on the folder header, which is built this way for
-        // the same reason, as is the Mac's.
+        // wins the long press, which the drag below needs.
         SessionRow(app: app, session: session)
             .contentShape(Rectangle())
             .onTapGesture {
                 if app.isAlive(session) { showTerminal(session.id) }
                 else { path.append(.detail(session.id)) }
             }
-            // One item, deliberately. Archive and Details are already a swipe
-            // away, forms belong on a screen rather than in a menu, and Delete
-            // wants the warning that names dirty files and unpushed commits —
-            // all of which live in detail. Review is here because it is the
-            // one action worth taking *without* leaving the list: it opens the
-            // diff in the session's own tmux, ready for when you attach.
-            .contextMenu {
-                Button("View Changes") { path.append(.changes(session.id)) }
-                    .disabled(!app.canDiff(session))
-                Button("Review Changes") {
-                    app.review(session)
-                    showTerminal(session.id)
+            // Same payload as the Mac sidebar's row: the id as a plain string,
+            // which `AppState.drop` filters. The long press is the drag's
+            // alone — Review used to be a context menu here, and two things
+            // on one long press means one of them loses.
+            .draggable(session.id)
+            .swipeActions(edge: .trailing) {
+                Button(session.archived ? "Unarchive" : "Archive") {
+                    app.setArchived(session, !session.archived)
                 }
-                .disabled(!app.canReview(session))
+                .tint(.indigo)
+                Button("Details") { path.append(.detail(session.id)) }
+                    .tint(.gray)
             }
-        .swipeActions(edge: .trailing) {
-            Button(session.archived ? "Unarchive" : "Archive") {
-                app.setArchived(session, !session.archived)
+            // Review is the one action worth taking *without* leaving the
+            // list: it opens the diff in the session's own tmux, ready for
+            // when you attach. Detail has it too.
+            // Changes sits beside it and needs git, not tmux, so it is there
+            // for a parked session too.
+            .swipeActions(edge: .leading) {
+                if app.canDiff(session) {
+                    Button("Changes") { path.append(.changes(session.id)) }
+                        .tint(.teal)
+                }
+                if app.canReview(session) {
+                    Button("Review") {
+                        app.review(session)
+                        showTerminal(session.id)
+                    }
+                    .tint(.blue)
+                }
             }
-            .tint(.indigo)
-            Button("Details") { path.append(.detail(session.id)) }
-                .tint(.gray)
-        }
-        // `rowIndent`, not `indent`: a session pays for the disclosure column
-        // it has no chevron for, which is what puts its state icon one clean
-        // step right of the icon of the header above it.
-        .padding(.leading, SidebarGrid.rowIndent(indent - 1, SidebarGrid.phoneFont))
+            // `rowIndent`, not `indent`: a session pays for the disclosure
+            // column it has no chevron for, which is what puts its state icon
+            // one clean step right of the icon of the header above it.
+            .padding(.leading, SidebarGrid.rowIndent(indent - 1, SidebarGrid.phoneFont))
     }
 
 
@@ -189,7 +196,7 @@ struct SessionListView: View {
                 // core's flag, so a local toggle writes a set that is never
                 // consulted for it and the block can never be expanded again.
                 if folder.isEmpty {
-                    ProjectHeader(app: app, name: name, count: hidden)
+                    ProjectHeader(app: app, name: name, count: hidden, isRow: true)
                 } else {
                 Button {
                     app.setFolderProject(folder: folder, project: name, expanded: collapsed)
@@ -261,12 +268,15 @@ struct SessionListView: View {
                         ))
                         .disabled(app.folderRows.isEmpty)
                         Toggle("Archived Only", isOn: $app.showArchived)
-                        Toggle("Open in MergeRight", isOn: $app.mergeRightLinks)
+                        Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
                         Picker("Terminal size", selection: $fontSize) {
                             ForEach(TerminalFontSize.choices, id: \.self) { size in
                                 Text("\(Int(size)) pt").tag(size)
                             }
                         }
+                        // Off in a build with no notes baked in (`make ios`).
+                        Button("What's New") { showingNotes = true }
+                            .disabled(WhatsNew.releases.isEmpty)
                         Button("Disconnect", role: .destructive) {
                             app.stop()
                             disconnect()
@@ -305,6 +315,8 @@ struct SessionListView: View {
             // takes tens of seconds, and by then they may be typing in another
             // session's terminal, which a jump would detach.
             .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { path.isEmpty }) }
+            // "0": every version is newer, so the whole baked history.
+            .sheet(isPresented: $showingNotes) { WhatsNewSheet(releases: WhatsNew.releases(after: "0")) }
             // A tapped banner is a request to go to that session, and
             // `Notifier` has no way to reach the stack — it sets the
             // selection, which on the Mac *is* the navigation. Cleared after,
@@ -363,6 +375,7 @@ private struct FolderHeader: View {
     /// folder-first lens where a folder *is* the top level.
     var level = 1
     @Binding var renaming: String?
+    @State private var targeted = false
 
     var body: some View {
         // Row content plus `onTapGesture`, **not** a `Button`. A Button's own
@@ -396,6 +409,12 @@ private struct FolderHeader: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { app.setFolder(name: name, collapsed: !collapsed) }
+        // Files the session here whatever project the header is drawn under —
+        // folders are global, same as the Mac's drop.
+        .dropDestination(for: String.self) { ids, _ in
+            app.drop(ids, into: name, project: project)
+        } isTargeted: { targeted = $0 }
+        .listRowBackground(targeted ? SessionTheme.dropTarget : nil)
         // The Mac's folder context menu, minus Rename's sheet — a phone gets
         // an alert with a field, which is the same question with less
         // machinery. Delete is not confirmed for the same reason it is not
@@ -428,6 +447,10 @@ private struct ProjectHeader: View {
     /// What a collapsed header is hiding. Spoken in the accessibility label,
     /// never drawn — same rule as `FolderHeader`.
     let count: Int
+    /// A list row (the folder-first lens's loose block) rather than a section
+    /// header (project-first), which decides how a drop target is tinted.
+    var isRow = false
+    @State private var targeted = false
 
     var body: some View {
         let expanded = app.projectExpanded(name)
@@ -448,6 +471,14 @@ private struct ProjectHeader: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Dropping on a project un-files the session. A section header has
+        // no row to tint, so it gets a `background`; as a row it tints edge
+        // to edge like the `FolderHeader` beside it.
+        .dropDestination(for: String.self) { ids, _ in
+            app.drop(ids, into: "", project: name)
+        } isTargeted: { targeted = $0 }
+        .background(targeted && !isRow ? SessionTheme.dropTarget : .clear)
+        .listRowBackground(targeted && isRow ? SessionTheme.dropTarget : nil)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(expanded || count == 0 ? name : "\(name), collapsed, \(count) sessions")
     }
