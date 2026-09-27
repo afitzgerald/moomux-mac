@@ -1724,10 +1724,14 @@ public final class AppState {
     public func drop(_ ids: [String], into folder: String, project: String) -> Bool {
         let moved = ids.compactMap(session(id:))
             .filter { $0.folder != folder && (!folder.isEmpty || $0.project == project) }
-        // One `mutate` per session would race on `busy` and on `refresh`; the
-        // sidebar is single-select, so one drop is one session in practice.
-        guard let session = moved.first else { return false }
-        setFolder(session, to: folder)
+        guard !moved.isEmpty else { return false }
+        // One `mutate` for the lot: one per session would race on `busy` and
+        // on `refresh`. The Mac sidebar drags one row, but iOS lets a drag
+        // pick up more by tapping other rows mid-drag.
+        mutate(folder.isEmpty ? "Remove from folder" : "Move to folder") { client in
+            for session in moved { try client.setSessionFolder(id: session.id, folder: folder) }
+            return nil
+        }
         return true
     }
 
