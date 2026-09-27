@@ -251,7 +251,7 @@ struct SessionListView: View {
                         ))
                         .disabled(app.folderRows.isEmpty)
                         Toggle("Archived Only", isOn: $app.showArchived)
-                        Toggle("Open in MergeRight", isOn: $app.mergeRightLinks)
+                        Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
                         Picker("Terminal size", selection: $fontSize) {
                             ForEach(TerminalFontSize.choices, id: \.self) { size in
                                 Text("\(Int(size)) pt").tag(size)

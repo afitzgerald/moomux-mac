@@ -1571,8 +1571,9 @@ public final class AppState {
 
     static let autoFocusNewSessionKey = "autoFocusNewSession"
 
-    /// Offer "Open in MergeRight" on a session with a PR or Asana ticket. Off
-    /// by default: MergeRight is one person's PR app, not something every
+    /// Offer "Open in MergeRight" on a session with a PR or Asana ticket, and
+    /// send a clicked PR or Asana task link there — a tag or one in a pane —
+    /// instead of the browser. Off by default: MergeRight is one person's PR app, not something every
     /// moomux user has. `UserDefaults` for the same reason as `diffTool`.
     public var mergeRightLinks: Bool = UserDefaults.standard.bool(forKey: mergeRightLinksKey) {
         didSet { UserDefaults.standard.set(mergeRightLinks, forKey: Self.mergeRightLinksKey) }

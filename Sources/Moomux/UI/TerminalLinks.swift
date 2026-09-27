@@ -212,7 +212,10 @@ extension AppState {
     /// rules as the phone's viewer; the answer is opened here, locally.
     /// Only the file opens, not the line: `NSWorkspace` has no way to say one.
     public func openPaneLink(_ link: String, in id: Session.ID) {
-        if TerminalLink.resolve(link) != nil { return TerminalLink.open(link) }
+        if TerminalLink.resolve(link) != nil {
+            if !openInMergeRight(link) { TerminalLink.open(link) }
+            return
+        }
         guard let path = WebLink.filePath(link) else { return }
         let client = client
         Task {
@@ -225,14 +228,19 @@ extension AppState {
         }
     }
 
+    /// A PR or Asana link, tag or pane alike, goes to MergeRight while the
+    /// setting is on and the app is installed — ahead of the Asana app, since
+    /// MergeRight opens the PR that links the ticket. false when it did not.
+    private func openInMergeRight(_ link: String) -> Bool {
+        guard let mr = mergeRightLink(link),
+              TerminalLink.schemeHasHandler("mergeright") else { return false }
+        NSWorkspace.shared.open(mr)
+        return true
+    }
+
     public func openTag(_ link: String) {
-        guard let url = TerminalLink.resolve(link) else { return }
-        // Ahead of the Asana app: with the setting on, a ticket tag goes to
-        // MergeRight too, which opens the PR that links the ticket.
-        if mergeRightLinks, let mr = MergeRight.link(link),
-           TerminalLink.schemeHasHandler("mergeright") {
-            NSWorkspace.shared.open(mr)
-        } else if url.isFileURL || TerminalLink.asanaDesktop(url) != nil {
+        guard let url = TerminalLink.resolve(link), !openInMergeRight(link) else { return }
+        if url.isFileURL || TerminalLink.asanaDesktop(url) != nil {
             TerminalLink.open(link)
         } else {
             sheet = .web(link)

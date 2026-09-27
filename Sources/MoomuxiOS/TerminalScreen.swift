@@ -55,6 +55,7 @@ struct TerminalScreen: View {
                          // killed, the core went down. Leaving a dead pane up
                          // makes the user dismiss a window to learn nothing.
                          onEnded: { dismiss() },
+                         onURL: open(url:),
                          onFile: open(file:))
             // Rebuilding the surface is the whole mechanism: the package takes
             // its font size from `TerminalSurfaceOptions` at construction and
@@ -138,6 +139,18 @@ struct TerminalScreen: View {
             // still land on the core, and its temp sweep takes them.
     }
 
+    /// A PR or Asana task link goes to MergeRight while that setting is on and
+    /// the app is installed, the same rule as the Mac pane. Anything else goes
+    /// to `UIApplication.open`, which hands an https link to the app that
+    /// claims it (GitHub, Asana) before Safari.
+    private func open(url: URL) {
+        if let mr = app.mergeRightLink(url.absoluteString), UIApplication.shared.canOpenURL(mr) {
+            UIApplication.shared.open(mr)
+        } else {
+            UIApplication.shared.open(url)
+        }
+    }
+
     /// Quick Look needs a local file, named so it knows what it is showing
     /// (`PreviewFile.name`). Each fetch writes its own directory off the main
     /// actor; only the one that is still current is shown, and it clears the
@@ -190,6 +203,7 @@ private struct AttachedTerminal: UIViewRepresentable {
     let fontSize: Double
     let pane: PaneHandle
     let onEnded: () -> Void
+    let onURL: (URL) -> Void
     let onFile: (String) -> Void
 
     func makeUIView(context: Context) -> UITerminalView {
@@ -228,7 +242,8 @@ private struct AttachedTerminal: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(client: client, sessionID: sessionID, onEnded: onEnded, onFile: onFile)
+        Coordinator(client: client, sessionID: sessionID, onEnded: onEnded, onURL: onURL,
+                    onFile: onFile)
     }
 
     /// A tap on a link opens it.
@@ -294,6 +309,7 @@ private struct AttachedTerminal: UIViewRepresentable {
         private let client: MoomuxClient
         private let sessionID: Session.ID
         private let onEnded: () -> Void
+        private let onURL: (URL) -> Void
         private let onFile: (String) -> Void
         private var channel: AttachChannel?
         private var reader: Task<Void, Never>?
@@ -382,10 +398,11 @@ private struct AttachedTerminal: UIViewRepresentable {
         )
 
         init(client: MoomuxClient, sessionID: Session.ID, onEnded: @escaping () -> Void,
-             onFile: @escaping (String) -> Void) {
+             onURL: @escaping (URL) -> Void, onFile: @escaping (String) -> Void) {
             self.client = client
             self.sessionID = sessionID
             self.onEnded = onEnded
+            self.onURL = onURL
             self.onFile = onFile
         }
 
@@ -594,13 +611,12 @@ private struct AttachedTerminal: UIViewRepresentable {
             follow(url)
         }
 
-        /// Through `WebLink`, the allowlist. `UIApplication.open` hands an
-        /// https link to the app that claims it (GitHub, Asana) before Safari;
-        /// a path is on the core's disk, so it goes to `ReadFile` instead.
+        /// Through `WebLink`, the allowlist; `onURL` decides where a web link
+        /// opens. A path is on the core's disk, so it goes to `ReadFile`.
         @discardableResult
         func follow(_ link: String) -> Bool {
             if let url = WebLink.url(link) {
-                UIApplication.shared.open(url)
+                onURL(url)
             } else if let path = WebLink.filePath(link) {
                 onFile(path)
             } else {
