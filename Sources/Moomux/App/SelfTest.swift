@@ -33,6 +33,7 @@ enum SelfTest {
         TmuxSnapshot.demo()
         TerminalLink.demo()
         WebSheet.demo()
+        WhatsNew.demo()
         String.shellQuotedDemo()
         TerminalPane.commandDemo()
         AppState.ghosttyConfigDemo()

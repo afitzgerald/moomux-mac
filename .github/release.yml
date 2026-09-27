@@ -1,0 +1,19 @@
+# How `gh release create --generate-notes` (and the Release workflow's
+# generate-notes call) groups merged PRs. Each PR's title is its line in the
+# release notes, both on GitHub and in the app's What's New sheet; its label
+# decides the heading. See "Pull requests are release notes" in CLAUDE.md.
+changelog:
+  exclude:
+    labels:
+      - internal
+      - documentation
+  categories:
+    - title: New
+      labels:
+        - enhancement
+    - title: Fixed
+      labels:
+        - bug
+    - title: Other changes
+      labels:
+        - "*"

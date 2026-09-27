@@ -136,6 +136,10 @@ public final class AppState {
         /// place projects are managed from, and one host for the dialogs that
         /// managing them raises.
         case settings
+        /// Release notes for every release newer than `after`, the version last
+        /// seen; nil shows the running release alone. Help passes "0", which
+        /// every version is newer than, for the whole baked history.
+        case whatsNew(after: String?)
         public var id: Self { self }
     }
     public var sheet: Sheet?

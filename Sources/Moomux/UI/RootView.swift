@@ -172,7 +172,11 @@ struct RootView: View {
                 .keyboardShortcut("r")
             }
         }
-        .task { app.start() }
+        .task {
+            app.start()
+            let unseen = WhatsNew.takeUnseen()
+            if unseen.show { app.sheet = .whatsNew(after: unseen.seen) }
+        }
         // `hint` is what the last *session-less* action had to say, rendered
         // in whichever Info pane is showing, so it must not outlive the
         // selection. Per-session ones live in `sessionHints` and stay put.
@@ -214,6 +218,8 @@ struct RootView: View {
                 }
             case .settings:
                 SettingsSheet()
+            case let .whatsNew(after):
+                WhatsNewSheet(releases: WhatsNew.releases(after: after))
             }
         }
         .alert(Text(app.pendingDelete.map { "Delete “\($0.name)”?" } ?? "Delete session?"),

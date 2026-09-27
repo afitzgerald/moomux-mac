@@ -401,6 +401,7 @@ UI/TerminalPane.swift    libghostty hosting a plain `tmux attach`
 UI/TerminalLinks.swift   what a ⌘-clicked link in a pane is allowed to open
 UI/SettingsView.swift    project CRUD and the shared config flags, on two tabs
 UI/SessionGrid.swift     every live session at once, as `Capture` snapshots
+UI/WhatsNew.swift        the release notes baked into the bundle; no MoomuxKit, so it copies to other apps
 ```
 
 libghostty is reached **only** through `UI/TerminalPane.swift` (the live attached session, on the
@@ -726,6 +727,29 @@ core new enough to serve them** — there is no fallback to the old local paths.
   `getNotificationSettings().authorizationStatus` (0 notDetermined, 1 denied, 2 authorized) before
   believing the code is broken, and reset in System Settings → Notifications. Focus/DND does the
   same thing for a different reason.
+
+## Pull requests are release notes
+
+Every merge to `main` ships a release (`deploy.yml` tags it, `release.yml` builds it), and that
+release's notes are GitHub's generated notes: **each PR's title is its line, and its label picks the
+heading** (`.github/release.yml`). The same text is baked into the bundle as `WhatsNew.md` and shown
+once after an upgrade, and from Help → What's New. So a PR title is written for someone *using* the
+app, not for a reviewer, and it is final at merge time — there is no later step that rewrites it.
+
+- **Title**: what the user can now do or no longer suffers, as a sentence in the imperative —
+  "Drag sessions into folders on the iPhone", "Keep a held delete key repeating on the iPhone
+  keyboard". Say where it happens (Mac, iPhone, a pane, the sidebar) when it isn't everywhere. No
+  `feat:`/`fix:` prefix (the label says that), no file or type names, no ticket numbers, no
+  trailing period. Backticks render in the sheet, but a user rarely needs them.
+- **Label, exactly one**: `enhancement` (listed under **New**), `bug` (**Fixed**), or `internal`
+  for anything a user cannot notice — CI, the Makefile, refactors, dependency bumps — and
+  `documentation` for docs, both left out of the notes entirely. An unlabelled PR still ships,
+  under **Other changes**, which is the sign one was missed.
+  `gh pr create --label enhancement` sets it at creation; `gh pr edit <n> --add-label bug` fixes
+  one after.
+- **Before merging, read the title as a release note.** If it only makes sense with the diff open,
+  retitle it (`gh pr edit <n> --title "..."`). Retitling after the merge does not help: the release
+  has already been built with the old title.
 
 ## Conventions
 
