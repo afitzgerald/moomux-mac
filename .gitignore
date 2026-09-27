@@ -7,5 +7,7 @@ dist/
 .moomux-panes.toml
 # Rasterized from Resources/icons by the Makefile, so they cannot drift from the SVGs.
 /Sources/MoomuxiOS/moomux-terminal-nose.png
+# Release notes for an archive, copied in from WHATS_NEW by `make ios-archive`.
+/Sources/MoomuxiOS/WhatsNew.md
 /Sources/MoomuxiOS/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 xcuserdata/
