@@ -189,6 +189,47 @@ directions on EOF drops every reply — the app connects, sends `Config` every 2
 The first launch on a fresh simulator puts a notification prompt over the middle of the screen,
 and nothing here can dismiss it — tap it in DeviceHub.
 
+**Driving the on-screen keyboard, holds included.** `simctl` has no touch injection, so post
+mouse events at DeviceHub's window instead — they land as touches. That takes the screen over
+(DeviceHub comes to the front and the pointer moves), so ask before doing it on a machine someone
+is using. DeviceHub's toolbar keyboard button shows the software keyboard and puts it in
+"Capturing Keyboard" mode, where Mac keystrokes go to the device too; click it again afterwards.
+The window rect comes from `CGWindowListCopyWindowInfo` (owner "Device Hub"); a screenshot of that
+rect gives key positions (divide Retina pixels by 2). A hold is just a delay between down and up:
+
+```swift
+// m.swift <x> <y> <seconds> — screen points; build once with swiftc
+import AppKit
+let a = CommandLine.arguments, p = CGPoint(x: Double(a[1])!, y: Double(a[2])!)
+NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dt.Devices").first?.activate()
+usleep(400_000)
+let src = CGEventSource(stateID: .hidSystemState)
+CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)
+usleep(UInt32(Double(a[3])! * 1_000_000))
+CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)
+```
+
+Check the result with `tmux capture-pane` on a scratch session, not the screenshot, and run a
+control against an ordinary text field (the session list's search) before blaming the terminal.
+Never click at (0,0) to "focus" something — that is the Apple menu. Once Mac keystrokes have
+reached the device through capture, iOS decides a hardware keyboard is attached and shows only the
+accessory bar from then on; nothing in DeviceHub undoes it, so boot a second simulator (`simctl
+boot "iPhone 17"`, then pick it in DeviceHub's sidebar) rather than rebooting a shared one. And a
+synthetic key event carrying `.maskCommand` can leave ⌘ "held" in the session state — every click
+then extends a selection. `CGEventSource.flagsState(.combinedSessionState)` shows it; posting a
+⌘ down/up pair (virtual key 55) clears it. To see what UIKit asks the
+terminal view, override the `UITextInput` methods in `LinkTapView` and log to a file in the app's
+`tmp/` (`simctl get_app_container booted app.moomux.Moomux data`) — `NSLog` does not help here
+either. That is how held ⌫ was traced: the keyboard asks for the position before the caret, and
+libghostty-spm's empty idle document answered nil, so it never auto-repeated (fixed in the fork below,
+upstream as Lakr233/libghostty-spm#60).
+
+**Trying a change to libghostty-spm.** `make ios` depends only on this repo's sources, so an edit
+under `.build/checkouts/libghostty-spm` is not rebuilt — `touch` a file in `Sources/MoomuxiOS`
+first. SwiftPM leaves the checkout read-only: `chmod u+w` the file, and afterwards
+`git -C .build/checkouts/libghostty-spm checkout -- <file>` plus `chmod u-w` so it matches the pin
+again. Save the diff somewhere first if it is meant to go upstream.
+
 ## Verifying a terminal change
 
 A screenshot proves a terminal *drew* something. It does not prove keystrokes arrive, that the
@@ -737,6 +778,10 @@ Decisions, not oversights. Don't "fix" these without being asked.
   weekly `1.5.<YYYYMMDD>` snapshots of an API upstream says is not stable yet — a bump is a
   deliberate act with a screenshot behind it. The escape hatch if it ever goes stale is the source
   build above, which needs zig 0.16 (brew has exactly that) and Xcode selected.
+  **Currently pinned to a fork**, `afitzgerald/libghostty-spm` at `1.6.20260922-held-delete.1`:
+  upstream 1.6.20260922 plus the held-delete fix (Lakr233/libghostty-spm#60). The fork changes Swift
+  only; its manifest downloads upstream's own binary. Back to Lakr233's URL at the first release
+  that contains #60 — `Package.swift` says the same.
 - **The app is ~11MB rather than ~5MB**, all of it the statically linked engine (the archive's
   macOS slice is 39MB universal; the linker keeps about 6MB of it). One-time ~190MB in `.build`
   for the downloaded xcframework. Measured, and accepted knowingly: Homebrew cask users
