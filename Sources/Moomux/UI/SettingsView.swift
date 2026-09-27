@@ -507,15 +507,16 @@ private struct GeneralPane: View {
                 TextField("Diff tool", text: Binding(
                     get: { app.diffTool }, set: { app.diffTool = $0 }),
                     prompt: Text("diffier"))
-                Toggle("Offer Open in MergeRight", isOn: Binding(
+                Toggle("Open PRs in MergeRight", isOn: Binding(
                     get: { app.mergeRightLinks }, set: { app.mergeRightLinks = $0 }))
             } header: {
                 Text("Tools")
             } footer: {
                 Text("⌘D runs the diff tool against the selected session's worktree — code --diff, "
                      + "diffier. Left empty, ⌘D opens the diff in a tmux window instead. "
-                     + "Open in MergeRight shows up for a session with a GitHub PR or Asana "
-                     + "ticket, when MergeRight is installed.")
+                     + "With MergeRight installed, a session with a GitHub PR or Asana ticket "
+                     + "gets Open in MergeRight, and a PR or Asana task link clicked in a tag "
+                     + "or a terminal pane opens there instead of the browser.")
                 .font(.caption)
             }
         }
