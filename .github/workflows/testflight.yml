@@ -38,6 +38,17 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${TAG#v}" Resources/iOS-Info.plist
 
+      # The same What's New the Mac app bakes in (Scripts/release_notes.sh);
+      # `make testflight` reads WHATS_NEW. A hand dispatch has no tag and so no
+      # notes, which just leaves the sheet off in that build.
+      - name: Generate release notes
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Scripts/release_notes.sh "${{ inputs.tag }}" "$RUNNER_TEMP"
+          echo "WHATS_NEW=$RUNNER_TEMP/WhatsNew.md" >> "$GITHUB_ENV"
+
       # The image ships several Xcodes and the default may be older than the
       # project format. Pick the newest and print it, so "this Xcode is too old"
       # says so instead of looking like a code error. Passed as XCODE rather

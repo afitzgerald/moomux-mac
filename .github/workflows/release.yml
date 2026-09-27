@@ -59,29 +59,15 @@ jobs:
         run: |
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" Resources/Info.plist
 
-      # GitHub's generated notes for this tag, grouped by .github/release.yml,
-      # become the GitHub release's body. The app's What's New gets them too,
-      # plus the last nine releases' — every merge is its own release, so an
-      # upgrade that skips a few would otherwise show only the newest PR. Baked
-      # into the bundle rather than fetched by the app: it works offline and
-      # always matches the build. `make notarize` below reads WHATS_NEW.
+      # The GitHub release's body, and the What's New baked into the app —
+      # see Scripts/release_notes.sh. Baked in rather than fetched by the app:
+      # it works offline and always matches the build. `make notarize` below
+      # reads WHATS_NEW; testflight.yml runs the same script for the iPhone.
       - name: Generate release notes
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          gh api "repos/${{ github.repository }}/releases/generate-notes" \
-            -f tag_name="$TAG" -q .body > "$RUNNER_TEMP/notes.md"
-          {
-            echo "# $TAG"
-            cat "$RUNNER_TEMP/notes.md"
-            # Not this tag: a re-run after the release exists would list it twice.
-            for t in $(gh release list --limit 10 --json tagName \
-                         -q ".[] | select(.tagName != \"$TAG\") | .tagName" | head -n 9); do
-              printf '\n# %s\n' "$t"
-              gh release view "$t" --json body -q .body
-            done
-          } > "$RUNNER_TEMP/WhatsNew.md"
+          Scripts/release_notes.sh "${{ steps.version.outputs.tag }}" "$RUNNER_TEMP"
           echo "WHATS_NEW=$RUNNER_TEMP/WhatsNew.md" >> "$GITHUB_ENV"
           cat "$RUNNER_TEMP/WhatsNew.md"
 

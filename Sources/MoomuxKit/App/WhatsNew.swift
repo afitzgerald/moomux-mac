@@ -11,26 +11,26 @@ import SwiftUI
 /// the last PR. A local build has no file, so it never shows the sheet and never
 /// marks a version seen.
 ///
-/// Self-contained on purpose — no MoomuxKit — so the file can be copied into
-/// another app as is. The wiring (a sheet case, a Help item, a launch check)
-/// is per app.
-enum WhatsNew {
-    struct Section: Hashable {
-        var title: String
-        var items: [String]
+/// Shared by the Mac and iPhone apps, and self-contained on purpose — nothing
+/// else from MoomuxKit — so the file can be copied into another app as is. The
+/// wiring (a sheet, a menu item, a launch check) is per app.
+public enum WhatsNew {
+    public struct Section: Hashable, Sendable {
+        public var title: String
+        public var items: [String]
     }
 
-    struct Release: Hashable {
-        var version: String
-        var sections: [Section]
+    public struct Release: Hashable, Sendable {
+        public var version: String
+        public var sections: [Section]
     }
 
-    static var version: String {
+    public static var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
     }
 
     /// Newest first, as baked. A release with nothing user-facing is not here.
-    static let releases: [Release] = {
+    public static let releases: [Release] = {
         guard let url = Bundle.main.url(forResource: "WhatsNew", withExtension: "md"),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         return parse(text)
@@ -41,7 +41,7 @@ enum WhatsNew {
     /// The releases newer than `seen`, up to the running one. Nothing seen yet
     /// — a fresh install, or the first upgrade to a version with this sheet —
     /// shows the running release alone rather than the whole baked history.
-    static func releases(after seen: String?, in all: [Release] = releases, current: String = version) -> [Release] {
+    public static func releases(after seen: String?, in all: [Release] = releases, current: String = version) -> [Release] {
         guard let seen else { return all.filter { $0.version == current } }
         return all.filter {
             $0.version.compare(seen, options: .numeric) == .orderedDescending
@@ -52,7 +52,7 @@ enum WhatsNew {
     /// What to show at launch, if anything: the version last seen before this
     /// one. Marks this one seen as it answers, so quitting with the sheet up
     /// does not show it again.
-    static func takeUnseen(_ defaults: UserDefaults = .standard) -> (show: Bool, seen: String?) {
+    public static func takeUnseen(_ defaults: UserDefaults = .standard) -> (show: Bool, seen: String?) {
         let seen = defaults.string(forKey: seenKey)
         guard !releases.isEmpty, seen != version else { return (false, seen) }
         defaults.set(version, forKey: seenKey)
@@ -64,7 +64,7 @@ enum WhatsNew {
     /// and their bullets, minus the " by @author in <PR url>" tail — a PR link
     /// means nothing to someone who cannot see the repo. "New Contributors" and
     /// "Full Changelog" go too.
-    static func parse(_ markdown: String) -> [Release] {
+    public static func parse(_ markdown: String) -> [Release] {
         var releases: [Release] = []
         var skipping = false
         for raw in markdown.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -97,14 +97,14 @@ enum WhatsNew {
 
     /// Inline markdown only, links dropped: a PR title is anyone's text, and a
     /// live link here would open without going through `TerminalLink`.
-    static func text(_ item: String) -> AttributedString {
+    public static func text(_ item: String) -> AttributedString {
         var text = (try? AttributedString(markdown: item, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(item)
         text.link = nil
         return text
     }
 
-    static func demo() {
+    public static func demo() {
         let body = """
         # v0.0.97
         <!-- Release notes generated using configuration in .github/release.yml at main -->
@@ -150,11 +150,13 @@ enum WhatsNew {
     }
 }
 
-struct WhatsNewSheet: View {
+public struct WhatsNewSheet: View {
     @Environment(\.dismiss) private var dismiss
     let releases: [WhatsNew.Release]
 
-    var body: some View {
+    public init(releases: [WhatsNew.Release]) { self.releases = releases }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(releases.count == 1 ? "What's New in \(releases[0].version)" : "What's New")
                 .font(.title2.bold())
@@ -190,7 +192,11 @@ struct WhatsNewSheet: View {
             }
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 440)
         .frame(minHeight: 180, maxHeight: 480)
+        #else
+        .presentationDetents([.medium, .large])
+        #endif
     }
 }

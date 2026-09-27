@@ -38,6 +38,7 @@ struct SessionListView: View {
     /// `-newSession YES` opens the sheet at launch — the screenshot seam, same
     /// idea as `-openSession` below.
     @State private var creating = UserDefaults.standard.bool(forKey: "newSession")
+    @State private var showingNotes = false
     /// Screenshot seam. There is no way to tap a row from `simctl`, so
     /// `-openSession <id>` opens one straight away and `make ios-shot
     /// SESSION=<id>` can photograph the detail screen. A `UserDefaults` key,
@@ -257,6 +258,9 @@ struct SessionListView: View {
                                 Text("\(Int(size)) pt").tag(size)
                             }
                         }
+                        // Off in a build with no notes baked in (`make ios`).
+                        Button("What's New") { showingNotes = true }
+                            .disabled(WhatsNew.releases.isEmpty)
                         Button("Disconnect", role: .destructive) {
                             app.stop()
                             disconnect()
@@ -295,6 +299,8 @@ struct SessionListView: View {
             // takes tens of seconds, and by then they may be typing in another
             // session's terminal, which a jump would detach.
             .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { path.isEmpty }) }
+            // "0": every version is newer, so the whole baked history.
+            .sheet(isPresented: $showingNotes) { WhatsNewSheet(releases: WhatsNew.releases(after: "0")) }
             // A tapped banner is a request to go to that session, and
             // `Notifier` has no way to reach the stack — it sets the
             // selection, which on the Mac *is* the navigation. Cleared after,

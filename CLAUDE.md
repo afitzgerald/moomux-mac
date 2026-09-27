@@ -388,6 +388,8 @@ Core/Models.swift        the wire types + JSON coding + Wire.demo()
 Core/MoomuxClient.swift  the Swift half of internal/ipc
 Core/ToolPath.swift      finding tmux without a shell's PATH
 App/Forms.swift          the two multi-field forms' state and defaulting rules, pure
+App/WhatsNew.swift       release notes baked into the bundle, both apps; self-contained, so it copies
+                         to other apps
 App/Attachments.swift    first-prompt attachments, both front ends: re-encode, upload
                          through `SaveFile`, and the queue each New Session sheet runs
 App/AppState.swift       the single root store, snapshot loop, config poll
@@ -401,7 +403,6 @@ UI/TerminalPane.swift    libghostty hosting a plain `tmux attach`
 UI/TerminalLinks.swift   what a ⌘-clicked link in a pane is allowed to open
 UI/SettingsView.swift    project CRUD and the shared config flags, on two tabs
 UI/SessionGrid.swift     every live session at once, as `Capture` snapshots
-UI/WhatsNew.swift        the release notes baked into the bundle; no MoomuxKit, so it copies to other apps
 ```
 
 libghostty is reached **only** through `UI/TerminalPane.swift` (the live attached session, on the
@@ -732,8 +733,9 @@ core new enough to serve them** — there is no fallback to the old local paths.
 
 Every merge to `main` ships a release (`deploy.yml` tags it, `release.yml` builds it), and that
 release's notes are GitHub's generated notes: **each PR's title is its line, and its label picks the
-heading** (`.github/release.yml`). The same text is baked into the bundle as `WhatsNew.md` and shown
-once after an upgrade, and from Help → What's New. So a PR title is written for someone *using* the
+heading** (`.github/release.yml`). The same text, with the last nine releases', is baked into both
+apps as `WhatsNew.md` (`Scripts/release_notes.sh`) and shown after an upgrade — Help → What's New on
+the Mac, the ⋯ menu on the iPhone. One list serves both, so say which device a change is on. So a PR title is written for someone *using* the
 app, not for a reviewer, and it is final at merge time — there is no later step that rewrites it.
 
 - **Title**: what the user can now do or no longer suffers, as a sentence in the imperative —
