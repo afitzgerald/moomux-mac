@@ -221,8 +221,8 @@ then extends a selection. `CGEventSource.flagsState(.combinedSessionState)` show
 terminal view, override the `UITextInput` methods in `LinkTapView` and log to a file in the app's
 `tmp/` (`simctl get_app_container booted app.moomux.Moomux data`) — `NSLog` does not help here
 either. That is how held ⌫ was traced: the keyboard asks for the position before the caret, and
-libghostty-spm's empty idle document answered nil, so it never auto-repeated (fixed in the fork below,
-upstream as Lakr233/libghostty-spm#60).
+the caret sat at the start of libghostty-spm's always-empty document, so it never auto-repeated
+(fixed by Lakr233/libghostty-spm#59, which the fork below carries).
 
 **Trying a change to libghostty-spm.** `make ios` depends only on this repo's sources, so an edit
 under `.build/checkouts/libghostty-spm` is not rebuilt — `touch` a file in `Sources/MoomuxiOS`
@@ -778,10 +778,12 @@ Decisions, not oversights. Don't "fix" these without being asked.
   weekly `1.5.<YYYYMMDD>` snapshots of an API upstream says is not stable yet — a bump is a
   deliberate act with a screenshot behind it. The escape hatch if it ever goes stale is the source
   build above, which needs zig 0.16 (brew has exactly that) and Xcode selected.
-  **Currently pinned to a fork**, `afitzgerald/libghostty-spm` at `1.6.20260922-held-delete.1`:
-  upstream 1.6.20260922 plus the held-delete fix (Lakr233/libghostty-spm#60). The fork changes Swift
-  only; its manifest downloads upstream's own binary. Back to Lakr233's URL at the first release
-  that contains #60 — `Package.swift` says the same.
+  **Currently pinned to a fork**, `afitzgerald/libghostty-spm` at `1.6.20260922-key-repeat.1`:
+  upstream 1.6.20260922 plus the one commit of Lakr233/libghostty-spm#59 — held keys repeat on iOS,
+  both Delete on the software keyboard and every key on a hardware keyboard, where UIKit sends one
+  `pressesBegan` and nothing more. The fork changes Swift only; its manifest downloads upstream's
+  own binary. Back to Lakr233's URL at the first release that contains #59 — `Package.swift` says
+  the same.
 - **The app is ~11MB rather than ~5MB**, all of it the statically linked engine (the archive's
   macOS slice is 39MB universal; the linker keeps about 6MB of it). One-time ~190MB in `.build`
   for the downloaded xcframework. Measured, and accepted knowingly: Homebrew cask users

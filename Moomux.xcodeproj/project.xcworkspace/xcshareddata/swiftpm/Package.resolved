@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/afitzgerald/libghostty-spm.git",
       "state" : {
-        "revision" : "96c18f39e902dfed0f865d6ba3fd3d52a70c60f8",
-        "version" : "1.6.20260922-held-delete.1"
+        "revision" : "56510302b00a1d7f8a1f484f26db15456a481878",
+        "version" : "1.6.20260922-key-repeat.1"
       }
     },
     {
