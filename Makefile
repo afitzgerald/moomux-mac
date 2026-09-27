@@ -133,6 +133,12 @@ app: build
 	cp Resources/PeekabooPlate.png $(APP)/Contents/Resources/PeekabooPlate.png
 	cp Resources/icons/moomux-terminal-nose.svg $(APP)/Contents/Resources/moomux-terminal-nose.svg
 	cp Resources/icons/moomux-menubar.svg $(APP)/Contents/Resources/MenuBarIcon.svg
+	# Release notes, written by the Release workflow and named by it. A variable
+	# rather than a file in Resources/ so a notes file generated once locally
+	# cannot ride along into every later build under a newer version. Unset in
+	# a local build, which just leaves the What's New sheet off; to try it,
+	# `make dev WHATS_NEW=/path/to/notes.md`.
+	if [ -n "$(WHATS_NEW)" ]; then cp "$(WHATS_NEW)" $(APP)/Contents/Resources/WhatsNew.md; fi
 	# libghostty's terminfo and shell integration, shipped as a SwiftPM resource
 	# bundle. `Bundle.module` finds it in Contents/Resources; without it a pane's
 	# child gets TERM=xterm-ghostty with no terminfo to match, and tmux attaches
