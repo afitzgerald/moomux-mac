@@ -4,10 +4,10 @@
     {
       "identity" : "libghostty-spm",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Lakr233/libghostty-spm.git",
+      "location" : "https://github.com/afitzgerald/libghostty-spm.git",
       "state" : {
-        "revision" : "733ae3b29d447b6707cbfc00879027a076dfd0eb",
-        "version" : "1.5.20260906"
+        "revision" : "96c18f39e902dfed0f865d6ba3fd3d52a70c60f8",
+        "version" : "1.6.20260922-held-delete.1"
       }
     },
     {

@@ -38,7 +38,13 @@ let package = Package(
         // Pinned exactly, not `from:`: releases are weekly `1.5.<YYYYMMDD>`
         // snapshots of an upstream API that is explicitly not stable yet, so a
         // bump is a deliberate act with a screenshot behind it.
-        .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "1.5.20260906")
+        //
+        // Temporarily a fork: 1.6.20260922 plus one commit that keeps a held
+        // delete key repeating on the iPhone's software keyboard
+        // (Lakr233/libghostty-spm#60). The binary is still upstream's — the
+        // fork's manifest downloads the same release asset. Switch back to
+        // Lakr233's URL at the first release that contains that PR.
+        .package(url: "https://github.com/afitzgerald/libghostty-spm.git", exact: "1.6.20260922-held-delete.1")
     ],
     targets: [
         // Everything platform-independent: the wire types, the client, the
