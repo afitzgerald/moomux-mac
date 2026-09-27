@@ -539,8 +539,12 @@ xcrun simctl launch booted $(IOS_BUNDLE_ID)
 sleep 4 && xcrun simctl io booted screenshot .build/ios-shot.png
 ```
 
-Name the device (`IOS_DEVICE ?= iPhone 18 Pro`) rather than using whichever simulator is open, or
-a second worktree's run lands in the same one. A crash on launch shows up as a home screen in the
+Name the device rather than using whichever simulator is open, and give each worktree its own:
+`IOS_DEVICE ?= Moomux · <worktree>`, created on first `ios-run` by `Scripts/sim.sh`. Every worktree
+installs under one bundle id, so on a shared device the last install wins and the other session is
+looking at the wrong build — measured, one worktree's 13:00 install over another's 12:48. The same
+`ios-run` deletes the `Moomux · ` simulators whose worktree has left `git worktree list`
+(`make ios-prune-sims` sweeps without building). A crash on launch shows up as a home screen in the
 PNG — the iOS counterpart of the `pgrep` check in `CLAUDE.md`. `Scripts/ui.swift` does **not** port: it walks
 `AXUIElement` on the Mac. The simulator's equivalent is XCUITest, which now exists but is a
 bigger commitment; screenshots first.
