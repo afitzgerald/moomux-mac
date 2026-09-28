@@ -475,6 +475,12 @@ public final class AppState {
     /// core with no `Source`, or one that is simply down), which is the only
     /// reason a pull of `Sessions` still happens on a schedule at all.
     @ObservationIgnored private var streaming = false
+    /// Whether the stream has answered at all yet — with a snapshot or with a
+    /// failure. Until it has, empty `folderRows` means "not sent yet" rather
+    /// than "core too old", and `folderView` must not fall back on it: the
+    /// launch-time `Sessions` pull lands first and would draw project-first
+    /// for a beat before the snapshot flips it.
+    private var streamAnswered = false
     /// No view reads this, and `@Observable` fires on any assignment.
     @ObservationIgnored private var notifier: Notifier?
 
@@ -702,7 +708,7 @@ public final class AppState {
     /// Whether the sidebar is drawing the folder-first layout: the preference,
     /// and a core new enough to have sent one. A stale core would otherwise
     /// switch the sidebar to an empty list.
-    public var folderView: Bool { folderFirst && !folderRows.isEmpty }
+    public var folderView: Bool { folderFirst && (!folderRows.isEmpty || !streamAnswered) }
 
     /// What the folder-first sidebar draws: the core's folder-first layout,
     /// filtered to this window's view.
@@ -1097,6 +1103,7 @@ public final class AppState {
         while !Task.isCancelled {
             do {
                 for try await snapshot in client.watch() {
+                    if !streamAnswered { streamAnswered = true }
                     backoff = .milliseconds(200) // a working connection earns a fast retry
                     // A core older than the derived-state protocol streams the
                     // previous shape, which decodes into an *empty* snapshot
@@ -1128,6 +1135,7 @@ public final class AppState {
                 throw MoomuxClient.Failure.disconnected
             } catch {
                 streaming = false
+                if !streamAnswered { streamAnswered = true }
                 guard !Task.isCancelled else { return }
                 pendingWatcherError = nil
                 set(statusError: "status stream lost (\(error.localizedDescription)); reconnecting")
@@ -1216,6 +1224,7 @@ public final class AppState {
         // here any more, so `isAlive` is a reading of that one field.
         MainActor.assumeIsolated {
             let app = AppState()
+            app.streamAnswered = true  // not the saved Group-by-Folder preference
             let s = sample("Alpha")
             assert(app.state(for: s) == .unknown, "no snapshot yet is unknown, not parked")
             assert(!app.isAlive(s), "and nothing is attachable until one arrives")
@@ -1262,6 +1271,7 @@ public final class AppState {
         // agentNames / modelNamesFor / thinkingNamesFor.
         MainActor.assumeIsolated {
             let app = AppState()
+            app.streamAnswered = true  // not the saved Group-by-Folder preference
             // A core that never answered must still leave the form usable.
             assert(app.agentNames == ["claude"], "\(app.agentNames)")
             assert(app.models(for: "claude").isEmpty)
@@ -1290,6 +1300,9 @@ public final class AppState {
             // selftest must not reset the user's Group-by-Folder preference.
             let wasFolderFirst = app.folderFirst
             app.folderFirst = true
+            app.streamAnswered = false
+            assert(app.folderView, "no snapshot yet must hold the folder lens, not flip later")
+            app.streamAnswered = true
             assert(app.canReorder, "the preference alone is not the folder lens")
             app.folderRows = [FolderRow(kind: .session, folder: "f", project: "p", id: "a")]
             assert(!app.canReorder, "reordering is off while the folder lens is on screen")
@@ -1301,6 +1314,7 @@ public final class AppState {
         // a selection landing on a row nobody can see reads as a dead key.
         MainActor.assumeIsolated {
             let app = AppState()
+            app.streamAnswered = true  // not the saved Group-by-Folder preference
             // Collapse lives in config now, and `setProject` would send it to a
             // socket — the checks drive the optimistic half directly, over a
             // config decoded here rather than the user's own.
@@ -1402,6 +1416,7 @@ public final class AppState {
         // worktree nobody could stat must draw nothing, not "clean".
         MainActor.assumeIsolated {
             let app = AppState()
+            app.streamAnswered = true  // not the saved Group-by-Folder preference
             app.views = [
                 "p:a": view("p:a", state: "working", gitOK: true, dirty: true),
                 "p:b": view("p:b", state: "working", gitOK: true, unpushed: true),
@@ -1434,6 +1449,7 @@ public final class AppState {
         // worktree nobody has checked.
         MainActor.assumeIsolated {
             let app = AppState()
+            app.streamAnswered = true  // not the saved Group-by-Folder preference
             let s = sample("doomed")
 
             assert(app.deleteWarning(for: s).contains("Checking"),
@@ -1456,6 +1472,7 @@ public final class AppState {
         // thread, from MoomuxApp.bootstrap().
         MainActor.assumeIsolated {
             let app = AppState()
+            app.streamAnswered = true  // not the saved Group-by-Folder preference
             app.connection = .connected
             app.failed("Rename", MoomuxClient.Failure.server(#"session "x" already exists"#))
             assert(app.actionError == #"Rename failed: session "x" already exists"#,
