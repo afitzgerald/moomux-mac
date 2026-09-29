@@ -521,12 +521,17 @@ private struct TextFieldSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title).font(.headline)
-            Form {
+            // A Grid, not a grouped Form: the Form sizes each field to its text,
+            // so an empty one shrank beside its label and a long URL dropped
+            // onto a row of its own.
+            Grid(alignment: .leading, verticalSpacing: 10) {
                 ForEach(labels.indices, id: \.self) { i in
-                    TextField(labels[i], text: $values[i])
+                    GridRow {
+                        Text(labels[i]).gridColumnAlignment(.trailing)
+                        TextField(labels[i], text: $values[i]).labelsHidden()
+                    }
                 }
             }
-            .formStyle(.grouped)
             // Without a border an empty field is invisible: the Tags sheet with
             // both fields blank looks like two static rows saying "Ticket" and "PR".
             .textFieldStyle(.roundedBorder)
