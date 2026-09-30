@@ -941,10 +941,33 @@ public final class AppState {
             // all would otherwise show an empty sidebar forever.
             Task { [weak self] in await self?.refresh() },
             Task { [weak self] in await self?.pollLoop() },
-            Task { [weak self] in await self?.watchLoop() },
             Task { [weak self] in await self?.loadAgentOptions() },
             Task { [weak self] in await self?.loadThemes() },
         ]
+        watch = Task { [weak self] in await self?.watchLoop() }
+    }
+
+    /// Kept apart from `tasks` so `resume` can replace it alone.
+    @ObservationIgnored private var watch: Task<Void, Never>?
+
+    /// The phone is back from the background: reconnect now rather than trust
+    /// the stream it left with.
+    ///
+    /// iOS suspends the app and often reclaims its sockets while it is away,
+    /// but a half-open TCP stream says nothing until keepalive gives up
+    /// (~30s, `StreamSocket.enableKeepalive`) — and all that time the list
+    /// kept the last snapshot and the badge said connected, a stale list that
+    /// looked current. So the watch loop is restarted on a fresh connection,
+    /// which answers with a whole snapshot at once, and the config is pulled
+    /// so `connection` says straight away if the core is gone. A stream that
+    /// was still healthy costs one reconnect; nothing on screen flickers,
+    /// since the list is replaced only when the new snapshot lands.
+    public func resume() {
+        guard !tasks.isEmpty else { return }  // disconnected: nothing to resume
+        watch?.cancel()
+        streaming = false
+        watch = Task { [weak self] in await self?.watchLoop() }
+        Task { [weak self] in await self?.refreshConfig() }
     }
 
     /// Retries until it lands: the app can start before `moomux serve` does,
@@ -981,6 +1004,8 @@ public final class AppState {
     public func stop() {
         tasks.forEach { $0.cancel() }
         tasks = []
+        watch?.cancel()
+        watch = nil
         #if !os(macOS)
         // Disconnect leaves the Connect screen up, so a badge left at 3 is a
         // count of sessions nothing is watching any more. macOS has no
@@ -1132,9 +1157,13 @@ public final class AppState {
                 }
                 throw MoomuxClient.Failure.disconnected
             } catch {
+                // First: a loop cancelled by `resume` must not write state
+                // under the loop that replaced it — `streaming = false` landing
+                // after the new stream set it would send the poll loop back to
+                // pulling a list the stream is already serving.
+                guard !Task.isCancelled else { return }
                 streaming = false
                 if !streamAnswered { streamAnswered = true }
-                guard !Task.isCancelled else { return }
                 pendingWatcherError = nil
                 set(statusError: "status stream lost (\(error.localizedDescription)); reconnecting")
             }
