@@ -110,6 +110,13 @@ struct SessionListView: View {
         path.append(.terminal(id))
     }
 
+    /// Take a session's pane out of the stack before its tmux goes, so a
+    /// Kill tmux from detail lands on detail rather than on a pane whose
+    /// reconnect would stand the session straight back up.
+    private func leaveTerminal(_ id: Session.ID) {
+        path.removeAll { $0 == .terminal(id) }
+    }
+
     /// One session. Shared by both lenses, and the only place the tap rule
     /// lives.
     ///
@@ -245,7 +252,8 @@ struct SessionListView: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case let .detail(id):
-                    SessionDetailView(app: app, sessionID: id, showTerminal: showTerminal)
+                    SessionDetailView(app: app, sessionID: id, showTerminal: showTerminal,
+                                      leaveTerminal: leaveTerminal)
                 case let .terminal(id):
                     TerminalScreen(app: app, sessionID: id) { path.append($0) }
                 case let .changes(id): ChangesScreen(app: app, sessionID: id)
@@ -289,7 +297,7 @@ struct SessionListView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { creating = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel("New Session")
-                        .disabled(app.connection.isDown || app.config == nil)
+                        .disabled(app.connection.isDown || app.config?.projects.isEmpty != false)
                 }
             }
             .alert("Rename folder", isPresented: Binding(
@@ -337,7 +345,17 @@ struct SessionListView: View {
                 // 5s deadline to say so — which would read as a confident "no
                 // sessions" until it did. Same rule as `refresh` keeping the
                 // last-good list: a failed call must not look empty.
-                if app.sessions.isEmpty, app.connection == .connected {
+                if app.connection == .connected, app.config?.projects.isEmpty == true {
+                    // Projects are added on the Mac (Settings → Projects);
+                    // without this the phone's + opened a sheet with nothing
+                    // to pick and no word on where to go.
+                    ContentUnavailableView {
+                        Label("No projects yet", systemImage: "folder.badge.plus")
+                    } description: {
+                        Text("Add a project in Moomux on your Mac — Settings → Projects — "
+                             + "and it appears here.")
+                    }
+                } else if app.sessions.isEmpty, app.connection == .connected {
                     ContentUnavailableView("No sessions", systemImage: "rectangle.on.rectangle")
                 }
             }
@@ -532,8 +550,13 @@ struct SessionDetailView: View {
     /// rather than the path itself: the list owns how the stack is shaped,
     /// including reusing a pane already on it.
     let showTerminal: (Session.ID) -> Void
+    /// Kill tmux's half of the stack: the session's pane leaves it first.
+    let leaveTerminal: (Session.ID) -> Void
     /// Deleting a session removes the screen's subject, so it leaves too.
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmingKill = false
+    @State private var namingFolder = false
+    @State private var folderName = ""
     @State private var renaming = false
     @State private var newName = ""
     @State private var tagging = false
@@ -625,6 +648,7 @@ struct SessionDetailView: View {
                 } label: {
                     Label("Tags…", systemImage: "ticket")
                 }
+                folderMenu(session)
             } footer: {
                 // Why it is greyed, rather than leaving the user to guess. The
                 // core refuses a parked session by name rather than reviving
@@ -673,6 +697,14 @@ struct SessionDetailView: View {
             }
 
             Section {
+                // Stopping a runaway agent is a check-in job. The worktree,
+                // branch and record stay, and Attach starts it again.
+                Button(role: .destructive) {
+                    confirmingKill = true
+                } label: {
+                    Label("Kill tmux", systemImage: "stop.circle")
+                }
+                .disabled(!app.isAlive(session))
                 Button(role: .destructive) {
                     app.askDelete(session)
                 } label: {
@@ -714,6 +746,30 @@ struct SessionDetailView: View {
                          agent: session.agentName, dangerous: session.dangerous)
             }
         }
+        // Confirmed here, unlike the Mac: a phone row is a bigger target for a
+        // mis-tap, and this stops an agent mid-thought.
+        .confirmationDialog("Stop \(session.name)'s agent?", isPresented: $confirmingKill,
+                            titleVisibility: .visible) {
+            Button("Kill tmux", role: .destructive) {
+                leaveTerminal(session.id)
+                app.killTmux(session)
+            }
+        } message: {
+            Text("Its tmux session ends. The worktree and branch stay, and Attach starts it again.")
+        }
+        .alert("New folder", isPresented: $namingFolder) {
+            TextField("Name", text: $folderName)
+                .textInputAutocapitalization(.never)
+            Button("Cancel", role: .cancel) {}
+            Button("Create") {
+                // Filing into a name that does not exist yet is the create —
+                // `SetSessionFolder` makes the folder on first use, as on the Mac.
+                let name = folderName.trimmed
+                if !name.isEmpty { app.setFolder(session, to: name) }
+            }
+        } message: {
+            Text("Files \(session.name) in it. Folders are shared across projects.")
+        }
         .alert("Tags", isPresented: $tagging) {
             TextField("Ticket URL", text: $ticket).textInputAutocapitalization(.never)
             TextField("PR URL", text: $pr).textInputAutocapitalization(.never)
@@ -721,6 +777,35 @@ struct SessionDetailView: View {
             Button("Save") { app.setTags(session, ticket: ticket.trimmed, pr: pr.trimmed) }
         }
         .task { await app.loadStatus(for: session.id) }
+    }
+}
+
+extension SessionDetailView {
+    /// The Mac row's Folder submenu: none, every folder, or a new one. Here
+    /// rather than on the row, because the row's long press is its drag.
+    @ViewBuilder
+    fileprivate func folderMenu(_ session: Session) -> some View {
+        Menu {
+            Button("None") { app.setFolder(session, to: "") }
+                .disabled(session.folder.isEmpty)
+            let folders = app.folderNames
+            if !folders.isEmpty { Divider() }
+            ForEach(folders, id: \.self) { name in
+                Button(name) { app.setFolder(session, to: name) }
+                    .disabled(name == session.folder)
+            }
+            Divider()
+            Button("New Folder…") {
+                folderName = ""
+                namingFolder = true
+            }
+        } label: {
+            LabeledContent {
+                Text(session.folder.isEmpty ? "None" : session.folder)
+            } label: {
+                Label("Folder", systemImage: "folder")
+            }
+        }
     }
 }
 
