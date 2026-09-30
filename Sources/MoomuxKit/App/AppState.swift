@@ -90,6 +90,11 @@ public final class AppState {
     // MARK: UI state
 
     public var selectedSessionID: Session.ID?
+    /// The session whose pane is on the phone's screen, if one is. `Notifier`
+    /// reads it for the Mac's rule — no banner for what you are already
+    /// looking at — since on the phone the selection is navigation, not
+    /// focus. Ignored for observation: nothing draws from it.
+    @ObservationIgnored public var paneOnScreen: Session.ID?
     public var showArchived = false
     /// The sidebar's search field. Non-empty, it replaces `showArchived` as
     /// what the list shows — see `listedSessions`.
@@ -1117,14 +1122,7 @@ public final class AppState {
                         continue
                     }
                     streaming = true
-                    if snapshot.views != views {
-                        let previous = views
-                        views = snapshot.views
-                        notifier?.report(previous: previous, current: views)
-                    }
-                    if snapshot.rows != rows { rows = snapshot.rows }
-                    if snapshot.folderRows != folderRows { folderRows = snapshot.folderRows }
-                    adopt(sessions: snapshot.sessions)
+                    apply(snapshot)
                     if let err = snapshot.err, err == pendingWatcherError {
                         set(statusError: err)
                     } else {
@@ -1142,6 +1140,39 @@ public final class AppState {
             }
             try? await Task.sleep(for: backoff)
             backoff = min(backoff * 2, .seconds(5))
+        }
+    }
+
+    /// One snapshot onto the store, notifications and badge included. The
+    /// watch loop's body, shared with `pollOnce` so a background refresh
+    /// cannot notify by different rules than the foreground stream.
+    private func apply(_ snapshot: Snapshot) {
+        if snapshot.views != views {
+            let previous = views
+            views = snapshot.views
+            notifier?.report(previous: previous, current: views)
+        }
+        if snapshot.rows != rows { rows = snapshot.rows }
+        if snapshot.folderRows != folderRows { folderRows = snapshot.folderRows }
+        adopt(sessions: snapshot.sessions)
+    }
+
+    /// One snapshot, then hang up: the phone's background refresh.
+    ///
+    /// iOS gives a suspended app a few seconds now and then and never holds
+    /// the `Watch` stream for it, so this opens the stream, applies the first
+    /// snapshot exactly as the loop would, and closes it. Against the views
+    /// the store already had, that posts a banner for every session that
+    /// started waiting while the phone was in a pocket and moves the badge.
+    /// A store with no views yet — iOS relaunched the app cold in the
+    /// background — only seeds and sets the badge, the same launch guard
+    /// `Notifier.transitions` applies in the foreground.
+    public func pollOnce() async throws {
+        if notifier == nil { notifier = Notifier(app: self) }
+        for try await snapshot in client.watch() {
+            guard snapshot.derived else { return }
+            apply(snapshot)
+            return
         }
     }
 

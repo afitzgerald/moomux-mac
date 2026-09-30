@@ -1,5 +1,7 @@
 #if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
 #endif
 import UserNotifications
 
@@ -57,11 +59,13 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         for id in change.started {
             guard let session = app.session(id: id), !session.archived else { continue }
             // A banner for the window you are already looking at is noise.
-            // No iOS half: with no `willPresent` delegate the system drops
-            // every foreground banner anyway, which is the same rule and
-            // stricter.
+            // On the phone that is the pane on screen; every other session
+            // still banners in the foreground (`willPresent` below).
             #if os(macOS)
             if NSApp.isActive, app.selectedSessionID == session.id { continue }
+            #else
+            if UIApplication.shared.applicationState == .active,
+               app.paneOnScreen == session.id { continue }
             #endif
             post(session, to: center)
         }
@@ -82,6 +86,22 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // there is nothing to learn from asking. `init` did the asking.
         Task { try? await center.add(request) }
     }
+
+    // MARK: Foreground banners
+
+    #if os(iOS)
+    /// Without this iOS drops every banner while the app is in front, and the
+    /// foreground is most of the time the phone is watching at all. `report`
+    /// has already left out the session whose pane is on screen. macOS keeps
+    /// the system's default — a banner there is for when you are elsewhere.
+    public nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        done([.banner, .list, .sound])
+    }
+    #endif
 
     // MARK: Tapping a banner
 
