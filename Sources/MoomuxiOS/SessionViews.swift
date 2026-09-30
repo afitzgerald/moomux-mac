@@ -266,7 +266,9 @@ struct SessionListView: View {
                 case let .terminal(id):
                     TerminalScreen(app: app, sessionID: id) { path.append($0) }
                 case let .changes(id): ChangesScreen(app: app, sessionID: id)
-                case let .fileDiff(id, file): FileDiffScreen(app: app, sessionID: id, path: file)
+                case let .fileDiff(id, file):
+                    // Past the Changes list too: at the end of the files it has nothing left to offer.
+                    FileDiffScreen(app: app, sessionID: id, path: file) { path.removeLast(min(2, path.count)) }
                 }
             }
             .searchable(text: $app.searchQuery, prompt: "Search names")
