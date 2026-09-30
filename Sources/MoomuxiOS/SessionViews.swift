@@ -14,6 +14,16 @@ enum TerminalFontSize {
     /// so 8pt is ~62 columns and 16pt is ~30. Below ~50 a diff hard-wraps
     /// mid-token; above it prose gets hard to read at arm's length.
     static let choices: [Double] = [8, 9, 10, 11, 12, 14, 16]
+
+    /// What a pinch may reach. Wider than the menu, narrower than ghostty's
+    /// 4–64: past these a phone pane is either unreadable or a dozen columns.
+    static func clamped(_ size: Double) -> Double { min(max(size, 6), 24) }
+
+    /// The menu's sizes plus whatever a pinch saved, or the picker's
+    /// selection matches no tag and it renders blank.
+    static func choices(including size: Double) -> [Double] {
+        choices.contains(size) ? choices : (choices + [size]).sorted()
+    }
 }
 
 enum Route: Hashable {
@@ -32,7 +42,6 @@ struct SessionListView: View {
     @Bindable var app: AppState
     let endpoint: EndpointStore
     let disconnect: () -> Void
-    @AppStorage(TerminalFontSize.key) private var fontSize = TerminalFontSize.default
     /// The folder a Rename… is open for, and the text being typed. An alert
     /// rather than the Mac's sheet: one field, one question.
     @State private var renaming: String?
@@ -269,11 +278,6 @@ struct SessionListView: View {
                         .disabled(app.folderRows.isEmpty)
                         Toggle("Archived Only", isOn: $app.showArchived)
                         Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
-                        Picker("Terminal size", selection: $fontSize) {
-                            ForEach(TerminalFontSize.choices, id: \.self) { size in
-                                Text("\(Int(size)) pt").tag(size)
-                            }
-                        }
                         // Off in a build with no notes baked in (`make ios`).
                         Button("What's New") { showingNotes = true }
                             .disabled(WhatsNew.releases.isEmpty)
