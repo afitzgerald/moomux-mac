@@ -328,7 +328,7 @@ that can resize a live attach puts a token in that one response line (`"attach":
   the core with `TERM=xterm-256color`, where a local attach would be `xterm-ghostty`. The pane
   drew the session's output.
 
-There's no Settings field for the core address yet (§M 2). *Where:* `AttachRoute`,
+There's no Settings field for the core address yet (§M 1). *Where:* `AttachRoute`,
 `AppState.attach`, `RemoteAttach`, `SessionTerminal`, `MoomuxApp.client()`.
 
 **D26. Mac panes are pooled; phone panes are single-use.**
@@ -597,10 +597,11 @@ exits.** Both build on `NewSessionForm` and the core's `AgentOptions`.
   and Create waits until one is chosen, because a phone has no selection and defaulting to the
   first project put every session there unless you remembered to change it.
 - **Closing.** Both close on Create and report progress through `busy`.
-- **Focus after create.** Both select the new session only while `autoFocusNewSession` is on
-  (§J). The phone also requires the user to still be on the list (`focus: { path.isEmpty }`),
-  because a create takes tens of seconds and a jump would detach whatever pane they are typing
-  in.
+- **Focus after create.** The Mac selects the new session while `autoFocusNewSession` is on
+  (§J). The phone always goes to it, with no control to turn that off: on a phone, landing in
+  the session you just made is the point of making it. The one exception is that the user must
+  still be on the list (`focus: { path.isEmpty }`), because a create takes tens of seconds and a
+  jump would detach whatever pane they are typing in.
 - **Dismissal.** The phone disables swipe-to-dismiss once anything is typed or uploading.
 
 ---
@@ -645,7 +646,7 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 | group by folder (`folderFirst`) | device | ✅ toolbar, ⇧⌘F | ✅ ⋯ menu |
 | folder-subheader folding (`folderProjectCollapsed`) | device | ✅ | ✅ |
 | open PRs in MergeRight (`mergeRightLinks`) | device | ✅ Settings → General | ✅ ⋯ menu |
-| select a new session when created (`autoFocusNewSession`) | device | ✅ Settings → General | ❌ stays at its default, on |
+| select a new session when created (`autoFocusNewSession`) | device | ✅ Settings → General | n/a: always on (D45) |
 | diff tool (`diffTool`) | device | ✅ | n/a (no `Process`) |
 | sidebar font (`listFontFamily`, `listFontSize`) | device | ✅ Settings → Appearance | n/a |
 | terminal size (`terminalFontSize`) | device | n/a (D30) | ✅ pane ⋯ menu, and pinch |
@@ -653,7 +654,6 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 
 The practical consequence: turning MergeRight links or folder grouping on at the desk does
 nothing on the phone. That is harmless while each one has a control on both sides.
-`autoFocusNewSession` is the one with no phone control.
 
 ---
 
@@ -751,9 +751,7 @@ Differences that do not hold up from the user's side, whether or not the code gi
 them. A documented reason is not the same as a good experience. Settle one by promoting it to a
 decision above (or changing the code), and remove it from here.
 
-1. **`autoFocusNewSession` has no phone control** (D47). The phone's navigation to a new session
-   also depends on it, so turning it off on the Mac has no phone equivalent. This is minor.
-2. **The Mac has no UI for choosing a remote core** (D25). It is `defaults write
+1. **The Mac has no UI for choosing a remote core** (D25). It is `defaults write
    app.moomux.Moomux coreHost <host>` (plus `corePort`) or a launch argument, then a relaunch,
    because the Mac builds one store per process. A field in Settings → General, applied on
    relaunch, is the likely shape; the phone's connect screen is the model.
