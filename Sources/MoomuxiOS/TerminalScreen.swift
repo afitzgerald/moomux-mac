@@ -26,12 +26,10 @@ struct TerminalScreen: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    /// The size a pane *opens* at, and therefore the attached session's width
-    /// — see the note on `fontSize` below. Pinch-zoom adjusts a live pane and
-    /// is the right tool for "I need a closer look at this line"; this is the
-    /// starting point, so it lives in the list's menu rather than taking a
-    /// slot in the pane's toolbar. It has to be here as well because the
-    /// package reads the size when the surface is built.
+    /// The pane's text size, and therefore the attached session's width — see
+    /// the note on `fontSize` below. Set from the ⋯ menu's Text Size or by a
+    /// pinch, and kept across sessions and launches either way: the size you
+    /// last read at is the one the next pane opens at.
     @AppStorage(TerminalFontSize.key) private var fontSize = TerminalFontSize.default
     @State private var pane = PaneHandle()
     @State private var photos: [PhotosPickerItem] = []
@@ -59,13 +57,13 @@ struct TerminalScreen: View {
                          // makes the user dismiss a window to learn nothing.
                          onEnded: { dismiss() },
                          onURL: open(url:),
-                         onFile: open(file:))
-            // Rebuilding the surface is the whole mechanism: the package takes
-            // its font size from `TerminalSurfaceOptions` at construction and
-            // publishes no setter, so changing it means a new surface — which
-            // re-attaches at the new width anyway, which a size change has to
-            // do regardless.
-            .id(fontSize)
+                         onFile: open(file:),
+                         onPinch: { fontSize = $0 })
+            // Applied to the live surface, not by rebuilding it: a pinch
+            // lands here too (saved through `onPinch`), and a rebuild per
+            // pinch would redraw the pane from nothing. The new width reaches
+            // the pty through the ordinary resize path.
+            .onChange(of: fontSize) { _, size in pane.view?.setFontSize(size) }
             // **Not** `.ignoresSafeArea(.bottom)`. The surface sizes its grid
             // to the view, so extending under the home indicator buys two more
             // rows that are drawn behind it — and tmux puts the status line
@@ -106,6 +104,16 @@ struct TerminalScreen: View {
                         Button { push(.detail(sessionID)) } label: {
                             Label("Details", systemImage: "info.circle")
                         }
+                        // Here and not in the list's menu: it is this pane's
+                        // size, and the one place to judge it is looking at it.
+                        Picker(selection: $fontSize) {
+                            ForEach(TerminalFontSize.choices(including: fontSize), id: \.self) { size in
+                                Text("\(Int(size)) pt").tag(size)
+                            }
+                        } label: {
+                            Label("Text Size", systemImage: "textformat.size")
+                        }
+                        .pickerStyle(.menu)
                         Section {
                             // A `Button` and not a `PhotosPicker`: inside a
                             // `Menu` the picker lays its label out itself, so
@@ -206,13 +214,12 @@ struct TerminalScreen: View {
     }
 }
 
-/// The live surface, for the toolbar to paste into. A class so rebuilding the
-/// surface on a font change repoints it without re-rendering the screen.
+/// The live surface, for the toolbar to paste into and resize the text of.
 final class PaneHandle {
-    weak var view: UITerminalView?
+    weak var view: AttachedTerminal.LinkTapView?
 }
 
-private struct AttachedTerminal: UIViewRepresentable {
+struct AttachedTerminal: UIViewRepresentable {
     let controller: TerminalController
     let client: MoomuxClient
     let sessionID: Session.ID
@@ -221,9 +228,12 @@ private struct AttachedTerminal: UIViewRepresentable {
     let onEnded: () -> Void
     let onURL: (URL) -> Void
     let onFile: (String) -> Void
+    let onPinch: (Double) -> Void
 
     func makeUIView(context: Context) -> UITerminalView {
         let view = LinkTapView(frame: .init(x: 0, y: 0, width: 390, height: 600))
+        view.liveFontSize = fontSize
+        view.onPinch = onPinch
         pane.view = view
         view.delegate = context.coordinator
         view.controller = controller
@@ -235,8 +245,8 @@ private struct AttachedTerminal: UIViewRepresentable {
             // diff or an agent TUI hard-wraps mid-token below about 50. That
             // is why this is a control rather than a constant — there is no
             // value that is right for both reading prose and reading code on a
-            // phone. Pinch-zoom changes it live too, but the package publishes
-            // no setter to read that back, so a pinch does not persist.
+            // phone. Only the surface's *first* size comes from here; after
+            // that `setFontSize` steps the live one, pinch included.
             fontSize: Float(fontSize),
             // Same reason the Mac pane sets it: ghostty coalesces resizes on a
             // 25ms trailing-only window, and an alt-screen agent TUI composites
@@ -281,6 +291,54 @@ private struct AttachedTerminal: UIViewRepresentable {
     /// them; the upgrade is a ⌘-click through `open_url` instead.
     final class LinkTapView: UITerminalView {
         private var tap: CGPoint?
+
+        /// The size the surface is drawing at now. The package tracks its own
+        /// pinch counter privately (starting at 14, whatever the surface was
+        /// built with) and publishes neither a getter nor a callback, so a
+        /// pinch could never be saved. This view owns pinch instead: the
+        /// package's recognizer is switched off, and this one steps the font
+        /// with ghostty's own `increase_font_size`/`decrease_font_size` and
+        /// reports the result when the fingers lift.
+        var liveFontSize: Double = TerminalFontSize.default
+        var onPinch: ((Double) -> Void)?
+        private var pinchScale: CGFloat = 1
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            for recognizer in gestureRecognizers ?? [] where recognizer is UIPinchGestureRecognizer {
+                recognizer.isEnabled = false
+            }
+            addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:))))
+        }
+
+        required init?(coder: NSCoder) { fatalError("not from a nib") }
+
+        /// Steps the live surface to `size`. Idempotent, so the save that a
+        /// pinch triggers coming back through `onChange` does nothing.
+        func setFontSize(_ size: Double) {
+            let size = TerminalFontSize.clamped(size)
+            let delta = Int((size - liveFontSize).rounded())
+            guard delta != 0 else { return }
+            let action = delta > 0 ? "increase_font_size:\(delta)" : "decrease_font_size:\(-delta)"
+            if surface?.performBindingAction(action) == true { liveFontSize = size }
+        }
+
+        /// The package's own step: one point per 0.1 of scale.
+        @objc private func pinched(_ gesture: UIPinchGestureRecognizer) {
+            switch gesture.state {
+            case .began:
+                pinchScale = gesture.scale
+            case .changed:
+                let steps = Int((gesture.scale - pinchScale) / 0.1)
+                guard steps != 0 else { return }
+                pinchScale += CGFloat(steps) * 0.1
+                setFontSize(liveFontSize + Double(steps))
+            case .ended:
+                onPinch?(liveFontSize)
+            default:
+                break
+            }
+        }
 
         /// ghostty reports a wheel to tmux at the last pointer position and
         /// drops it when there is none — and the package's finger-scroll pan
