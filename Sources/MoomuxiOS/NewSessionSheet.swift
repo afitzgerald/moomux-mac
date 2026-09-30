@@ -63,7 +63,9 @@ struct NewSessionSheet: View {
                         Toggle("Skip permission prompts", isOn: $form.dangerous)
                     }
                 } footer: {
-                    if project?.promptAgent == true && form.agent.isEmpty {
+                    if form.project.isEmpty {
+                        Text("Choose the project to start the session in.")
+                    } else if project?.promptAgent == true && form.agent.isEmpty {
                         Text("This project asks for an agent every time — pick one.")
                     }
                 }
@@ -140,13 +142,15 @@ struct NewSessionSheet: View {
         // once something is typed, Cancel is the only way out.
         .interactiveDismissDisabled(edited || attachments.pending > 0)
         .onDisappear { attachments.cancelAll() }
-        // No selection to seed from on a phone, so the first project — the
-        // picker is the top row, so a wrong guess is one tap away.
-        .onAppear { form = app.newSessionForm(project: projects.first ?? "") }
-        // Opened before the config landed (the `-newSession` seam): seed once
-        // it does, unless the user has already started.
-        .onChange(of: projects) { _, projects in
-            if form.project.isEmpty && !edited { form = app.newSessionForm(project: projects.first ?? "") }
+        // No project until one is chosen, and Create waits for it
+        // (`canCreate`). The Mac can seed from the selected row; a phone has
+        // no selection, and defaulting to the first project put every session
+        // there unless you remembered to change it.
+        .onAppear { form = app.newSessionForm(project: "") }
+        // Opened before the config landed (the `-newSession` seam): take its
+        // defaults once it does, unless the user has already started.
+        .onChange(of: projects) { _, _ in
+            if form.project.isEmpty && !edited { form = app.newSessionForm(project: "") }
         }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
