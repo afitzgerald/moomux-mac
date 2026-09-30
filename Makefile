@@ -6,7 +6,7 @@ CONFIG ?= release
 # Extra flags for every `swift build` invocation. Empty by default; a machine
 # with a broken default toolchain sets this in Makefile.local instead of here.
 SWIFT_BUILD_FLAGS ?=
-# Pin the SDK to macOS 26. CommandLineTools symlinks MacOSX.sdk at the 27.0 SDK
+# With CommandLineTools selected, pin the SDK to macOS 26. CommandLineTools symlinks MacOSX.sdk at the 27.0 SDK
 # while the installed swift-frontend targets macosx26.0, and the 27.0
 # SwiftUICore declares a `State()` *macro* beside the property wrapper:
 #   public macro State() = #externalMacro(module: "SwiftUIMacros", type: "StateMacro")
@@ -22,10 +22,25 @@ SWIFT_BUILD_FLAGS ?=
 # used and the build breaks loudly — the right direction to be wrong in. `?=`
 # leaves Makefile.local and the environment in charge. Drop this once
 # CommandLineTools ships the plugin.
+#
+# Only then, though: Xcode ships the plugin, so with Xcode selected the build
+# uses its own (current) SDK — macOS 27 on Xcode 27.
+ifneq ($(findstring CommandLineTools,$(shell xcode-select -p 2>/dev/null)),)
 SDKROOT ?= $(wildcard /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk)
+endif
 ifneq ($(SDKROOT),)
 export SDKROOT
 endif
+# The SDK the binary says it was built with, stated to the linker. SwiftPM
+# stamps the *deployment target* (14.0) as the SDK version instead, and AppKit
+# runs anything linked against a pre-26 SDK in compatibility mode: the old
+# controls, no Liquid Glass — on a build that compiled against the new SDK.
+# Measured: `otool -l` on the binary said `sdk 14.0` without this and the
+# right version with it. Not in SWIFT_BUILD_FLAGS, because the iOS cross-build
+# below shares those and must not be told it is a macOS link.
+MAC_MIN := 14.0
+MAC_SDK_VERSION := $(shell xcrun --sdk $(or $(SDKROOT),macosx) --show-sdk-version 2>/dev/null)
+MAC_SDK_FLAGS := $(if $(MAC_SDK_VERSION),-Xlinker -platform_version -Xlinker macos -Xlinker $(MAC_MIN) -Xlinker $(MAC_SDK_VERSION))
 BUNDLE_ID = app.moomux.Moomux
 # `run`/`dev` build a *different app* as far as LaunchServices is concerned.
 # Sharing one identifier with the installed copy meant `open .build/Moomux.app`
@@ -85,7 +100,7 @@ APPZIP := .build/Moomux.zip
 # would bake in the release path at parse time. The `eval` memoizes it on first
 # expansion: each `--show-bin-path` is a ~0.7s swift invocation, and `app`
 # expands this seven times, which was 5s of every `make dev` doing nothing.
-BINDIR = $(eval BINDIR := $(shell swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) --show-bin-path))$(BINDIR)
+BINDIR = $(eval BINDIR := $(shell swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS) --show-bin-path))$(BINDIR)
 BIN = $(BINDIR)/Moomux
 # Where libghostty's resource bundle keeps its payload. The `swiftbuild` engine
 # (Swift 6.4's default) emits a Contents/Resources-style bundle; the older
@@ -98,7 +113,7 @@ GHOSTTY_RES = $(GHOSTTY_BUNDLE)$(if $(wildcard $(GHOSTTY_BUNDLE)/Contents/Resour
 	ios ios-run ios-shot ios-prune-sims ios-archive testflight
 
 build:
-	swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS)
+	swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS)
 
 # Every warning in *our* sources, without the `rm -rf .build` that idiom used
 # to need. swift build only re-emits diagnostics for files it recompiles, so
@@ -108,12 +123,12 @@ build:
 # recompiles exactly the module we care about, and in seconds.
 warnings:
 	@find Sources -name '*.swift' -exec touch {} +
-	@swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
+	@swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS) 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
 
 # The assert-based checks. Deliberately not part of `build`: they must never be
 # built with -O, which deletes every assert (see Scripts/selfcheck.sh).
 selfcheck:
-	bash Scripts/selfcheck.sh
+	SWIFT_BUILD_FLAGS="$(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS)" bash Scripts/selfcheck.sh
 
 # Wrap the SwiftPM binary in a bundle. There is no Xcode here, so this is the
 # app target. The bundle is not optional for anything that wants a bundle
