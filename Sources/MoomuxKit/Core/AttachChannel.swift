@@ -19,6 +19,9 @@ public final class AttachChannel: @unchecked Sendable {
     /// Whatever arrived in the same read as the response line. Handed to the
     /// terminal before the first `read()`, or the first frame is lost.
     public let pending: Data
+    /// What `ResizeAttach` calls this attach, or nil from a core too old to
+    /// resize one in place — the caller then reattaches on a size change.
+    public let token: String?
 
     /// Blocking: connects, sends the request and waits for the response line.
     /// Call it off the main actor, like every other socket call here.
@@ -56,6 +59,7 @@ public final class AttachChannel: @unchecked Sendable {
                     guard response.result?.ok == true else {
                         throw MoomuxClient.Failure.server("attach refused")
                     }
+                    token = AttachChannel.token(response)
                     pending = rest
                     return
                 }
@@ -80,6 +84,12 @@ public final class AttachChannel: @unchecked Sendable {
     static func splitLine(_ buffer: Data) -> (line: Data, rest: Data)? {
         guard let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) else { return nil }
         return (buffer[buffer.startIndex..<newline], buffer[buffer.index(after: newline)...])
+    }
+
+    /// An empty token is no token: it could only fail every resize.
+    static func token(_ response: MoomuxClient.Response) -> String? {
+        guard let token = response.result?.attach, !token.isEmpty else { return nil }
+        return token
     }
 
     /// Blocking. Empty means the far end closed, which is the only way an
@@ -138,6 +148,15 @@ public final class AttachChannel: @unchecked Sendable {
         }
         assert(String(data: first, encoding: .utf8) == "{}")
         assert(String(data: tail, encoding: .utf8) == "row1\nrow2\n")
+
+        // The resize token rides in the same single line, and its absence (an
+        // older core) must read as "no token", not as a failed attach.
+        func response(_ json: String) -> MoomuxClient.Response {
+            try! Wire.decoder.decode(MoomuxClient.Response.self, from: Data(json.utf8))
+        }
+        assert(token(response(#"{"result":{"ok":true,"attach":"ab12"}}"#)) == "ab12")
+        assert(token(response(#"{"result":{"ok":true}}"#)) == nil, "an older core: reattach instead")
+        assert(token(response(#"{"result":{"ok":true,"attach":""}}"#)) == nil)
     }
 }
 
