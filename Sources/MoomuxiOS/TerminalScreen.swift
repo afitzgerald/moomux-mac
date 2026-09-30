@@ -486,15 +486,16 @@ struct AttachedTerminal: UIViewRepresentable {
 
         /// The attach follows the surface's size, and the *settled* one.
         ///
-        /// `cols`/`rows` are the only size a given attach ever gets — the core
-        /// sets the pty once — so the size we send has to be the real one. The
+        /// `cols`/`rows` are an attach's first size — and its only one on a
+        /// core too old for `ResizeAttach` — so the size we send has to be the
+        /// real one. The
         /// surface resizes at least twice on the way up (measured: 62x62 from
         /// the first layout pass, then 62x53 once safe areas are applied), and
         /// attaching on the first left the pty disagreeing with the grid for
         /// the rest of the session. Hence: debounce, then attach; and if the
-        /// size changes later — rotation, a keyboard appearing — reattach,
-        /// which is what the wire's initial-size-only contract asks a client
-        /// to do.
+        /// size changes later — rotation, a keyboard appearing — resize the
+        /// live attach (`ResizeAttach`), or reattach against a core too old
+        /// to resize one.
         /// The three-way decision is `AttachSizing`, in the Kit, so it can be
         /// asserted by `--selftest` — nothing in this target can be.
         func terminalDidResize(columns: Int, rows: Int) {
@@ -544,9 +545,38 @@ struct AttachedTerminal: UIViewRepresentable {
 
         private func restart(_ size: Size) {
             guard !done.isSet, size != attachedSize else { return }
+            // A live attach from a core that can resize one: a SIGWINCH for
+            // tmux, not a new connection, so the keyboard appearing or a
+            // rotation no longer redraws the pane from nothing.
+            if let channel, let token = channel.token, attachedSize != nil {
+                attachedSize = size
+                resize(channel, token: token, to: size)
+                return
+            }
             attachedSize = size
             stop()
             start(columns: size.columns, rows: size.rows)
+        }
+
+        /// One serial queue, so two quick size changes reach the core in the
+        /// order they happened and the last one wins. A refusal — the attach
+        /// is gone, or the core forgot the token — falls back to what an older
+        /// core always gets: a reattach at the new size.
+        private let resizes = DispatchQueue(label: "app.moomux.attach.resize")
+
+        private func resize(_ channel: AttachChannel, token: String, to size: Size) {
+            let client = client
+            resizes.async { [weak self] in
+                do {
+                    try client.resizeAttach(token: token, cols: size.columns, rows: size.rows)
+                } catch {
+                    Task { @MainActor [weak self] in
+                        guard let self, !self.done.isSet, self.channel === channel else { return }
+                        self.stop()
+                        self.start(columns: size.columns, rows: size.rows)
+                    }
+                }
+            }
         }
 
         private func start(columns: Int, rows: Int) {

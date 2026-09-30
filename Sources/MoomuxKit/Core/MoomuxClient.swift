@@ -115,11 +115,11 @@ public final class MoomuxClient: Sendable {
         /// A whole `config.Project`, for the four project writes. `Project`'s
         /// own encoder decides which of its fields cross.
         var proj: Project?
-        /// `Attach`'s initial pty size, and the only size it ever gets: the
-        /// core sets it once through `pty.Setsize` and a client that changes
-        /// size detaches and reattaches. Always send real numbers — the Go
-        /// side reads a missing or absurd value as 80x24, which is not what a
-        /// phone wants.
+        /// `Attach`'s initial pty size, and `ResizeAttach`'s new one. A core
+        /// too old for `ResizeAttach` sets it once, and a client that changes
+        /// size there detaches and reattaches. Always send real numbers — the
+        /// Go side reads a missing or absurd value as 80x24, which is not what
+        /// a phone wants.
         var cols: Int?
         var rows: Int?
         /// `SaveFile`'s contents — base64 on the wire, which is both
@@ -127,6 +127,9 @@ public final class MoomuxClient: Sendable {
         var data: Data?
         /// `ReadFile`'s path, as tapped in a pane.
         var path: String?
+        /// `ResizeAttach`: which live attach to resize — the token its `Attach`
+        /// answered with.
+        var attach: String?
 
         // Every `ipc.Args` key this app sends already matches its property
         // name. A missing entry here would be invisible in both directions —
@@ -136,7 +139,7 @@ public final class MoomuxClient: Sendable {
             case newName = "new_name"
             case project
             case cols, rows
-            case data, path
+            case data, path, attach
         }
     }
 
@@ -190,10 +193,14 @@ public final class MoomuxClient: Sendable {
         /// `Diff`: the ref the patch was taken against — "HEAD" when no base
         /// branch shares history with the session's, so uncommitted work only.
         var base: String?
+        /// `Attach`: the token that names this attach to `ResizeAttach`. Absent
+        /// from a core older than it, which is the signal to fall back to
+        /// reattaching on a size change.
+        var attach: String?
 
         enum CodingKeys: String, CodingKey {
             case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path, data
-            case patch, truncated, base
+            case patch, truncated, base, attach
             case screens
             case projectEmoji = "project_emoji"
         }
@@ -438,6 +445,18 @@ public final class MoomuxClient: Sendable {
     @discardableResult
     public func deleteSession(id: String) throws -> String {
         try call("DeleteSession", Args(id: id)).hint ?? ""
+    }
+
+    /// Resizes a live attach's pty in place, so a size change on the phone is
+    /// a SIGWINCH for tmux rather than a new connection. Throws on a core that
+    /// does not know the method or the token; the caller falls back to
+    /// reattaching.
+    public func resizeAttach(token: String, cols: Int, rows: Int) throws {
+        var args = Args()
+        args.attach = token
+        args.cols = max(1, cols)
+        args.rows = max(1, rows)
+        try call("ResizeAttach", args)
     }
 
     /// Leaves the worktree and the session record; only the tmux server side goes.
@@ -702,6 +721,14 @@ public final class MoomuxClient: Sendable {
             decoding: try! encoder.encode(Request(method: "EnsureTmux", args: Args(id: "s1"))),
             as: UTF8.self)
         assert(ensure == #"{"args":{"id":"s1"},"method":"EnsureTmux"}"#, ensure)
+        var resize = Args()
+        resize.attach = "t0"
+        resize.cols = 62
+        resize.rows = 51
+        let resized = String(
+            decoding: try! encoder.encode(Request(method: "ResizeAttach", args: resize)),
+            as: UTF8.self)
+        assert(resized == #"{"args":{"attach":"t0","cols":62,"rows":51},"method":"ResizeAttach"}"#, resized)
 
         // An empty tag is how a tag is cleared, so it has to go over the wire
         // as "" rather than being dropped — and every field nobody set must be
