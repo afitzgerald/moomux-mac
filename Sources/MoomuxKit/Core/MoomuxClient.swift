@@ -203,6 +203,9 @@ public final class MoomuxClient: Sendable {
         /// `Diff`: the ref the patch was taken against — "HEAD" when no base
         /// branch shares history with the session's, so uncommitted work only.
         var base: String?
+        /// `GhosttyConfig`: the core machine's Ghostty config, concatenated in
+        /// ghostty's own load order, and the files it came from.
+        var ghostty: ServedGhostty?
         /// `Attach`: the token that names this attach to `ResizeAttach`. Absent
         /// from a core older than it, which is the signal to fall back to
         /// reattaching on a size change.
@@ -210,10 +213,15 @@ public final class MoomuxClient: Sendable {
 
         enum CodingKeys: String, CodingKey {
             case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path, data
-            case patch, truncated, base, attach
+            case patch, truncated, base, attach, ghostty
             case screens
             case projectEmoji = "project_emoji"
         }
+    }
+
+    struct ServedGhostty: Decodable {
+        var text: String?
+        var files: [String]?
     }
 
     /// What the core can say about a session's worktree, on demand.
@@ -467,6 +475,18 @@ public final class MoomuxClient: Sendable {
         args.cols = max(1, cols)
         args.rows = max(1, rows)
         try call("ResizeAttach", args)
+    }
+
+    /// The core machine's Ghostty config text, for a pane with no config files
+    /// of its own to read — the phone's. Empty when the core has none; nil
+    /// from a core too old to serve it, which is not an error to show: the
+    /// pane just keeps its built-in look.
+    public func ghosttyConfig() throws -> String? {
+        do {
+            return try call("GhosttyConfig").ghostty?.text ?? ""
+        } catch let Failure.server(message) where message.hasPrefix("unknown method") {
+            return nil
+        }
     }
 
     /// Leaves the worktree and the session record; only the tmux server side goes.
@@ -739,6 +759,14 @@ public final class MoomuxClient: Sendable {
             decoding: try! encoder.encode(Request(method: "ResizeAttach", args: resize)),
             as: UTF8.self)
         assert(resized == #"{"args":{"attach":"t0","cols":62,"rows":51},"method":"ResizeAttach"}"#, resized)
+
+        // `GhosttyConfig`'s answer, as the contract spells it.
+        let ghostty = try! Wire.decoder.decode(Response.self, from: Data(
+            #"{"result":{"ghostty":{"text":"font-size = 13\n","files":["/h/.config/ghostty/config.ghostty"]}}}"#.utf8))
+        assert(ghostty.result?.ghostty?.text == "font-size = 13\n")
+        assert(ghostty.result?.ghostty?.files == ["/h/.config/ghostty/config.ghostty"])
+        let none = try! Wire.decoder.decode(Response.self, from: Data(#"{"result":{"ghostty":{"text":""}}}"#.utf8))
+        assert(none.result?.ghostty?.text == "" && none.result?.ghostty?.files == nil, "no config is empty, not absent")
 
         // An empty tag is how a tag is cleared, so it has to go over the wire
         // as "" rather than being dropped — and every field nobody set must be

@@ -59,6 +59,9 @@ struct TerminalScreen: View {
                          onURL: open(url:),
                          onFile: open(file:),
                          onPinch: { fontSize = $0 })
+            // The core's Ghostty config arriving after this pane was built:
+            // a new surface is the only way to apply it (`paneConfigGeneration`).
+            .id(app.paneConfigGeneration)
             // Applied to the live surface, not by rebuilding it: a pinch
             // lands here too (saved through `onPinch`), and a rebuild per
             // pinch would redraw the pane from nothing. The new width reaches

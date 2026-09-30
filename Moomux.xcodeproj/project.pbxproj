@@ -6,9 +6,14 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA0000000000000000000013 /* ghostty-themes in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* ghostty-themes */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		AA0000000000000000000010 /* Moomux.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Moomux.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000011 /* iOS-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "iOS-Info.plist"; sourceTree = "<group>"; };
+		AA0000000000000000000012 /* ghostty-themes */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "ghostty-themes"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -47,6 +52,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000011 /* iOS-Info.plist */,
+				AA0000000000000000000012 /* ghostty-themes */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -127,6 +133,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA0000000000000000000013 /* ghostty-themes in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

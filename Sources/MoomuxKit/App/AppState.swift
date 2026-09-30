@@ -309,10 +309,13 @@ public final class AppState {
     /// against the generated file's own directory instead. The upgrade is a
     /// package that layers configs or calls the recursive loader.
     nonisolated static func paneConfig(files: [String] = ghosttyConfigPaths(),
+                           served: String? = servedGhosttyConfig,
                            read: (String) -> String? = {
                                try? String(contentsOfFile: $0, encoding: .utf8)
                            }) -> String {
-        let user = files.compactMap(read).filter { !$0.isEmpty }
+        // The core's copy of the config first: that is the phone's only way
+        // to its user's Ghostty settings, and a Mac never asks for it.
+        let user = (served.map { [$0] } ?? files.compactMap(read)).filter { !$0.isEmpty }
         // No config anywhere: a dark pane, matching what this app looked like
         // before it read one. Colours only — no 16-entry palette, because
         // ghostty's own default is better than a hand-copied table and a
@@ -327,6 +330,85 @@ public final class AppState {
         #else
         return (base + [Self.paneKeybinds.rendered]).joined(separator: "\n") + "\n"
         #endif
+    }
+
+    /// The core machine's Ghostty config (`GhosttyConfig`), with its theme
+    /// names pointed at this bundle's copies. Static beside `runtime`, because
+    /// the runtime is one per process and outlives a Disconnect.
+    nonisolated(unsafe) static var servedGhosttyConfig: String?
+
+    /// Bumped when a served config lands on a runtime that already drew a
+    /// pane, which a pane uses as its identity so it picks the config up.
+    public private(set) var paneConfigGeneration = 0
+
+    /// Asked once per connect, on the phone only: the Mac reads the same files
+    /// straight off its own disk. Retried until the core answers, like the
+    /// themes table; an older core that does not know the method answers nil,
+    /// and the built-in look stays.
+    private func loadGhosttyConfig() async {
+        #if os(iOS)
+        while !Task.isCancelled {
+            // `do`, not `try?`: that would flatten "the core has no such
+            // method" (nil) into "the call failed", and stop retrying a core
+            // that is merely not up yet.
+            let answer: String?
+            do {
+                answer = try await withoutBlockingTheUI { [client] in try client.ghosttyConfig() }
+            } catch {
+                try? await Task.sleep(for: .seconds(2))
+                continue
+            }
+            guard let served = answer, !served.isEmpty else { return }
+            let themes = Bundle.main.url(forResource: "ghostty-themes", withExtension: nil)?.path
+            let text = themes.map { dir in
+                Self.localizedThemes(served, dir: dir) { FileManager.default.fileExists(atPath: $0) }
+            } ?? served
+            guard text != Self.servedGhosttyConfig else { return }
+            Self.servedGhosttyConfig = text
+            // Built already — a pane opened before the answer landed (a tapped
+            // notification at launch). An open surface is not reconfigured,
+            // so the pane rebuilds on the bump: one reattach, once.
+            if let runtime = Self.runtime {
+                Self.load(Self.paneConfig(), into: runtime)
+                paneConfigGeneration += 1
+            }
+            return
+        }
+        #endif
+    }
+
+    /// `theme = <name>` resolves under `GHOSTTY_RESOURCES_DIR/themes`, which
+    /// the phone's resource bundle does not have. ghostty takes a path there
+    /// just as well, so each name this bundle vendors becomes its absolute
+    /// path. A `light:`/`dark:` pair keeps its prefixes; a name not vendored,
+    /// or already a path, is left for narrowing to drop.
+    nonisolated static func localizedThemes(_ text: String, dir: String,
+                                            exists: (String) -> Bool) -> String {
+        text.components(separatedBy: "\n").map { line in
+            let parts = line.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "theme" else {
+                return line
+            }
+            let values = parts[1].split(separator: ",").map { raw -> String in
+                let value = raw.trimmingCharacters(in: .whitespaces)
+                let (prefix, name): (String, String) = {
+                    for p in ["light:", "dark:"] where value.hasPrefix(p) { return (p, String(value.dropFirst(p.count))) }
+                    return ("", value)
+                }()
+                let path = dir + "/" + name
+                return !name.isEmpty && !name.hasPrefix("/") && exists(path) ? prefix + path : value
+            }
+            return "theme = " + values.joined(separator: ",")
+        }.joined(separator: "\n")
+    }
+
+    /// The narrowing `terminalController` does on a first load, for a config
+    /// that changed under a runtime that already exists.
+    private static func load(_ text: String, into controller: TerminalController) {
+        if !controller.updateConfigSource(.generated(text)) || controller.lastConfigurationIssue != nil {
+            let (kept, _) = narrowedConfig(text) { controller.updateConfigSource(.generated($0)) }
+            _ = controller.updateConfigSource(.generated(kept))
+        }
     }
 
     nonisolated private static let builtInPaneConfig = TerminalConfiguration(startingFrom: .default) {
@@ -416,6 +498,29 @@ public final class AppState {
         return [xdg, appSupport]
             .flatMap { ["\($0)/config", "\($0)/config.ghostty"] }
             .filter(isReadable)
+    }
+
+    public nonisolated static func localizedThemesDemo() {
+        let dir = "/app/ghostty-themes"
+        let vendored: Set<String> = ["\(dir)/Nord", "\(dir)/Nord Light", "\(dir)/Dracula"]
+        func run(_ text: String) -> String { localizedThemes(text, dir: dir) { vendored.contains($0) } }
+        assert(run("theme = Nord") == "theme = /app/ghostty-themes/Nord")
+        assert(run("theme=Dracula") == "theme = /app/ghostty-themes/Dracula", "no spaces round the =")
+        assert(run("theme = Nord Light") == "theme = /app/ghostty-themes/Nord Light", "names carry spaces")
+        assert(run("theme = light:Nord Light,dark:Nord")
+               == "theme = light:/app/ghostty-themes/Nord Light,dark:/app/ghostty-themes/Nord")
+        assert(run("theme = Not Vendored") == "theme = Not Vendored", "left for narrowing to drop")
+        assert(run("theme = /abs/Mine") == "theme = /abs/Mine")
+        assert(run("font-size = 13\ntheme = Nord\n") == "font-size = 13\ntheme = /app/ghostty-themes/Nord\n",
+               "every other line untouched")
+        assert(run("# theme = Nord") == "# theme = Nord", "a comment is not a directive")
+        // The served text wins over files, and an empty one means none.
+        assert(paneConfig(files: ["/a"], served: "font-size = 20", read: { _ in "font-size = 9" })
+            .contains("font-size = 20"))
+        assert(!paneConfig(files: ["/a"], served: "font-size = 20", read: { _ in "font-size = 9" })
+            .contains("font-size = 9"))
+        assert(paneConfig(files: [], served: "", read: { _ in nil }).contains("background = 1a1b26"),
+               "an empty served config falls back to the built-in look")
     }
 
     public nonisolated static func ghosttyConfigDemo() {
@@ -943,6 +1048,7 @@ public final class AppState {
             Task { [weak self] in await self?.pollLoop() },
             Task { [weak self] in await self?.loadAgentOptions() },
             Task { [weak self] in await self?.loadThemes() },
+            Task { [weak self] in await self?.loadGhosttyConfig() },
         ]
         watch = Task { [weak self] in await self?.watchLoop() }
     }
