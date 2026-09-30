@@ -68,6 +68,16 @@ public final class MoomuxClient: Sendable {
         endpoint = .unix(path: socketPath)
     }
 
+    /// `ipc.TailnetPort`: where a core's tailnet listener always is.
+    public static let tailnetPort = 45876
+
+    /// A core reached over TCP — another machine, as far as this client can
+    /// tell. What decides whether a pane may attach locally (`AttachRoute`).
+    public var isRemote: Bool {
+        if case .tcp = endpoint { return true }
+        return false
+    }
+
     public init(endpoint: Endpoint) {
         self.endpoint = endpoint
     }

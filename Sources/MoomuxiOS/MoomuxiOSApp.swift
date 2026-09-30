@@ -130,7 +130,7 @@ final class EndpointStore {
     /// `ipc.TailnetPort`. The core's tailnet listener is on a fixed port, so
     /// this is a default rather than something anyone should have to know —
     /// the field stays editable only for a bridge or a second core.
-    static let defaultPort = 45876
+    static let defaultPort = MoomuxClient.tailnetPort
 
     init() {
         host = UserDefaults.standard.string(forKey: "coreHost") ?? ""

@@ -1750,8 +1750,10 @@ public final class AppState {
         return [selected] + installed
     }
 
+    /// Never against a remote core: the worktree path names the core's disk,
+    /// and a diff tool here would open nothing, or somebody else's checkout.
     public func canOpenDiffTool(_ session: Session) -> Bool {
-        !AppState.diffToolArguments(diffTool).isEmpty && !session.worktreePath.isEmpty
+        !client.isRemote && !AppState.diffToolArguments(diffTool).isEmpty && !session.worktreePath.isEmpty
     }
 
     /// ponytail: whitespace split, so no shell and therefore no quoting or
@@ -1993,6 +1995,48 @@ public final class AppState {
     /// make the core open a terminal window — the core is commonly a launchd
     /// daemon with no terminal to open one in.
     public func attach(_ session: Session) {
+        #if os(macOS)
+        // A core on another machine: attach over its `Attach` stream unless
+        // this machine's tmux has the session (`AttachRoute`). The check is a
+        // `tmux has-session`, so it runs off the main actor, once per attach.
+        if client.isRemote {
+            Task {
+                // Nothing in the check throws; `try?` only satisfies the helper.
+                let route = (try? await withoutBlockingTheUI { () -> AttachRoute in
+                    let tmux = ToolPath.find("tmux")
+                    let local = tmux.map { (try? ToolPath.run($0, ["has-session", "-t", "=" + session.tmuxSession])) != nil }
+                    return AttachRoute.decide(remoteCore: true, tmuxFound: tmux != nil, localSession: local)
+                }) ?? .remote
+                if route == .remote { attachRemotely(session) } else { attachLocally(session) }
+            }
+            return
+        }
+        #endif
+        attachLocally(session)
+    }
+
+    #if os(macOS)
+    /// The panes attached over the core's stream, by session. Owned here, not
+    /// by the view, for the reason `plainPanes` is: a pane outlives switching
+    /// away from it, and only `detach` lets it go.
+    @ObservationIgnored public private(set) var remoteAttaches: [Session.ID: RemoteAttach] = [:]
+
+    /// No `EnsureTmux` first, unlike a local attach: the core's `Attach` runs
+    /// it, so opening a parked session revives it on the far side.
+    private func attachRemotely(_ session: Session) {
+        if remoteAttaches[session.id] == nil {
+            remoteAttaches[session.id] = RemoteAttach(client: client, sessionID: session.id) { [weak self] in
+                self?.detach(id: session.id)
+            }
+        }
+        attachedSessions.insert(session.id)
+    }
+
+    /// Whether attaching is possible at all: a remote core needs no tmux here.
+    public var canAttach: Bool { client.isRemote || ToolPath.find("tmux") != nil }
+    #endif
+
+    private func attachLocally(_ session: Session) {
         guard !isAlive(session) else {
             attachedSessions.insert(session.id)
             return
@@ -2041,6 +2085,8 @@ public final class AppState {
         #if os(macOS)
         plainPanes.removeValue(forKey: id)?.controller = nil
         plainDelegates.removeValue(forKey: id)
+        // Closing the socket is the detach; tmux keeps the session.
+        remoteAttaches.removeValue(forKey: id)?.teardown()
         #endif
     }
 

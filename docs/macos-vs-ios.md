@@ -200,7 +200,7 @@ The phone builds a new one per Connect. So the `TerminalController` lives in a `
 | Auth | file permissions | the core runs `tailscale whois` on the peer |
 | Connect deadline | none needed; a unix socket fails fast | 5s non-blocking connect |
 | Dead peer | EOF | keepalive, ~30s to `ETIMEDOUT` |
-| Switch cores | relaunch with another `--socket` | Disconnect in the ⋯ menu |
+| Switch cores | relaunch with another `--socket`, or `coreHost`/`corePort` (D25) | Disconnect in the ⋯ menu |
 | Lifecycle hooks | none | schedules background refresh on `.background`; reconnects on leaving it (D51) |
 
 **D20. TCP over the tailnet, with no pairing, token or TLS.** WireGuard provides encryption and
@@ -302,11 +302,34 @@ that can resize a live attach puts a token in that one response line (`"attach":
 `ResizeAttach {attach, cols, rows}` resizes the pty in place (D27). *Where:*
 `Core/AttachChannel.swift`, `MoomuxClient.resizeAttach`.
 
-**D25. The Mac requires the core on the same machine; the phone does not.** The Mac's attach
-execs a local `tmux` found through `ToolPath` ("Can't find tmux" is a real state in its UI), and
-its client is constructed unix-only. The `Endpoint` enum would carry TCP, but attach would not
-follow, so a Mac against a remote core is not a supported shape. **Open:** §M 3. *Where:*
-`SessionTerminal`, `MoomuxApp.bootstrap`.
+**D25. The Mac attaches locally whenever it can, and over the core's stream when it can't.**
+- **Local is the cheaper path.** The pty and tmux client run on this Mac, and bytes never cross
+  the socket. The terminal gets `xterm-ghostty` with its terminfo, and there's no keepalive,
+  reconnect or resize debounce to get wrong. So it stays the default.
+- **Choosing a core.** `--socket <path>` first. Then a core on another machine, from `coreHost`
+  and `corePort` (`defaults write`, or `-coreHost` on the launch line; the phone's keys, default
+  port 45876). Then the default socket.
+- **The rule (`AttachRoute`, asserted in `--selftest`).** A unix-socket core is on this machine
+  by construction, so the pane attaches locally, or is unavailable with no tmux. A TCP core may
+  also be this machine (its own tailnet address), so the pane attaches locally only if this
+  Mac's tmux has the session (`tmux has-session`, checked once per attach, off the main actor).
+  Otherwise it attaches over the core's `Attach` stream, and no local tmux is needed at all.
+- **A remote pane is the phone's attach.** `RemoteAttach`, moved into the Kit, holds the settled
+  first size, resize in place, reconnects that cannot revive a killed session, and keys buffered
+  across a reconnect. It runs on libghostty's in-memory backend. It is pooled like a local pane,
+  and `detach` closes its socket.
+- **What changes with it on the Mac.**
+  - A file link in the pane is fetched with `ReadFile` and opened locally.
+  - A Finder drop is uploaded (D38).
+  - The diff tool is off, since the worktree path names the core's disk.
+  - Review, the grid, Copy Path and every write already went through the core.
+- **Measured.** A core on a separate tmux server, reached over TCP. The Mac chose the remote
+  route, and the client on that session was `tmux -u attach -t =moomux-macrz-1b95`, started by
+  the core with `TERM=xterm-256color`, where a local attach would be `xterm-ghostty`. The pane
+  drew the session's output.
+
+There's no Settings field for the core address yet (§M 3). *Where:* `AttachRoute`,
+`AppState.attach`, `RemoteAttach`, `SessionTerminal`, `MoomuxApp.client()`.
 
 **D26. Mac panes are pooled; phone panes are single-use.**
 - **Mac.** `plainPanes`/`plainDelegates` keep each attached session's surface and tmux client
@@ -429,8 +452,8 @@ a position itself.
 | | Mac | iPhone |
 |---|---|---|
 | Allowlist | `TerminalLink`: http, https, file | `WebLink`: http, https |
-| Absolute path in a pane | opens locally if it exists | `ReadFile` → temp file → Quick Look |
-| Relative or `:line:col` path | `ResolveFile` on the core → opens locally | `ReadFile` (the core resolves it) → Quick Look |
+| Absolute path in a pane | opens locally if it exists; in a remote pane, `ReadFile` → temp file → default app | `ReadFile` → temp file → Quick Look |
+| Relative or `:line:col` path | `ResolveFile` on the core → opens locally; in a remote pane, `ReadFile` | `ReadFile` (the core resolves it) → Quick Look |
 | Ticket/PR tag | `WebSheet` (in-app WKWebView) | `Link` → the claiming app, then Safari |
 | Asana | rewritten to `asanadesktop://` | not rewritten |
 | MergeRight | when on and a handler is registered | when on and `canOpenURL` (`LSApplicationQueriesSchemes`) |
@@ -467,8 +490,8 @@ both apps are going.
 types local shell-quoted paths, the iTerm/Terminal convention, with no upload. The phone's "Attach
 Photos/Files" in the pane's ⋯ menu uploads and pastes the returned path with `paste(text:)`, so
 bracketed paste lets claude see a file rather than typing (an image becomes `[Image #1]`). The Mac
-shortcut holds only because the Mac and the core share a disk (D25). It becomes an upload the
-day the Mac talks to a remote core.
+shortcut holds only because the Mac and the core share a disk. In a remote pane (D25) the drop
+is uploaded and the core's path pasted, as on the phone.
 
 ---
 
@@ -720,13 +743,10 @@ decision above (or changing the code), and remove it from here.
    concatenate the Mac's Ghostty config files the way `AppState.ghosttyConfigPaths` does and serve
    the text, and the phone would load it in place of its built-in palette. No settings UI; a
    fonts-and-themes pane on the phone stays a no. Needs a core method, so it is two repos' work.
-3. **A Mac against a remote core** (D25). **Direction: local when possible, remote otherwise.**
-   The Mac keeps its `.exec` attach whenever the core is on this machine, and uses the phone's
-   `Attach` stream only when it is not. Local is the cheaper path: the pty and tmux client run
-   here, bytes never cross the socket, the terminal gets `xterm-ghostty` with its terminfo, and
-   there is no keepalive, reconnect or settle debounce to get wrong. Uploading attachments (D37)
-   already works remotely. What is left to decide is the detection rule.
-   `rg -n 'MoomuxClient\(' Sources/Moomux   # socketPath only`
+3. **The Mac has no UI for choosing a remote core** (D25). It is `defaults write
+   app.moomux.Moomux coreHost <host>` (plus `corePort`) or a launch argument, then a relaunch,
+   because the Mac builds one store per process. A field in Settings → General, applied on
+   relaunch, is the likely shape; the phone's connect screen is the model.
 
 ## N. Known drift
 

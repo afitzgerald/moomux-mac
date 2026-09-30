@@ -1205,7 +1205,7 @@ private struct SessionDetail: View {
         // Starting one back up stays a button press.
         .task(id: session.id) {
             await app.loadStatus(for: session.id)
-            if app.isAlive(session) && ToolPath.find("tmux") != nil {
+            if app.isAlive(session) && app.canAttach {
                 app.attach(session)
             }
             checkingAttach = false
@@ -1229,7 +1229,7 @@ private struct SessionInfo: View {
                             Label("Attach", systemImage: "terminal")
                         }
                         .keyboardShortcut(.return)
-                        .disabled(ToolPath.find("tmux") == nil)
+                        .disabled(!app.canAttach)
                         .help("Attach this tmux session inside the app, starting it if it isn't running")
 
 
@@ -1275,7 +1275,7 @@ private struct SessionInfo: View {
                         .disabled(!app.canOpenDiffTool(session))
                         .help("Open this worktree in the diff tool from Settings (⌘D)")
                     }
-                    if ToolPath.find("tmux") == nil {
+                    if !app.canAttach {
                         Text("Can't find a tmux binary to attach with.")
                             .foregroundStyle(.secondary)
                     } else if !app.isAlive(session) {

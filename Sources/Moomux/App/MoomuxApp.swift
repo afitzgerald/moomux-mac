@@ -12,8 +12,25 @@ struct MoomuxApp: App {
     private static func bootstrap() -> AppState {
         SelfTest.runIfRequested() // exits the process when --selftest is passed
         GhosttyResourceBundle.warm() // before any TerminalController
-        let socket = socketPathArgument() ?? MoomuxClient.defaultSocketPath
-        return AppState(client: MoomuxClient(socketPath: socket))
+        return AppState(client: client())
+    }
+
+    /// `--socket <path>` first, then a core on another machine
+    /// (`coreHost`/`corePort` — `defaults write`, or `-coreHost` on the launch
+    /// line, the phone's keys), then the default socket. A remote core's panes
+    /// attach over its `Attach` stream unless this machine's tmux has the
+    /// session (`AttachRoute`).
+    private static func client() -> MoomuxClient {
+        if let socket = socketPathArgument() { return MoomuxClient(socketPath: socket) }
+        let defaults = UserDefaults.standard
+        if let host = defaults.string(forKey: "coreHost")?.trimmingCharacters(in: .whitespaces),
+           !host.isEmpty {
+            // `integer(forKey:)`: a launch-argument value arrives as a string.
+            let port = defaults.integer(forKey: "corePort")
+            let valid = (1...65535).contains(port) ? port : MoomuxClient.tailnetPort
+            return MoomuxClient(endpoint: .tcp(host: host, port: UInt16(valid)))
+        }
+        return MoomuxClient(socketPath: MoomuxClient.defaultSocketPath)
     }
 
     /// `--socket <path>`, matching `moomux serve -socket` / `moomux ui -socket`.
