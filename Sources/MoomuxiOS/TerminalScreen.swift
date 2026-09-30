@@ -243,7 +243,7 @@ struct AttachedTerminal: UIViewRepresentable {
         view.controller = controller
         view.configuration = TerminalSurfaceOptions(
             backend: .inMemory(context.coordinator.session),
-            // The window reflows to this client (see IPHONE.md §5), so the
+            // The window reflows to this client (docs/macos-vs-ios.md D29), so the
             // font decides the attached session's *width*, not just how much
             // of a fixed grid is visible: 8pt is ~62 columns, 11pt ~43, and a
             // diff or an agent TUI hard-wraps mid-token below about 50. That

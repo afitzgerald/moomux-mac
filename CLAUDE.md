@@ -163,7 +163,18 @@ Traps when checking by screenshot:
   Re-adding tmux in System Settings and restarting the server fixes it properly, but restarting
   kills every live session.
 
+## Mac and iPhone: `docs/macos-vs-ios.md`
+
+`docs/macos-vs-ios.md` itemises every place the two apps deliberately differ, as numbered
+decisions with their reasons, plus the differences that do not yet make sense from the user's
+side (open decisions) and the ones that are simply out of step (drift). **Update it in the same
+change** as anything that makes one app do what the other does not, or brings them back into
+line. Cite decisions by number; never renumber them.
+
 ## The iPhone app in the simulator
+
+`docs/macos-vs-ios.md` is the record of what was decided and how the phone differs from the Mac;
+this is what you need to run it.
 
 **Each worktree has its own simulator, `Moomux · <worktree>`** — `make ios-run` creates it and
 deletes the ones whose worktree is gone (`Scripts/sim.sh`); pass `IOS_DEVICE` for any other.
@@ -549,11 +560,12 @@ core new enough to serve them** — there is no fallback to the old local paths.
   (`/usr/bin:/bin:/usr/sbin:/sbin`), so Homebrew's `tmux` is invisible and `Process` just reports
   that the executable does not exist. `ToolPath` searches `PATH` and then the usual prefixes. Every
   tool this app ever shells out to goes through it.
-- **Every tmux client on a session shares one window size.** While the app is attached, the user's
-  iTerm and phone are letterboxed down to the app's dimensions, and it only springs back on detach —
-  not when the bigger client is used again. Grouped sessions (`new-session -t`) do **not** fix this;
-  a group shares the windows themselves. All measured. This is why attaching is an explicit action
-  and not a consequence of selecting a row.
+- **Every tmux client on a session shares one window size.** Under tmux's default
+  `window-size latest` the window follows whichever client typed last, so the app, the user's
+  iTerm and the phone take the size in turn, each on its next keystroke. Grouped sessions
+  (`new-session -t`) do **not** give each client its own; a group shares the windows themselves.
+  Neither front end detaches the other (`docs/macos-vs-ios.md` D29). Selecting a live session in
+  the sidebar attaches it, deliberately — a parked one is only revived by a button.
 - **The `.exec` backend's `command` is run by a shell, so every interpolated value needs
   quoting.** The surface spawns `login -flp <user> /bin/bash --noprofile --norc -c exec -l
   <command>`, so an unquoted tmux session name carrying `;` or `$(…)` executes. Proven both ways: a
