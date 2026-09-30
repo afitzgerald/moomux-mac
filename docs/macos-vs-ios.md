@@ -201,7 +201,7 @@ The phone builds a new one per Connect. So the `TerminalController` lives in a `
 | Connect deadline | none needed; a unix socket fails fast | 5s non-blocking connect |
 | Dead peer | EOF | keepalive, ~30s to `ETIMEDOUT` |
 | Switch cores | relaunch with another `--socket` | Disconnect in the ⋯ menu |
-| Lifecycle hooks | none | schedules background refresh on `.background`; nothing on return (§M 1) |
+| Lifecycle hooks | none | schedules background refresh on `.background`; reconnects on leaving it (D51) |
 
 **D20. TCP over the tailnet, with no pairing, token or TLS.** WireGuard provides encryption and
 machine identity, and the core authorizes each peer by `tailscale whois --json` against its own
@@ -236,6 +236,24 @@ forever. `Watch` and `Attach` are newline-terminated instead, because they keep 
 into 65535 and report "cannot connect" pointing at the wrong thing. The port is read with
 `integer(forKey:)`, because a launch-argument value arrives as a string and `as? Int` silently
 takes the default. *Where:* `EndpointStore`.
+
+**D51. Leaving the background reconnects the list.** iOS suspends the app and often reclaims its
+sockets while it is away, but a half-open stream says nothing until keepalive gives up, about
+30s later. All that time the list showed the last snapshot and the badge said connected. So
+`AppState.resume` restarts the watch stream on a fresh connection and pulls the config, which
+answers at once with a whole snapshot, or with the reason the core is gone.
+- **When it fires.** On *leaving* `.background`, not on reaching `.active`: a system alert
+  (the notification prompt, a permission sheet) can hold the app at `.inactive` indefinitely. A
+  pulled-down Notification Centre never passes through the background, so it does not reconnect.
+- **Cost.** One reconnect when the old stream was healthy after all. The list is replaced only
+  when the new snapshot lands, so nothing flickers. A cancelled loop exits before writing any
+  state, so it cannot undo the new loop's `streaming`.
+- **Measured** in the simulator: returning replaced the watch connection (a new client port, same
+  app pid), and a session renamed in the store while the app was away showed its new name on
+  return.
+
+The pane's own connection has the same half-open window (D28 notices only when a read fails).
+*Where:* `AppState.resume`, `MoomuxiOSApp`'s `scenePhase` handler.
 
 ---
 
@@ -287,7 +305,7 @@ that can resize a live attach puts a token in that one response line (`"attach":
 **D25. The Mac requires the core on the same machine; the phone does not.** The Mac's attach
 execs a local `tmux` found through `ToolPath` ("Can't find tmux" is a real state in its UI), and
 its client is constructed unix-only. The `Endpoint` enum would carry TCP, but attach would not
-follow, so a Mac against a remote core is not a supported shape. **Open:** §M 4. *Where:*
+follow, so a Mac against a remote core is not a supported shape. **Open:** §M 3. *Where:*
 `SessionTerminal`, `MoomuxApp.bootstrap`.
 
 **D26. Mac panes are pooled; phone panes are single-use.**
@@ -385,7 +403,7 @@ be saved. So the phone's `LinkTapView` owns pinch instead. It switches the packa
 off and steps the live surface with ghostty's `increase_font_size`/`decrease_font_size`, 6–24pt.
 A menu change goes through the same call, so the surface is never rebuilt; the new width reaches
 the pty as an ordinary resize (D27). *Where:* `AppState.paneConfig`, `TerminalFontSize`,
-`LinkTapView.setFontSize`. **Open:** §M 3.
+`LinkTapView.setFontSize`. **Open:** §M 2.
 
 **D31. Focus: automatic on the Mac, tap-to-type on the phone.** The Mac takes first responder in
 `viewDidMoveToWindow`, because SwiftUI leaves it on the sidebar. The phone deliberately does not:
@@ -696,19 +714,18 @@ Differences that do not hold up from the user's side, whether or not the code gi
 them. A documented reason is not the same as a good experience. Settle one by promoting it to a
 decision above (or changing the code), and remove it from here.
 
-1. **Coming back to the app can show a stale list as connected** (§D). Nothing runs on returning
-   to the foreground. After a long suspension the `Watch` stream may be dead while the badge reads
-   connected, until keepalive notices (~30s) and the loop reconnects. That window has not been
-   checked by hand. A reconnect on returning to the foreground would close it.
-   `rg -n 'scenePhase' Sources/MoomuxiOS   # only the background-refresh schedule`
-2. **`autoFocusNewSession` has no phone control** (D47). The phone's navigation to a new session
+1. **`autoFocusNewSession` has no phone control** (D47). The phone's navigation to a new session
    also depends on it, so turning it off on the Mac has no phone equivalent. This is minor.
-3. **The phone's panes do not look like the desktop's** (D30). The core could serve the
-   concatenated Ghostty config the way `AppState.ghosttyConfigPaths` builds it, with no settings
-   UI. A fonts-and-themes pane on the phone stays a no.
-4. **A Mac against a remote core** (D25). The transport exists and attach does not. Uploading
-   attachments (D37) already works that way. Support it or refuse it, and if refusing, say so in
-   the UI rather than letting `--socket` imply it.
+2. **The phone's panes do not look like the desktop's** (D30). **Wanted.** The core would
+   concatenate the Mac's Ghostty config files the way `AppState.ghosttyConfigPaths` does and serve
+   the text, and the phone would load it in place of its built-in palette. No settings UI; a
+   fonts-and-themes pane on the phone stays a no. Needs a core method, so it is two repos' work.
+3. **A Mac against a remote core** (D25). **Direction: local when possible, remote otherwise.**
+   The Mac keeps its `.exec` attach whenever the core is on this machine, and uses the phone's
+   `Attach` stream only when it is not. Local is the cheaper path: the pty and tmux client run
+   here, bytes never cross the socket, the terminal gets `xterm-ghostty` with its terminfo, and
+   there is no keepalive, reconnect or settle debounce to get wrong. Uploading attachments (D37)
+   already works remotely. What is left to decide is the detection rule.
    `rg -n 'MoomuxClient\(' Sources/Moomux   # socketPath only`
 
 ## N. Known drift

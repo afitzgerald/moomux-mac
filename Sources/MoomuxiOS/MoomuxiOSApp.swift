@@ -42,9 +42,16 @@ struct MoomuxiOSApp: App {
                 WhatsNewSheet(releases: unseenNotes ?? [])
             }
         }
-        // iOS only honours a refresh request from an app on its way out.
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase) { old, phase in
+            // iOS only honours a refresh request from an app on its way out.
             if phase == .background { BackgroundRefresh.schedule() }
+            // Leaving the background, not merely a pulled-down Notification
+            // Centre (`active` → `inactive` → `active`): the stream may be
+            // dead without knowing it yet. See `AppState.resume`. On the way
+            // out rather than on reaching `active`, which a system alert over
+            // the app — the notification prompt, a permission sheet — can
+            // hold off indefinitely.
+            if old == .background, phase != .background { app?.resume() }
         }
     }
 
