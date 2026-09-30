@@ -1733,7 +1733,15 @@ public final class AppState {
                 }
                 if !hint.isEmpty { sessionHints[session.id] = hint }
                 await refresh()
-                if autoFocusNewSession && focus() { selectedSessionID = session.id }
+                // Always on the phone, by decision: there is no control for it
+                // there, and a Mac's choice is not the phone's (it is per
+                // device). `focus` still keeps a jump from detaching a pane.
+                #if os(iOS)
+                let autoFocus = true
+                #else
+                let autoFocus = autoFocusNewSession
+                #endif
+                if autoFocus && focus() { selectedSessionID = session.id }
             } catch {
                 failed("Creating session", error)
             }
