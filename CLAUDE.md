@@ -48,8 +48,10 @@ every other worktree too.
   that is now a choice rather than a constraint.
 - SwiftUI, AppKit, `@Observable`, `MenuBarExtra`, `Settings`, UserNotifications and Network all
   compile fine. So does libghostty, as a prebuilt binary target.
-- **The macOS 27 SDK cannot build this package, so the Makefile pins `SDKROOT` to `MacOSX26.sdk`.**
-  CommandLineTools symlinks `MacOSX.sdk` at the 27.0 SDK while the installed swift-frontend still
+- **With Xcode selected, the build uses Xcode's SDK (macOS 27 on Xcode 27); with CommandLineTools
+  selected, the Makefile pins `SDKROOT` to `MacOSX26.sdk`, because CommandLineTools' 27 SDK cannot
+  build this package.** Xcode ships the macro plugin below, so the pin only applies when
+  `xcode-select -p` names CommandLineTools. CommandLineTools symlinks `MacOSX.sdk` at the 27.0 SDK while the installed swift-frontend still
   targets `macosx26.0`, and that SDK's `SwiftUICore` declares a `State()` *macro* beside the
   property wrapper — `#externalMacro(module: "SwiftUIMacros")`, a plugin that ships with Xcode.
   The only plugins in `/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/` are
@@ -68,6 +70,13 @@ SwiftUICore.framework/Modules/SwiftUICore.swiftmodule/arm64e-apple-macos.swiftin
 
   A bare `swift build` does **not** get the pin — the `make` targets export it, so pass
   `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk` by hand or it fails the same way.
+
+  **A bare `swift build` also stamps the wrong SDK version into the binary.** SwiftPM writes the
+  deployment target (`sdk 14.0` in `otool -l`'s `LC_BUILD_VERSION`) instead of the SDK it
+  compiled against, and AppKit runs anything linked against a pre-26 SDK in compatibility mode:
+  old controls, no Liquid Glass. The `make` targets pass the real version to the linker
+  (`MAC_SDK_FLAGS`, `-platform_version macos 14.0 <sdk>`), so use them for anything you look at.
+  The phone's builds stamp it correctly on their own (`swiftc` and the Xcode app target).
   Two `ld: warning: search path '/Library/Developer/CommandLineTools/Developer/...' not found`
   lines come with it: toolchain directories that no longer exist. Linker warnings from the
   toolchain, not compiler warnings from this package — `make warnings` is still the zero.
