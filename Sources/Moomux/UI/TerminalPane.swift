@@ -2,6 +2,7 @@ import AppKit
 import GhosttyTerminal
 import SwiftUI
 import MoomuxKit
+import UniformTypeIdentifiers
 
 /// A live tmux client, hosted in the app.
 ///
@@ -32,11 +33,16 @@ struct TerminalPane: NSViewRepresentable {
     /// The tmux session name to attach to, e.g. `moomux-macos-1a2b`.
     let tmuxSession: String
     let pool: AppState
+    /// Set when the core is on another machine: the pane is fed by the core's
+    /// `Attach` stream instead of a local `tmux attach` (`AttachRoute`).
+    var remote: RemoteAttach?
     /// Called when the surface closes — see `Coordinator.terminalDidClose`.
     var onExit: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onExit: onExit) { [pool, sessionID] link in pool.openPaneLink(link, in: sessionID) }
+        Coordinator(onExit: onExit, remote: remote) { [pool, sessionID] link in
+            pool.openPaneLink(link, in: sessionID)
+        }
     }
 
     /// A terminal nobody can type into is not a terminal, and SwiftUI leaves
@@ -154,7 +160,18 @@ struct TerminalPane: NSViewRepresentable {
             sender.moomux_hasFilePaths ? .copy : []
         }
 
+        /// Set on a remote pane: a local path means nothing to an agent on
+        /// another machine, so a drop is uploaded (`SaveFile`) and the core's
+        /// path is pasted instead — the phone's attach, and D38's "upload the
+        /// day the Mac talks to a remote core".
+        var uploadDrop: (([URL]) -> Void)?
+
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            if let uploadDrop {
+                guard let urls = sender.moomux_fileURLsForDrop else { return false }
+                uploadDrop(urls)
+                return true
+            }
             guard let text = sender.moomux_filePathsForDrop else { return false }
             // The text path, not keystrokes: a program with bracketed paste on
             // sees a paste, so a path is never mistaken for typed control keys.
@@ -182,6 +199,33 @@ struct TerminalPane: NSViewRepresentable {
         view.delegate = delegate
         pool.plainDelegates[sessionID] = delegate
         view.controller = pool.terminalController
+        if let remote {
+            view.uploadDrop = { [weak view, pool] urls in
+                Task { @MainActor in
+                    for url in urls {
+                        do {
+                            let data = try await Attachments.read(url)
+                            let path = try await pool.attach(name: url.lastPathComponent,
+                                                             type: UTType(filenameExtension: url.pathExtension),
+                                                             data: data)
+                            // The core names uploads with nothing that needs
+                            // quoting; a paste keeps its place among keys.
+                            _ = view?.paste(text: path + " ")
+                        } catch {
+                            pool.actionError = error.localizedDescription
+                        }
+                    }
+                }
+            }
+            // The in-memory backend: no process, no pty here, nothing to
+            // quote — `RemoteAttach` is the other end of the surface.
+            view.configuration = TerminalSurfaceOptions(
+                backend: .inMemory(remote.session),
+                resizeThrottleMilliseconds: 96
+            )
+            pool.plainPanes[sessionID] = view
+            return view
+        }
         // **Quoting is load-bearing.** This string is run by a shell — the
         // surface spawns `login -flp <user> /bin/bash --noprofile --norc -c
         // exec -l <command>` — so an unquoted session name carrying `;` or
@@ -318,13 +362,23 @@ struct TerminalPane: NSViewRepresentable {
 
     final class Coordinator: NSObject, TerminalSurfaceCloseDelegate,
                              TerminalSurfaceOpenURLDelegate,
+                             TerminalSurfaceResizeDelegate,
                              TerminalSurfaceClipboardConfirmationDelegate {
         var onExit: () -> Void
         private let openLink: (String) -> Void
+        private let remote: RemoteAttach?
 
-        init(onExit: @escaping () -> Void, openLink: @escaping (String) -> Void) {
+        init(onExit: @escaping () -> Void, remote: RemoteAttach?, openLink: @escaping (String) -> Void) {
             self.onExit = onExit
+            self.remote = remote
             self.openLink = openLink
+        }
+
+        /// A remote pane's size is its attach's: the settle, the resize in
+        /// place and the reconnects are `RemoteAttach`'s. A local pane's pty
+        /// follows the surface by itself, so this does nothing there.
+        func terminalDidResize(columns: Int, rows: Int) {
+            remote?.terminalDidResize(columns: columns, rows: rows)
         }
 
         /// The surface closed: a key pressed over "Process exited", after the
@@ -367,6 +421,12 @@ struct TerminalPane: NSViewRepresentable {
 extension NSDraggingInfo {
     var moomux_hasFilePaths: Bool {
         draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: nil)
+    }
+
+    var moomux_fileURLsForDrop: [URL]? {
+        guard let urls = draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil)
+                as? [URL], !urls.isEmpty else { return nil }
+        return urls
     }
 
     var moomux_filePathsForDrop: String? {
@@ -425,7 +485,13 @@ struct SessionTerminal: View {
     var onDetach: () -> Void
 
     var body: some View {
-        if let tmux = ToolPath.find("tmux") {
+        if let remote = app.remoteAttaches[session.id] {
+            TerminalPane(executable: "", sessionID: session.id,
+                         tmuxSession: session.tmuxSession, pool: app, remote: remote) {
+                onDetach()
+            }
+            .id(session.id)
+        } else if let tmux = ToolPath.find("tmux") {
             TerminalPane(executable: tmux, sessionID: session.id,
                         tmuxSession: session.tmuxSession, pool: app) {
                 onDetach()

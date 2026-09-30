@@ -23,6 +23,7 @@ enum SelfTest {
         StreamSocket.demo()
         AttachChannel.demo()
         AttachSizing.demo()
+        AttachRoute.demo()
         Reattach.demo()
         ToolPath.demo()
         Layout.demo()

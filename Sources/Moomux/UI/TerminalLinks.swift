@@ -212,6 +212,11 @@ extension AppState {
     /// rules as the phone's viewer; the answer is opened here, locally.
     /// Only the file opens, not the line: `NSWorkspace` has no way to say one.
     public func openPaneLink(_ link: String, in id: Session.ID) {
+        // A remote pane's paths name the core's disk: fetch the file and open
+        // the local copy, as the phone does with Quick Look.
+        if remoteAttaches[id] != nil, WebLink.url(link) == nil, let path = WebLink.filePath(link) {
+            return openRemoteFile(path, in: id)
+        }
         if TerminalLink.resolve(link) != nil {
             if !openInMergeRight(link) { TerminalLink.open(link) }
             return
@@ -222,6 +227,29 @@ extension AppState {
             do {
                 let resolved = try await Task.detached { try client.resolveFile(id: id, path: path) }.value
                 TerminalLink.open(resolved)
+            } catch {
+                actionError = error.localizedDescription
+            }
+        }
+    }
+
+    /// `ReadFile`, written under the temp directory with a name the system can
+    /// open (`PreviewFile`), then handed to the default app. Left there rather
+    /// than cleaned up: the app that opened it may still be reading it, and
+    /// the system clears the temp directory itself.
+    private func openRemoteFile(_ path: String, in id: Session.ID) {
+        let client = client
+        Task {
+            do {
+                let url = try await Task.detached {
+                    let (resolved, data) = try client.readFile(id: id, path: path)
+                    let dir = PreviewFile.root.appending(path: UUID().uuidString)
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let url = dir.appending(path: PreviewFile.name(for: resolved, data: data))
+                    try data.write(to: url)
+                    return url
+                }.value
+                NSWorkspace.shared.open(url)
             } catch {
                 actionError = error.localizedDescription
             }
