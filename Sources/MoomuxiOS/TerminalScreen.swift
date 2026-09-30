@@ -64,6 +64,7 @@ struct TerminalScreen: View {
             // pinch would redraw the pane from nothing. The new width reaches
             // the pty through the ordinary resize path.
             .onChange(of: fontSize) { _, size in pane.view?.setFontSize(size) }
+            .onAppear { app.paneOnScreen = sessionID }
             // **Not** `.ignoresSafeArea(.bottom)`. The surface sizes its grid
             // to the view, so extending under the home indicator buys two more
             // rows that are drawn behind it — and tmux puts the status line
@@ -73,7 +74,10 @@ struct TerminalScreen: View {
             .quickLookPreview($preview)
             // Leaving the pane abandons its fetch, or a late refusal raises
             // "Couldn't do that" over whatever screen is next.
-            .onDisappear { fetch?.cancel() }
+            .onDisappear {
+                fetch?.cancel()
+                if app.paneOnScreen == sessionID { app.paneOnScreen = nil }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // The cow, saying the session's quip — the Mac's `CowQuip`,

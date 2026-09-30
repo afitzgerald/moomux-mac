@@ -53,6 +53,18 @@
 	<array>
 		<string>mergeright</string>
 	</array>
+	<!-- Background refresh: `BackgroundRefresh` in MoomuxiOSApp.swift polls the
+	     core for sessions that started waiting while the app was suspended.
+	     Both keys are required — without the mode the task never runs, and
+	     an identifier not listed here makes `register` throw at launch. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>app.moomux.Moomux.refresh</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>

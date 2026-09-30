@@ -1,3 +1,4 @@
+import BackgroundTasks
 import MoomuxKit
 import SwiftUI
 
@@ -14,6 +15,14 @@ struct MoomuxiOSApp: App {
     @State private var app: AppState?
     /// The release notes to show at launch; see `WhatsNew.takeUnseen`.
     @State private var unseenNotes: [WhatsNew.Release]?
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// In `init`, not a view's `.task`: `BGTaskScheduler` refuses a
+    /// registration made after launch finishes, and a late one fails silently
+    /// — refresh then never runs, which looks exactly like iOS throttling it.
+    init() {
+        BackgroundRefresh.register()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -33,12 +42,65 @@ struct MoomuxiOSApp: App {
                 WhatsNewSheet(releases: unseenNotes ?? [])
             }
         }
+        // iOS only honours a refresh request from an app on its way out.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { BackgroundRefresh.schedule() }
+        }
     }
 
     private func connect() {
         let state = AppState(client: MoomuxClient(endpoint: endpoint.resolved))
         state.start()
         app = state
+        BackgroundRefresh.app = state
+    }
+}
+
+// MARK: - Background refresh
+
+/// Banners and the badge while the phone is in a pocket.
+///
+/// iOS suspends the app and holds no connection for it, so the `Watch` stream
+/// stops and nothing notices a session starting to wait. A `BGAppRefreshTask`
+/// wakes the app now and then — at the system's discretion, never sooner than
+/// the 15 minutes asked for and often much later — and `AppState.pollOnce`
+/// takes one snapshot through the same path the stream uses.
+///
+/// Ceiling: this is polling, not push. A banner can be late by however long
+/// iOS waits, and the badge is as fresh as the last refresh it granted. Real
+/// delivery means APNs and a relay, which is out of scope (docs/macos-vs-ios.md D5).
+enum BackgroundRefresh {
+    static let identifier = "app.moomux.Moomux.refresh"
+
+    /// The connected store, if the app was suspended with one — the usual
+    /// case, and the one that can tell a new wait from an old one. nil after
+    /// a cold background launch, where a throwaway store only sets the badge.
+    @MainActor static weak var app: AppState?
+
+    static func register() {
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { task in
+            // Rescheduled first, so a refresh that fails or is cut off cannot
+            // end the chain.
+            schedule()
+            let work = Task { @MainActor in
+                let store = app ?? cold()
+                let ok = (try? await store?.pollOnce()) != nil
+                task.setTaskCompleted(success: ok)
+            }
+            task.expirationHandler = { work.cancel() }
+        }
+    }
+
+    static func schedule() {
+        let request = BGAppRefreshTaskRequest(identifier: identifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        try? BGTaskScheduler.shared.submit(request)
+    }
+
+    @MainActor private static func cold() -> AppState? {
+        let endpoint = EndpointStore()
+        guard endpoint.remembered else { return nil }
+        return AppState(client: MoomuxClient(endpoint: endpoint.resolved))
     }
 }
 
