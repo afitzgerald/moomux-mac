@@ -419,6 +419,12 @@ $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.p
 	@# Release notes, as for the Mac bundle: only when WHATS_NEW names them.
 	rm -f $(IOS_APP)/WhatsNew.md
 	if [ -n "$(WHATS_NEW)" ]; then cp "$(WHATS_NEW)" $(IOS_APP)/WhatsNew.md; fi
+	@# The vendored ghostty themes, for a config the core serves (`GhosttyConfig`):
+	@# the phone rewrites `theme = <name>` to a path in here, since its resource
+	@# bundle ships none. The Xcode path gets the same folder as a resource.
+	@# Not a prerequisite: theme file names carry spaces, which make cannot list.
+	rm -rf $(IOS_APP)/ghostty-themes
+	cp -R Resources/ghostty-themes $(IOS_APP)/ghostty-themes
 	codesign --force --sign - $(IOS_APP)
 	@touch $(IOS_APP)
 

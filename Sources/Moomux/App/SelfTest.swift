@@ -38,6 +38,7 @@ enum SelfTest {
         String.shellQuotedDemo()
         TerminalPane.commandDemo()
         AppState.ghosttyConfigDemo()
+        AppState.localizedThemesDemo()
         Theme.demo()
         SessionTheme.demo()
         MergeRight.demo()

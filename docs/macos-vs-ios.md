@@ -328,7 +328,7 @@ that can resize a live attach puts a token in that one response line (`"attach":
   the core with `TERM=xterm-256color`, where a local attach would be `xterm-ghostty`. The pane
   drew the session's output.
 
-There's no Settings field for the core address yet (§M 3). *Where:* `AttachRoute`,
+There's no Settings field for the core address yet (§M 2). *Where:* `AttachRoute`,
 `AppState.attach`, `RemoteAttach`, `SessionTerminal`, `MoomuxApp.client()`.
 
 **D26. Mac panes are pooled; phone panes are single-use.**
@@ -405,15 +405,29 @@ the client least able to absorb it. Nothing is set. What still holds:
 - **Output already printed into a shell pane stays hard-wrapped at the narrow width.** A
   full-screen agent TUI redraws on SIGWINCH and recovers completely.
 
-**D30. No terminal settings on the Mac; a font-size picker on the phone.**
+**D30. Both apps draw with the user's Ghostty config; the phone adds a text size.**
 - **Mac.** It reads the user's four Ghostty config files (`config`, `config.ghostty`, under XDG
   and then `com.mitchellh.ghostty`), so its panes look like their terminal. A second place to
   set the same values would conflict with those files.
-- **Phone.** It has no such files, so there is nothing to conflict with. It gets:
-  - the built-in dark fallback
-  - `window-padding-x = 8`, `window-padding-y = 6` and `adjust-cell-height = 14%` (a grid drawn
-    to the edge of a phone reads as broken, and default leading is too tight at arm's length)
-  - Text Size in the pane's ⋯ menu, 8–16pt, default 11pt, plus pinch
+- **Phone.** It has no such files, so it asks the core for them. `GhosttyConfig`
+  (erickgnclvs/moomux#311) serves the same files concatenated in the same order, read on the
+  core's machine, with no settings screen on the phone. On top of it the phone adds:
+  - `window-padding-x = 8`, `window-padding-y = 6` and `adjust-cell-height = 14%`, appended after
+    the served config (a grid drawn to the edge of a phone reads as broken, and default leading is
+    too tight at arm's length). A served padding still wins where it is set, since ghostty keeps
+    the last value.
+  - Text Size in the pane's ⋯ menu, 8–16pt, default 11pt, plus pinch. This wins over a served
+    `font-size`, since a desktop's size is not a phone's.
+- **Themes on the phone.** Its resource bundle ships none, so `theme = <name>` is rewritten to
+  the absolute path of the app's own copy of that vendored theme (`AppState.localizedThemes`,
+  asserted in `--selftest`). A name not vendored is dropped by narrowing, as on the Mac.
+  `make ios` and the Xcode target both put `Resources/ghostty-themes` in the bundle.
+- **No config, or an older core.** The built-in dark palette, as before. A config that lands
+  after a pane is already open rebuilds that pane once (`paneConfigGeneration`).
+- **Measured** against a core built from the core's `main`, serving a scratch config with
+  `theme = Dracula`, `font-size = 17` and `window-padding-x = 30`. The phone's pane drew
+  Dracula's palette and the wide padding, and tmux saw 43 columns, the phone's 11pt Text Size
+  rather than the served 17.
 
 The font size is a control and not a constant because, while attached, the font decides the
 session's width: 8pt gives about 62 columns and 11pt about 43, and an agent TUI hard-wraps code
@@ -426,7 +440,7 @@ be saved. So the phone's `LinkTapView` owns pinch instead. It switches the packa
 off and steps the live surface with ghostty's `increase_font_size`/`decrease_font_size`, 6–24pt.
 A menu change goes through the same call, so the surface is never rebuilt; the new width reaches
 the pty as an ordinary resize (D27). *Where:* `AppState.paneConfig`, `TerminalFontSize`,
-`LinkTapView.setFontSize`. **Open:** §M 2.
+`LinkTapView.setFontSize`.
 
 **D31. Focus: automatic on the Mac, tap-to-type on the phone.** The Mac takes first responder in
 `viewDidMoveToWindow`, because SwiftUI leaves it on the sidebar. The phone deliberately does not:
@@ -739,11 +753,7 @@ decision above (or changing the code), and remove it from here.
 
 1. **`autoFocusNewSession` has no phone control** (D47). The phone's navigation to a new session
    also depends on it, so turning it off on the Mac has no phone equivalent. This is minor.
-2. **The phone's panes do not look like the desktop's** (D30). **Wanted.** The core would
-   concatenate the Mac's Ghostty config files the way `AppState.ghosttyConfigPaths` does and serve
-   the text, and the phone would load it in place of its built-in palette. No settings UI; a
-   fonts-and-themes pane on the phone stays a no. Needs a core method, so it is two repos' work.
-3. **The Mac has no UI for choosing a remote core** (D25). It is `defaults write
+2. **The Mac has no UI for choosing a remote core** (D25). It is `defaults write
    app.moomux.Moomux coreHost <host>` (plus `corePort`) or a launch argument, then a relaunch,
    because the Mac builds one store per process. A field in Settings → General, applied on
    relaunch, is the likely shape; the phone's connect screen is the model.
