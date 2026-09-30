@@ -22,8 +22,9 @@ day-to-day working notes (build commands, screenshot workflow, tmux control-mode
 
 ## Building
 
-There is no Xcode dependency — this is a plain SwiftPM package built and bundled by the Makefile
-(see `CLAUDE.md` for why, and why there is no `.xcodeproj`).
+The Mac app has no Xcode dependency — it is a plain SwiftPM package built and bundled by the
+Makefile (see `CLAUDE.md` for why). `Moomux.xcodeproj` exists only to archive the iPhone app for
+TestFlight (`docs/macos-vs-ios.md` D12).
 
 ```sh
 make build      # swift build -c release

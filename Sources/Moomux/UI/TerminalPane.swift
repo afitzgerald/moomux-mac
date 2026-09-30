@@ -14,12 +14,12 @@ import MoomuxKit
 /// per-pane titles. That buys nothing until there is UI to put a layout into.
 ///
 /// The ceiling that does bite: **every client on a session shares one window
-/// size**, so while this pane is attached, the user's iTerm window and phone
-/// are letterboxed down to whatever this view happens to be. Measured, not
-/// assumed — grouped sessions (`new-session -t`) do not fix it, because a group
-/// shares the windows themselves, and the size does not spring back when the
-/// larger client is used again. It only recovers on detach. That is why
-/// attaching is an explicit action rather than a consequence of selecting a row.
+/// size**. Grouped sessions (`new-session -t`) do not fix it, because a group
+/// shares the windows themselves. Under tmux's default `window-size latest`
+/// the window follows whichever client typed last, so a phone attached beside
+/// this pane takes the size while it is being used and gives it back on the
+/// next keystroke here. Neither front end detaches the other
+/// (docs/macos-vs-ios.md D29).
 ///
 /// The terminal is libghostty: `AppTerminalView` owns the pty, the VT emulator
 /// and a Metal renderer, so `command` is the whole of what this file asks for.
@@ -248,14 +248,15 @@ struct TerminalPane: NSViewRepresentable {
     /// `tmux attach`, inside a loop that survives being kicked. tmux and the
     /// session ride as `$1`/`$2`, so neither is quoted into the script twice.
     ///
-    /// A kicked client must not leave a dead pane. The phone's `Attach` runs
-    /// `tmux attach -d` core-side (so a phone does not shrink the desktop's
-    /// window), which detaches this client too; ghostty then shows "Process
-    /// exited" and — `SHOW_CHILD_EXITED` being unhandled, see
-    /// `waitAfterCommand` — nothing here hears about it. So while the session
-    /// lives the pane offers a key to reattach, and `q` to close. Not
-    /// automatic: reattaching at once takes the size straight back from the
-    /// phone that just attached. Each line is a measured failure:
+    /// A kicked client must not leave a dead pane. Something else can detach
+    /// this one — a `tmux attach -d` from another terminal, prefix-D's
+    /// client chooser, or a core from before the phone stopped attaching with
+    /// `-d` — and ghostty then shows "Process exited" while, with
+    /// `SHOW_CHILD_EXITED` unhandled (see `waitAfterCommand`), nothing here
+    /// hears about it. So while the session lives the pane offers a key to
+    /// reattach, and `q` to close. Not automatic: whoever kicked it asked for
+    /// the session, and reattaching at once would take it straight back. Each
+    /// line is a measured failure:
     ///
     /// - `=` makes both targets exact. tmux otherwise falls back to a prefix
     ///   match, so with `cmtest` killed and `cmtest2` alive the loop would go
