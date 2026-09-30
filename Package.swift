@@ -50,7 +50,7 @@ let package = Package(
         // screen — MergeRight's engine, extracted so both apps share it.
         // `exact:` for libghostty's reason: pre-1.0, so a minor can break the
         // API, and a bump here is a deliberate act with a screenshot behind it.
-        .package(url: "https://github.com/afitzgerald/DiffKit.git", exact: "0.1.0"),
+        .package(url: "https://github.com/afitzgerald/DiffKit.git", .upToNextMinor(from: "0.2.0")),
     ],
     targets: [
         // Everything platform-independent: the wire types, the client, the

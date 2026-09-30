@@ -86,21 +86,37 @@ struct ChangesScreen: View {
 }
 
 /// One file. Looked up by path in its own `body`, like every other route here,
-/// so a refresh on the list underneath redraws this too.
+/// so a refresh on the list underneath redraws this too. The route's path is only
+/// the seed: the stepper swaps the file in place rather than pushing another screen.
 struct FileDiffScreen: View {
     let app: AppState
     let sessionID: Session.ID
-    let path: String
+    @State private var selection: FileChange.ID?
+    /// Pressed on the last file: leaves the Changes list behind as well.
+    let finished: () -> Void
+
+    init(app: AppState, sessionID: Session.ID, path: String, finished: @escaping () -> Void) {
+        self.app = app
+        self.sessionID = sessionID
+        self.finished = finished
+        _selection = State(initialValue: path)
+    }
 
     var body: some View {
+        let path = selection ?? ""
         Group {
             if app.diffs[sessionID] == nil {
                 // Pushed without the list having loaded — a deep link. Measured:
                 // without this it read as "No longer changed" for a file that was.
                 ProgressView().controlSize(.small)
                     .task { await app.loadDiff(sessionID) }
-            } else if let file = app.diffs[sessionID]??.files.first(where: { $0.path == path }) {
+            } else if let diff = app.diffs[sessionID] ?? nil,
+                      let file = diff.files.first(where: { $0.id == path }) {
                 PatchView(file: file)
+                    .overlay(alignment: .bottomLeading) {
+                        PatchFileStepper(files: diff.files, selection: $selection).padding(12)
+                    }
+                    .onPatchFilesEnd(perform: finished)
             } else {
                 // The file went away on a refresh: committed and merged, or reverted.
                 ContentUnavailableView("No longer changed", systemImage: "checkmark.circle")

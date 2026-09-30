@@ -1,13 +1,13 @@
 {
-  "originHash" : "d236bf474abaae18082a9b403e15fc293c2aec1b12f3806b5a715ab02bdee1de",
+  "originHash" : "ed3e4ddce517d4b098ba994379a835582e535fc51cc8c995766a22b2e544f27b",
   "pins" : [
     {
       "identity" : "diffkit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/afitzgerald/DiffKit.git",
       "state" : {
-        "revision" : "8c3ca32d2c2eb6755263b221280172103ea95203",
-        "version" : "0.1.0"
+        "revision" : "bd6888b72256b8ee8c1dff696e46ff9bc1d910bf",
+        "version" : "0.2.0"
       }
     },
     {
