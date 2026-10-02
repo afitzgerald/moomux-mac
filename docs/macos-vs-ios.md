@@ -459,6 +459,14 @@ a position itself.
 - **Open-URL.** Every surface installs a delegate, because without one ghostty core opens links
   itself and bypasses the allowlist.
 
+**D52. Selecting text: in the pane on the Mac, in a sheet on the phone.** The Mac drags a
+selection in the surface and copies with ⌘C. On the phone a finger drag is a scroll, and tmux owns
+the mouse, so a long-press opens `SelectionSheet` instead: the visible screen as text in a
+read-only `UITextView`, the word under the finger pre-selected, iOS's own handles and Copy. The
+package's long-press recognizer refuses to begin unless the delegate conforms to
+`TerminalSurfaceTextSelectionRequestDelegate`, which is why there was no selection at all before.
+Known limit: the visible screen only, not scrollback.
+
 ---
 
 ## F. Links and files
