@@ -87,14 +87,15 @@ struct TerminalScreen: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // The cow, saying the session's quip — the Mac's `CowQuip`,
+                // The cow, saying the session's quip — the shared `CowQuip`,
                 // and its reasoning: the name and state are what you picked
                 // the session by and already know, while the quip is the
                 // core's live answer to "what is it doing". It re-renders on
                 // every snapshot.
                 ToolbarItem(placement: .principal) {
                     if let session = app.session(id: sessionID) {
-                        CowQuip(saying: app.quip(for: session) ?? app.label(for: session))
+                        CowQuip(saying: app.quip(for: session) ?? app.label(for: session),
+                                mark: CowMark.image, compact: true)
                     }
                 }
                 // The diff is one tap because "what has it changed?" is the
@@ -529,35 +530,13 @@ private struct SelectableTextView: UIViewRepresentable {
 
 // MARK: - The cow
 
-/// The cow mark plus its quip in a speech bubble, standing in for a title.
-///
-/// The bubble is the Kit's `SpeechBubble` so it matches the Mac exactly. The
-/// mark cannot be: the Mac loads `moomux-terminal-nose.svg` straight from its
-/// bundle and `UIImage` does not read SVG, so `make ios` rasterizes the same
-/// file to a PNG (`Scripts/rasterize.swift`) rather than a second asset being
-/// checked in to drift.
-struct CowQuip: View {
-    let saying: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if let cow = CowQuip.mark {
-                Image(uiImage: cow).resizable().scaledToFit().frame(width: 22, height: 22)
-            }
-            Text(saying)
-                .font(.footnote)
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 6 + 6)
-                .padding(.trailing, 9)
-                .padding(.vertical, 3)
-                .background(SpeechBubble().fill(Color.secondary.opacity(0.15)))
-        }
-    }
-
-    /// Decoded once: the image never changes and a toolbar redraws often.
-    static let mark: UIImage? = Bundle.main
+/// The cow mark for `CowQuip`. `UIImage` cannot read the Mac's SVG, so
+/// `make ios` rasterizes the same file to a PNG rather than a second asset
+/// being checked in to drift. Decoded once: a toolbar redraws often.
+enum CowMark {
+    static let image: Image? = Bundle.main
         .url(forResource: "moomux-terminal-nose", withExtension: "png")
         .flatMap { try? Data(contentsOf: $0) }
         .flatMap(UIImage.init(data:))
+        .map(Image.init(uiImage:))
 }

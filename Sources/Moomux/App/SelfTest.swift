@@ -47,6 +47,7 @@ enum SelfTest {
         GhosttyResourceBundle.demo()
         PromptDrop.demo()
         Attachments.demo()
+        SessionBadges<Never>.demo()
 
         print("selftest: ok")
         exit(0)

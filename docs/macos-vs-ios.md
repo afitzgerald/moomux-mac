@@ -200,7 +200,7 @@ The phone builds a new one per Connect. So the `TerminalController` lives in a `
 | Auth | file permissions | the core runs `tailscale whois` on the peer |
 | Connect deadline | none needed; a unix socket fails fast | 5s non-blocking connect |
 | Dead peer | EOF | keepalive, ~30s to `ETIMEDOUT` |
-| Switch cores | relaunch with another `--socket`, or `coreHost`/`corePort` (D25) | Disconnect in the ⋯ menu |
+| Switch cores | Settings → General → Core, or `--socket`; applies on relaunch (D25) | Disconnect in the ⋯ menu |
 | Lifecycle hooks | none | schedules background refresh on `.background`; reconnects on leaving it (D51) |
 
 **D20. TCP over the tailnet, with no pairing, token or TLS.** WireGuard provides encryption and
@@ -328,8 +328,11 @@ that can resize a live attach puts a token in that one response line (`"attach":
   the core with `TERM=xterm-256color`, where a local attach would be `xterm-ghostty`. The pane
   drew the session's output.
 
-There's no Settings field for the core address yet (§M 1). *Where:* `AttachRoute`,
-`AppState.attach`, `RemoteAttach`, `SessionTerminal`, `MoomuxApp.client()`.
+Settings → General → Core sets the address (host and port), the same keys `defaults write` does,
+and shows which core this window is using. It applies on relaunch, because the Mac builds one
+store per process; the field is there with no core connected, since an unreachable core is when
+you need it. *Where:* `AttachRoute`, `AppState.attach`, `RemoteAttach`, `SessionTerminal`,
+`MoomuxApp.client()`, `CoreSection`.
 
 **D26. Mac panes are pooled; phone panes are single-use.**
 - **Mac.** `plainPanes`/`plainDelegates` keep each attached session's surface and tmux client
@@ -734,8 +737,11 @@ basics):
 
 These look like they could differ. Here is why they do not:
 
-- **State colours and badges** come from the core's served palette through `SessionTheme`, so the
-  rows agree by construction. The badge *views* are two copies (§N 2).
+- **State colours and badges** come from the core's served palette through `SessionTheme`, and
+  the badge row itself is one Kit view (`SessionBadges`), so the rows agree by construction. Only
+  how a tag is drawn differs: a clickable link on the Mac, a plain glyph on the phone, where the
+  row's own tap attaches. The cow-and-quip title is one Kit view too (`CowQuip`); each app loads
+  the mark image its own way and the phone's is the compact size.
 - **Folder semantics** are Kit logic: a global namespace, `SetFolderCollapsed` everywhere, and
   loose-block vs subheader folding (`Layout`, `AppState.collapsedGroups`). Both lenses branch on
   `folder.isEmpty`. This became a rule after the phone drew the loose block and a subheader with
@@ -765,10 +771,7 @@ Differences that do not hold up from the user's side, whether or not the code gi
 them. A documented reason is not the same as a good experience. Settle one by promoting it to a
 decision above (or changing the code), and remove it from here.
 
-1. **The Mac has no UI for choosing a remote core** (D25). It is `defaults write
-   app.moomux.Moomux coreHost <host>` (plus `corePort`) or a launch argument, then a relaunch,
-   because the Mac builds one store per process. A field in Settings → General, applied on
-   relaunch, is the likely shape; the phone's connect screen is the model.
+None open right now.
 
 ## N. Known drift
 
@@ -777,9 +780,3 @@ Not questions, just things out of step. Fix them and remove them from here.
 1. **Background refresh has not been watched working.** It builds and registers, and `pollOnce`
    shares the foreground's `apply`, but a refresh only fires when iOS decides. In the simulator,
    the debugger's `_simulateLaunchForTaskWithIdentifier:` is the way to force one.
-2. **The badge row and the cow title are two copies.** Each copy keeps the order and look only by
-   comment.
-   `rg -n '"plusminus"|struct CowQuip' Sources   # one of each per app`
-3. **`CLAUDE.md` says Xcode is installed but not selected.** On this machine it is selected, which
-   changes whether its `#Preview`/XCTest and `SDKROOT` entries still apply.
-   `xcode-select -p   # /Applications/Xcode.app/Contents/Developer (2026-09-28)`
