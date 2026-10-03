@@ -28,31 +28,32 @@ arrow-key navigation, which a terminal's first responder always outranks.
 
 ## The environment decides more than you'd think
 
-**Xcode is installed but not selected** — `xcode-select -p` still says
-`/Library/Developer/CommandLineTools`, and everything here is built to work that way. Nothing in
-this repo needs Xcode; treat that as the standing arrangement rather than a limitation to route
-around, and if you genuinely need `xcodebuild` say so first, because switching it on
-(`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`) changes the toolchain under
-every other worktree too.
+**Xcode is selected on this machine** — `xcode-select -p` says
+`/Applications/Xcode.app/Contents/Developer` (Xcode 27). It was CommandLineTools for most of this
+app's life, and the build still works under either: nothing in the Mac build needs Xcode, and the
+Makefile handles the one difference (the SDK pin below). Check `xcode-select -p` before trusting
+anything here about the toolchain, and never switch it yourself (`sudo xcode-select -s …`): it
+changes the toolchain under every other worktree too.
 
-- `xcodebuild` errors out as things stand ("requires Xcode, but active developer directory
-  … is a command line tools instance"). `swift build` is the only build, and `make app` assembles
-  and signs the bundle by hand. The one `.xcodeproj` is `Moomux.xcodeproj`, an iOS-only target
-  that exists solely so `make testflight` can archive and upload (Xcode does the certificates and
-  profiles); those targets pass `DEVELOPER_DIR` themselves rather than needing Xcode selected.
-  Nothing else builds through it, and the Mac app stays out of it until it ships via TestFlight
-  too — on the same record, which is why the iPhone app's bundle id is `app.moomux.Moomux`.
-- **`#Preview` and XCTest/`Testing` compile only if Xcode is selected.** Both shipped as
-  hard "cannot be done" facts for most of this app's life, and the code still assumes neither
-  exists: there are no SwiftUI previews and no test target. See "the harness is `demo()`" below —
-  that is now a choice rather than a constraint.
+- `swift build` is the Mac build, and `make app` assembles and signs the bundle by hand.
+  `xcodebuild` works with Xcode selected, but nothing on the Mac goes through it. The one
+  `.xcodeproj` is `Moomux.xcodeproj`, an iOS-only target that exists so `make testflight` can
+  archive and upload (Xcode does the certificates and profiles); those targets pass `DEVELOPER_DIR`
+  themselves, so they work under CommandLineTools too. The Mac app stays out of it until it ships
+  via TestFlight — on the same record, which is why the iPhone app's bundle id is
+  `app.moomux.Moomux`.
+- **`#Preview` and XCTest/`Testing` need Xcode selected.** Both were hard "cannot be done" facts
+  under CommandLineTools, and the code still assumes neither exists: there are no SwiftUI previews
+  and no test target. See "the harness is `demo()`" below — that is now a choice rather than a
+  constraint, and adopting either would tie the build to Xcode being selected.
 - SwiftUI, AppKit, `@Observable`, `MenuBarExtra`, `Settings`, UserNotifications and Network all
   compile fine. So does libghostty, as a prebuilt binary target.
 - **With Xcode selected, the build uses Xcode's SDK (macOS 27 on Xcode 27); with CommandLineTools
   selected, the Makefile pins `SDKROOT` to `MacOSX26.sdk`, because CommandLineTools' 27 SDK cannot
   build this package.** Xcode ships the macro plugin below, so the pin only applies when
-  `xcode-select -p` names CommandLineTools. CommandLineTools symlinks `MacOSX.sdk` at the 27.0 SDK while the installed swift-frontend still
-  targets `macosx26.0`, and that SDK's `SwiftUICore` declares a `State()` *macro* beside the
+  `xcode-select -p` names CommandLineTools. CommandLineTools symlinks `MacOSX.sdk` at the 27.0
+  SDK while its swift-frontend still targets `macosx26.0`, and that SDK's `SwiftUICore` declares
+  a `State()` *macro* beside the
   property wrapper — `#externalMacro(module: "SwiftUIMacros")`, a plugin that ships with Xcode.
   The only plugins in `/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/` are
   `libObservationMacros.dylib` and `libSwiftMacros.dylib`, so every `@State` in `UI/` dies with
@@ -88,8 +89,9 @@ SwiftUICore.framework/Modules/SwiftUICore.swiftmodule/arm64e-apple-macos.swiftin
   build step rather than a moved directory.
 - Notarization needs no Xcode — `notarytool` and `stapler` are in CommandLineTools — so `make dist`
   and `make notarize` work here, and `.github/workflows/release.yml` runs the same `notarize`
-  target on a `macos-15` runner. A Developer ID certificate is the only piece Xcode would not have
-  supplied, and there is one.
+  target on a `macos-26` runner (Xcode 26.6, so releases build with SDK 26 until the standard
+  image has Xcode 27 — a deliberate choice over the `xcode-27` preview label). A Developer ID
+  certificate is the only piece Xcode would not have supplied, and there is one.
 
 ## Commands
 

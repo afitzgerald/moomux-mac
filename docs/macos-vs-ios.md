@@ -780,6 +780,3 @@ Not questions, just things out of step. Fix them and remove them from here.
 2. **The badge row and the cow title are two copies.** Each copy keeps the order and look only by
    comment.
    `rg -n '"plusminus"|struct CowQuip' Sources   # one of each per app`
-3. **`CLAUDE.md` says Xcode is installed but not selected.** On this machine it is selected, which
-   changes whether its `#Preview`/XCTest and `SDKROOT` entries still apply.
-   `xcode-select -p   # /Applications/Xcode.app/Contents/Developer (2026-09-28)`
