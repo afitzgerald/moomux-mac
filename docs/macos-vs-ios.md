@@ -734,8 +734,11 @@ basics):
 
 These look like they could differ. Here is why they do not:
 
-- **State colours and badges** come from the core's served palette through `SessionTheme`, so the
-  rows agree by construction. The badge *views* are two copies (§N 2).
+- **State colours and badges** come from the core's served palette through `SessionTheme`, and
+  the badge row itself is one Kit view (`SessionBadges`), so the rows agree by construction. Only
+  how a tag is drawn differs: a clickable link on the Mac, a plain glyph on the phone, where the
+  row's own tap attaches. The cow-and-quip title is one Kit view too (`CowQuip`); each app loads
+  the mark image its own way and the phone's is the compact size.
 - **Folder semantics** are Kit logic: a global namespace, `SetFolderCollapsed` everywhere, and
   loose-block vs subheader folding (`Layout`, `AppState.collapsedGroups`). Both lenses branch on
   `folder.isEmpty`. This became a rule after the phone drew the loose block and a subheader with
@@ -777,6 +780,3 @@ Not questions, just things out of step. Fix them and remove them from here.
 1. **Background refresh has not been watched working.** It builds and registers, and `pollOnce`
    shares the foreground's `apply`, but a refresh only fires when iOS decides. In the simulator,
    the debugger's `_simulateLaunchForTaskWithIdentifier:` is the way to force one.
-2. **The badge row and the cow title are two copies.** Each copy keeps the order and look only by
-   comment.
-   `rg -n '"plusminus"|struct CowQuip' Sources   # one of each per app`

@@ -540,7 +540,12 @@ private struct SessionRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 6)
-            Badges(app: app, session: session)
+            // The Kit's row, as plain glyphs: the row's own tap attaches.
+            SessionBadges(app: app, session: session, spacing: 5) { symbol, _, help in
+                Image(systemName: symbol)
+                    .accessibilityLabel(symbol == "ticket" ? "Ticket" : help)
+            }
+            .font(.caption2)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 2)
@@ -819,49 +824,6 @@ extension SessionDetailView {
 }
 
 // MARK: - Bits
-
-/// The Mac sidebar's badge row, in its order: ticket, PR (carrying its own
-/// merge/CI state), then `internal/tui/list.go`'s two git icons — ± for a
-/// dirty worktree, ↑ for commits not on the remote. Both git icons can show at
-/// once; they are different work in different places and collapsing them would
-/// hide one. Archived last, and only in a search — the one list that mixes
-/// archived rows in with live ones.
-private struct Badges: View {
-    let app: AppState
-    let session: Session
-
-    var body: some View {
-        HStack(spacing: 5) {
-            if let ticket = session.ticket, !ticket.isEmpty {
-                Image(systemName: "ticket").foregroundStyle(.secondary)
-            }
-            if let pr = session.pr, !pr.isEmpty {
-                let badge = PRInfo.badge(app.views[session.id]?.pr)
-                Image(systemName: badge.symbol)
-                    .foregroundStyle(SessionTheme.pr(badge, app.palette))
-                    .accessibilityLabel(badge.help)
-            }
-            if let git = app.gitBadges(for: session) {
-                if git.dirty {
-                    Image(systemName: "plusminus")
-                        .foregroundStyle(SessionTheme.gitWarn(app.palette))
-                        .accessibilityLabel("Uncommitted changes")
-                }
-                if git.unpushed {
-                    Image(systemName: "arrow.up")
-                        .foregroundStyle(SessionTheme.gitWarn(app.palette))
-                        .accessibilityLabel("Unpushed commits")
-                }
-            }
-            if session.archived && app.searching {
-                Image(systemName: "archivebox")
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel("Archived")
-            }
-        }
-        .font(.caption2)
-    }
-}
 
 /// Claude's 5h and weekly quota; tap for every window's countdown. Rebuilt
 /// every minute: a menu's items are made when the body runs, not when it

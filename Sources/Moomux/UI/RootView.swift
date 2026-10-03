@@ -596,27 +596,6 @@ private struct CowIcon: View {
     }
 }
 
-/// The cow mark plus its picked quip in a speech bubble, standing in for the
-/// plain session name/state title. Fill only, no stroke — a border here reads
-/// as another toolbar button rather than a bubble.
-private struct CowQuip: View {
-    let quip: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            CowIcon()
-            Text(quip)
-                .font(.callout)
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 6 + 8)
-                .padding(.trailing, 10)
-                .padding(.vertical, 4)
-                .background(SpeechBubble().fill(Color.secondary.opacity(0.15)))
-        }
-    }
-}
-
 /// The toolbar's one title slot: the selected session's cow-and-quip, its
 /// plain name/state without a quip (an older core, or a state not yet
 /// reported), or the app name with nothing selected. The cow mark is always
@@ -627,7 +606,7 @@ private struct RootTitle: View {
     var body: some View {
         let session = app.session(id: app.selectedSessionID)
         if let session, let quip = app.quip(for: session), !quip.isEmpty {
-            CowQuip(quip: quip)
+            CowQuip(saying: quip, mark: cowNoseImage.map(Image.init(nsImage:)))
         } else {
             HStack(spacing: 8) {
                 CowIcon()
@@ -953,49 +932,9 @@ private struct SessionRow: View {
             // Second row, right aligned. Empty for a session with no tags
             // and a clean worktree, and an empty HStack takes no height, so
             // those rows stay single-line.
-            HStack(spacing: 10) {
-                // `internal/tui/list.go` draws the tag icons before the git
-                // ones, in this order. The PR icon carries its merge/CI
-                // state the way `prGlyph` does — a merged or blocked PR is
-                // exactly what you want to spot without opening the session.
-                if let ticket = session.ticket, !ticket.isEmpty {
-                    TagIcon(symbol: "ticket", link: ticket, help: ticket)
-                        .foregroundStyle(.secondary)
-                }
-                if let pr = session.pr, !pr.isEmpty {
-                    let info = app.views[session.id]?.pr
-                    let badge = PRInfo.badge(info)
-                    TagIcon(symbol: badge.symbol, link: pr,
-                            help: info?.summary.isEmpty == false ? "\(badge.help) — \(info!.summary)"
-                                                                : badge.help)
-                        .foregroundStyle(Theme.pr(badge, app.palette))
-                }
-                // `internal/tui/list.go`'s two git icons, in its order: ±
-                // for a dirty worktree, ↑ for commits that are not on the
-                // remote. Both can show at once — they are different work
-                // in different places, and collapsing them would hide one.
-                // SF Symbols rather than the literal glyphs so they weigh
-                // and align like the row's other icons; they draw the same
-                // ± and ↑. Counts stay in the detail panel's Changes row.
-                if let git = app.gitBadges(for: session) {
-                    if git.dirty {
-                        Image(systemName: "plusminus")
-                            .foregroundStyle(Theme.gitWarn(app.palette))
-                            .help("Uncommitted changes")
-                    }
-                    if git.unpushed {
-                        Image(systemName: "arrow.up")
-                            .foregroundStyle(Theme.gitWarn(app.palette))
-                            .help("Unpushed commits")
-                    }
-                }
-                // Only a search mixes archived rows in with live ones; the
-                // Archived toggle's own list is nothing but, so it goes unmarked.
-                if session.archived && app.searching {
-                    Image(systemName: "archivebox")
-                        .foregroundStyle(.tertiary)
-                        .help("Archived")
-                }
+            // Order, colours and rules are the Kit's; the tags are links here.
+            SessionBadges(app: app, session: session, spacing: 10) { symbol, link, help in
+                TagIcon(symbol: symbol, link: link, help: help)
             }
                 // Badges track the name 3pt down — what .caption (10pt) was
                 // under .body (13pt) before any of this was adjustable.
