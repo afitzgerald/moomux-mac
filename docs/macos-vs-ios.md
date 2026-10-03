@@ -748,6 +748,12 @@ These look like they could differ. Here is why they do not:
 - **What's New** is one `WhatsNew` type and one baked `WhatsNew.md` per build.
 - **The cow and quip title** uses the Kit's `SpeechBubble`. The phone rasterizes the Mac's SVG at
   build time rather than checking in a second asset.
+- **Claude usage** (5h and weekly quota) is the snapshot's `usage`, which the core reads from
+  agent-usage's file and grades itself (`level`, `stale`), drawn by the Kit's `UsageLine` on both.
+  The detail is the same lines (`Usage.detail`, one per reset time) in a click-to-open popover on
+  the Mac and a menu on the phone. Only the Mac's line says "used" — the phone's top bar is too
+  narrow, the same call the TUI makes in its footer. No `usage` key — no agent-usage on the core's
+  Mac, or an older core — draws nothing on either.
 - **A failed call never reads as empty.** The phone's "No sessions" waits for `.connected`, not
   merely "not down".
 

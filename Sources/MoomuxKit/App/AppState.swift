@@ -58,6 +58,10 @@ public final class AppState {
     /// flat list across every project. Empty from a core that predates it,
     /// which is what `folderView` checks before switching the sidebar over.
     public private(set) var folderRows: [FolderRow] = []
+    /// Claude's quota, off the snapshot. Nil until a core that serves it says
+    /// something worth drawing — and from one on a Mac with no agent-usage,
+    /// forever.
+    public private(set) var usage: Usage?
     public private(set) var config: Config?
     /// Which agents the core can launch, and what to offer in a model or
     /// thinking-level picker for each. Fetched once — it is a static table in
@@ -1289,6 +1293,8 @@ public final class AppState {
         }
         if snapshot.rows != rows { rows = snapshot.rows }
         if snapshot.folderRows != folderRows { folderRows = snapshot.folderRows }
+        let drawable = snapshot.usage.flatMap { $0.isDrawable ? $0 : nil }
+        if drawable != usage { usage = drawable }
         adopt(sessions: snapshot.sessions)
     }
 
