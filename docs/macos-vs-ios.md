@@ -200,7 +200,7 @@ The phone builds a new one per Connect. So the `TerminalController` lives in a `
 | Auth | file permissions | the core runs `tailscale whois` on the peer |
 | Connect deadline | none needed; a unix socket fails fast | 5s non-blocking connect |
 | Dead peer | EOF | keepalive, ~30s to `ETIMEDOUT` |
-| Switch cores | relaunch with another `--socket`, or `coreHost`/`corePort` (D25) | Disconnect in the ⋯ menu |
+| Switch cores | Settings → General → Core, or `--socket`; applies on relaunch (D25) | Disconnect in the ⋯ menu |
 | Lifecycle hooks | none | schedules background refresh on `.background`; reconnects on leaving it (D51) |
 
 **D20. TCP over the tailnet, with no pairing, token or TLS.** WireGuard provides encryption and
@@ -328,8 +328,11 @@ that can resize a live attach puts a token in that one response line (`"attach":
   the core with `TERM=xterm-256color`, where a local attach would be `xterm-ghostty`. The pane
   drew the session's output.
 
-There's no Settings field for the core address yet (§M 1). *Where:* `AttachRoute`,
-`AppState.attach`, `RemoteAttach`, `SessionTerminal`, `MoomuxApp.client()`.
+Settings → General → Core sets the address (host and port), the same keys `defaults write` does,
+and shows which core this window is using. It applies on relaunch, because the Mac builds one
+store per process; the field is there with no core connected, since an unreachable core is when
+you need it. *Where:* `AttachRoute`, `AppState.attach`, `RemoteAttach`, `SessionTerminal`,
+`MoomuxApp.client()`, `CoreSection`.
 
 **D26. Mac panes are pooled; phone panes are single-use.**
 - **Mac.** `plainPanes`/`plainDelegates` keep each attached session's surface and tmux client
@@ -768,10 +771,7 @@ Differences that do not hold up from the user's side, whether or not the code gi
 them. A documented reason is not the same as a good experience. Settle one by promoting it to a
 decision above (or changing the code), and remove it from here.
 
-1. **The Mac has no UI for choosing a remote core** (D25). It is `defaults write
-   app.moomux.Moomux coreHost <host>` (plus `corePort`) or a launch argument, then a relaunch,
-   because the Mac builds one store per process. A field in Settings → General, applied on
-   relaunch, is the likely shape; the phone's connect screen is the model.
+None open right now.
 
 ## N. Known drift
 

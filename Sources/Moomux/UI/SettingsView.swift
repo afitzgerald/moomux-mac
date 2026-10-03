@@ -434,6 +434,38 @@ private struct NotConnectedSection: View {
 /// it is one config file, and a front end that could edit projects but not
 /// these would stop somewhere odd. Each control is one socket write, and the
 /// poll loop is what puts the new value back on screen.
+/// Which core this app talks to: the one on this Mac (the default socket) or
+/// one on another machine over its tailnet listener, attached to locally
+/// whenever this Mac's tmux has the session (`AttachRoute`).
+///
+/// The same `coreHost`/`corePort` keys `MoomuxApp.client()` reads, and the
+/// phone's connect screen writes, so `defaults write` and this field agree. It
+/// applies on relaunch, because the Mac builds one store per process. Shown
+/// whether or not a core answers — an unreachable one is when you need it.
+private struct CoreSection: View {
+    @Environment(AppState.self) private var app
+    @AppStorage("coreHost") private var host = ""
+    @AppStorage("corePort") private var port = 0
+
+    var body: some View {
+        Section {
+            TextField("Host", text: $host, prompt: Text("this Mac"))
+                .help("A MagicDNS name or tailnet address of the Mac running moomux serve")
+            TextField("Port", value: $port, format: .number.grouping(.never),
+                      prompt: Text(String(MoomuxClient.tailnetPort)))
+                .disabled(host.trimmingCharacters(in: .whitespaces).isEmpty)
+            LabeledContent("Connected to", value: app.client.endpoint.description)
+        } header: {
+            Text("Core")
+        } footer: {
+            Text("Empty means the core on this Mac. Another machine needs `tailnet_listen = true` "
+                 + "in its config.toml. Takes effect when Moomux relaunches; `--socket` on the "
+                 + "launch line still wins.")
+                .font(.caption)
+        }
+    }
+}
+
 private struct GeneralPane: View {
     @Environment(AppState.self) private var app
 
@@ -445,6 +477,8 @@ private struct GeneralPane: View {
             // beneath it — repeating it in every section it applies to is
             // noisier than saying it once.
             if cfg == nil { NotConnectedSection() }
+
+            CoreSection()
 
             Section("Sessions") {
                 if cfg != nil {
