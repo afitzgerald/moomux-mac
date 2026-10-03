@@ -118,6 +118,10 @@ struct RootView: View {
             ToolbarItem(placement: .navigation) { RootTitle() }
                 .hidingSharedBackground()
             ToolbarItem(placement: .status) { ConnectionBadge() }
+            // No glass capsule: it is a reading, not a control, and the
+            // capsule made it look like a button with its text jammed in.
+            ToolbarItem(placement: .status) { UsageBadge() }
+                .hidingSharedBackground()
             ToolbarItem {
                 Button {
                     app.sheet = .create
@@ -1423,6 +1427,43 @@ private struct ConnectionBadge: View {
                     .foregroundStyle(.orange)
                     .lineLimit(1)
                     .help("Is `moomux serve` running?")
+            }
+        }
+    }
+}
+
+/// Claude's 5h and weekly quota, when the core serves one. Absent draws
+/// nothing — almost nobody running this app runs agent-usage. Click for every
+/// window and when it resets: the phone's menu, as a popover. A tooltip alone
+/// was too well hidden — nothing about a line of text says "hover me".
+private struct UsageBadge: View {
+    @Environment(AppState.self) private var app
+    @State private var showingDetail = false
+
+    var body: some View {
+        if let usage = app.usage {
+            // The countdowns, and whether a window has reset, move every
+            // minute; the snapshot only when agent-usage rewrites its file,
+            // and not at all once the stream has dropped.
+            TimelineView(.everyMinute) { context in
+                Button { showingDetail.toggle() } label: {
+                    UsageLine(usage, palette: app.palette, now: context.date, saysUsed: true)
+                        .font(.subheadline)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Claude usage — click for reset times")
+                .popover(isPresented: $showingDetail, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(usage.detail(now: context.date).enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                        }
+                    }
+                    .monospacedDigit()
+                    .fixedSize()
+                    .padding(12)
+                }
             }
         }
     }

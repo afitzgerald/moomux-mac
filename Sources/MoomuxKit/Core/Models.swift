@@ -323,12 +323,14 @@ public struct ThemePalette: Decodable, Hashable, Sendable {
     /// Non-fatal warnings — the sidebar's ± / ↑ badges. Amber in every
     /// theme, unlike `done`, which is green everywhere now.
     public var warn: ThemeColor
+    /// A Claude quota window at its critical level.
+    public var danger: ThemeColor
 
-    // fg/mute/accent/danger/border/sel_bg are served too. Nothing here draws
+    // fg/mute/accent/border/sel_bg are served too. Nothing here draws
     // with them (SwiftUI's own semantic colors do that job), so they are not
     // decoded — add them the day a view needs one.
     enum CodingKeys: String, CodingKey {
-        case name, ansi, working, done, parked, warn
+        case name, ansi, working, done, parked, warn, danger
         case needsInput = "needs_input"
     }
 
@@ -342,6 +344,7 @@ public struct ThemePalette: Decodable, Hashable, Sendable {
         needsInput = try color(.needsInput)
         parked = try color(.parked)
         warn = try color(.warn)
+        danger = try color(.danger)
     }
 
     public func color(for state: AgentState) -> ThemeColor {
@@ -696,9 +699,13 @@ public struct Snapshot: Decodable, Sendable {
     /// is. There is no version handshake on this socket; this is the only
     /// signal there is.
     public var derived: Bool
+    /// Claude's quota, read by the core from agent-usage's file. Nil when the
+    /// core has nothing to say — no agent-usage on that Mac, or a core older
+    /// than the key — and nil draws nothing at all.
+    public var usage: Usage?
 
     enum CodingKeys: String, CodingKey {
-        case sessions, views, rows, err
+        case sessions, views, rows, err, usage
         case folderRows = "folder_rows"
         case pollTime = "poll_time"
     }
@@ -711,9 +718,145 @@ public struct Snapshot: Decodable, Sendable {
         folderRows = try c.decodeIfPresent([FolderRow].self, forKey: .folderRows) ?? []
         pollTime = try c.decodeIfPresent(Date.self, forKey: .pollTime) ?? Date()
         err = try c.decodeIfPresent(String.self, forKey: .err)
+        // A usage block this build cannot read must not take the session list
+        // down with it: it is the least important thing on the snapshot.
+        usage = try? c.decodeIfPresent(Usage.self, forKey: .usage)
         // Present-but-null counts: a core with no sessions at all sends
         // `"views": null`, and that is an answer.
         derived = c.contains(.views)
+    }
+}
+
+// MARK: - Claude usage
+
+/// `usage.Usage` — Claude's 5-hour and weekly quota, as the core read it from
+/// agent-usage's `usage.json`. The core owns every rule here: the stale cut,
+/// the window names and the warn/critical thresholds. This side colours by
+/// `level` and formats the countdown, which changes every minute and so is
+/// the one thing not worth sending.
+public struct Usage: Decodable, Equatable, Sendable {
+    public enum Status: String, Sendable {
+        case ok, failed, stale
+        case signedOut = "signed_out"
+    }
+
+    public enum Level: String, Sendable {
+        case ok, warn, critical
+    }
+
+    /// Not `Identifiable`: nothing on the wire is unique per window — two
+    /// carve-outs with no model both name themselves "Scoped" — so views key
+    /// rows by position.
+    public struct Window: Decodable, Equatable, Sendable {
+        public var kind: String
+        public var name: String
+        public var percent: Int
+        public var resetsAt: Date?
+        public var level: Level
+        /// The 5h and weekly windows, shown inline; the rest (per-model
+        /// carve-outs) only in the detail.
+        public var headline: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case kind, name, percent, level, headline
+            case resetsAt = "resets_at"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? ""
+            name = try c.decodeIfPresent(String.self, forKey: .name) ?? kind
+            percent = try c.decodeIfPresent(Int.self, forKey: .percent) ?? 0
+            resetsAt = try c.decodeIfPresent(String.self, forKey: .resetsAt).flatMap(Wire.parseTimestamp)
+            level = Level(rawValue: try c.decodeIfPresent(String.self, forKey: .level) ?? "") ?? .ok
+            headline = try c.decodeIfPresent(Bool.self, forKey: .headline) ?? false
+        }
+
+        /// "resets in 2h 25m", or nil once the reset has passed — dropped
+        /// rather than counting down past zero, as agent-usage's
+        /// `QuotaWindow.label` does.
+        public func resets(now: Date = Date()) -> String? {
+            guard let resetsAt, resetsAt > now else { return nil }
+            let minutes = Int((resetsAt.timeIntervalSince(now) / 60).rounded(.up))
+            let (hours, remainder) = (minutes / 60, minutes % 60)
+            if hours >= 24 { return "resets in \(hours / 24)d \(hours % 24)h" }
+            if hours > 0 { return "resets in \(hours)h \(remainder)m" }
+            return "resets in \(remainder)m"
+        }
+    }
+
+    public var status: Status
+    public var windows: [Window]
+
+    enum CodingKeys: String, CodingKey { case status, windows }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // A status this build has never heard of reads as stale: whatever it
+        // means, it is not "these numbers are current".
+        status = Status(rawValue: try c.decodeIfPresent(String.self, forKey: .status) ?? "") ?? .stale
+        windows = try c.decodeIfPresent([Window].self, forKey: .windows) ?? []
+    }
+
+    public var headline: [Window] { windows.filter(\.headline) }
+
+    /// What goes on the line itself: the headline windows always, and a
+    /// carve-out only once it is worth a glance — Fable at 96% shows, Opus
+    /// at 12% waits in the detail. The same rule as the TUI's header.
+    public func inline(now: Date = Date()) -> [Window] {
+        windows.filter { $0.headline || level(of: $0, now: now) != .ok }
+    }
+
+    /// Whether the numbers are fresh. A stale or failed read keeps the last
+    /// good windows, which may already have reset.
+    public var isCurrent: Bool { status == .ok }
+
+    /// Whether there is anything to draw. A signed-out account has no windows
+    /// and says so; a failed first run has none and nothing to say.
+    public var isDrawable: Bool { status == .signedOut || !headline.isEmpty }
+
+    /// The level to draw `window` at — the core's, unless the reading is not
+    /// current or the window has already rolled over. The core grades a reading
+    /// only while it is streaming; an app whose stream dropped, or a phone back
+    /// from hours in a pocket, still holds the last one, and painting a reset
+    /// window red would be shouting about something that is over.
+    public func level(of window: Window, now: Date = Date()) -> Level {
+        guard isCurrent else { return .ok }
+        if let resetsAt = window.resetsAt, resetsAt <= now { return .ok }
+        return window.level
+    }
+
+    /// What to say instead of, or beside, the numbers.
+    public var problem: String? {
+        switch status {
+        case .ok: return nil
+        case .failed: return "Last update failed — showing the previous numbers"
+        case .stale: return "agent-usage isn't updating — these numbers are old"
+        case .signedOut: return "Claude is signed out — run claude login"
+        }
+    }
+
+    /// Every window, one line per reset time, then any problem: the Mac's
+    /// popover and the phone's menu. Windows that roll over together share a
+    /// line — the week and its per-model carve-outs usually do, and the same
+    /// countdown three times over is noise. Grouped by the *phrase*, not the
+    /// date: the server stamps them seconds apart ("13:59:59", "14:00:00").
+    /// "used" because a bare percent leaves open whether it is used or left.
+    public func detail(now: Date = Date()) -> [String] {
+        var groups: [(resets: String?, windows: [Window])] = []
+        for window in windows {
+            let resets = window.resets(now: now)
+            if let i = groups.firstIndex(where: { $0.resets == resets }) {
+                groups[i].windows.append(window)
+            } else {
+                groups.append((resets, [window]))
+            }
+        }
+        let lines = groups.map { group in
+            group.windows.map { "\($0.name) \($0.percent)%" }.joined(separator: ", ")
+                + " used" + (group.resets.map { " · \($0)" } ?? "")
+        }
+        return lines + [problem].compactMap { $0 }
     }
 }
 
@@ -1159,6 +1302,73 @@ public enum Wire {
             Snapshot.self, from: Data(#"{"sessions":null,"views":null,"poll_time":"2026-09-02T10:11:12Z"}"#.utf8))
         assert(none.derived, "present-but-null is an answer, not an older core")
         assert(none.sessions.isEmpty)
+        assert(none.usage == nil, "no usage key is nothing to draw")
+
+        // `usage`, exactly as erickgnclvs/moomux#314 serializes it.
+        let withUsage = try! decoder.decode(Snapshot.self, from: Data(#"""
+        {"views":{},"poll_time":"2026-09-02T10:11:12Z","usage":{"status":"ok",
+         "updated_at":"2026-09-30T19:24:44Z","windows":[
+          {"kind":"session","name":"5h","percent":82,"resets_at":"2026-09-30T21:49:59Z","level":"warn","headline":true},
+          {"kind":"weekly_all","name":"Week","percent":53,"resets_at":"2026-10-02T13:59:59Z","level":"ok","headline":true},
+          {"kind":"weekly_scoped","name":"Fable","percent":0,"level":"ok","headline":false}]}}
+        """#.utf8))
+        let usage = withUsage.usage!
+        assert(usage.isCurrent && usage.problem == nil && usage.isDrawable)
+        assert(usage.headline.map(\.name) == ["5h", "Week"], "carve-outs are not headline")
+        assert(usage.windows[0].level == .warn && usage.windows[0].percent == 82)
+        assert(usage.windows[2].resetsAt == nil, "an absent reset is nil, not distantPast")
+        let resetNow = parseTimestamp("2026-09-30T19:24:00Z")!
+        assert(usage.windows[0].resets(now: resetNow) == "resets in 2h 26m")
+        assert(usage.windows[1].resets(now: resetNow) == "resets in 1d 18h")
+        assert(usage.windows[0].resets(now: parseTimestamp("2026-09-30T22:00:00Z")!) == nil,
+               "an elapsed reset drops the countdown rather than going negative")
+        assert(usage.detail(now: resetNow) == ["5h 82% used · resets in 2h 26m",
+                                                "Week 53% used · resets in 1d 18h",
+                                                "Fable 0% used"], "\(usage.detail(now: resetNow))")
+        // Resets a second apart, as the server sends them, share one line.
+        let shared = try! decoder.decode(Usage.self, from: Data(#"""
+        {"status":"ok","windows":[
+         {"kind":"session","name":"5h","percent":55,"resets_at":"2026-09-30T21:49:59Z","headline":true},
+         {"kind":"weekly_all","name":"Week","percent":12,"resets_at":"2026-10-02T13:59:59Z","headline":true},
+         {"kind":"weekly_scoped","name":"Fable","percent":0,"resets_at":"2026-10-02T14:00:00Z"}]}
+        """#.utf8))
+        assert(shared.detail(now: resetNow) == ["5h 55% used · resets in 2h 26m",
+                                                 "Week 12%, Fable 0% used · resets in 1d 18h"],
+               "\(shared.detail(now: resetNow))")
+        assert(usage.level(of: usage.windows[0], now: resetNow) == .warn)
+        assert(usage.level(of: usage.windows[0], now: parseTimestamp("2026-09-30T22:00:00Z")!) == .ok,
+               "a window past its reset is not still at its old level")
+        assert(usage.level(of: usage.windows[2]) == .ok, "no reset time keeps the core's level")
+        assert(usage.inline(now: resetNow).map(\.name) == ["5h", "Week"], "a quiet carve-out stays in the detail")
+        let hot = try! decoder.decode(Usage.self, from: Data(#"""
+        {"status":"ok","windows":[{"kind":"session","name":"5h","percent":10,"level":"ok","headline":true},
+         {"kind":"weekly_scoped","name":"Fable","percent":96,"level":"critical","headline":false},
+         {"kind":"weekly_scoped","name":"Opus","percent":12,"level":"ok","headline":false}]}
+        """#.utf8))
+        assert(hot.inline().map(\.name) == ["5h", "Fable"], "a hot carve-out joins the line")
+        // Stale keeps its windows but loses its colour and says why; an
+        // unknown status or level must not throw, and must not read as current.
+        let stale = try! decoder.decode(Usage.self, from: Data(#"""
+        {"status":"stale","windows":[{"kind":"session","name":"5h","percent":99,"level":"critical","headline":true}]}
+        """#.utf8))
+        assert(!stale.isCurrent && stale.problem != nil && stale.windows.count == 1)
+        assert(stale.level(of: stale.windows[0]) == .ok, "a stale reading is never critical")
+        assert(!stale.problem!.contains("`"), "nothing that shows this renders markdown")
+        assert(stale.detail().last == stale.problem)
+        let future = try! decoder.decode(Usage.self, from: Data(#"""
+        {"status":"paused","windows":[{"kind":"x","name":"X","percent":1,"level":"meh"}]}
+        """#.utf8))
+        assert(!future.isCurrent && future.windows[0].level == .ok)
+        // Nothing to draw unless there is a headline number or a sign-out to report.
+        let noWindows = try! decoder.decode(Usage.self, from: Data(#"{"status":"failed","windows":[]}"#.utf8))
+        assert(!noWindows.isDrawable)
+        let signedOut = try! decoder.decode(Usage.self, from: Data(#"{"status":"signed_out","windows":[]}"#.utf8))
+        assert(signedOut.isDrawable)
+        // A garbled usage block costs the usage line, never the session list.
+        let garbled = try! decoder.decode(Snapshot.self, from: Data(#"""
+        {"sessions":[],"views":{},"poll_time":"2026-09-02T10:11:12Z","usage":{"windows":"nope"}}
+        """#.utf8))
+        assert(garbled.usage == nil && garbled.derived)
 
         // A CreateRequest is the one thing this app sends that Go decodes off
         // its *field names* — CreateRequest carries no json tags. A key that

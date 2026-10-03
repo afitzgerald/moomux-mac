@@ -299,6 +299,9 @@ struct SessionListView: View {
                         Image(systemName: "ellipsis.circle")
                     }
                 }
+                if let usage = app.usage {
+                    ToolbarItem(placement: .topBarTrailing) { UsageMenu(app: app, usage: usage) }
+                }
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge(app: app) }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { creating = true } label: { Image(systemName: "plus") }
@@ -857,6 +860,26 @@ private struct Badges: View {
             }
         }
         .font(.caption2)
+    }
+}
+
+/// Claude's 5h and weekly quota; tap for every window's countdown. Rebuilt
+/// every minute: a menu's items are made when the body runs, not when it
+/// opens, and the snapshot alone may not change for hours.
+private struct UsageMenu: View {
+    let app: AppState
+    let usage: Usage
+
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            Menu {
+                ForEach(Array(usage.detail(now: context.date).enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                }
+            } label: {
+                UsageLine(usage, palette: app.palette, now: context.date).font(.footnote)
+            }
+        }
     }
 }
 

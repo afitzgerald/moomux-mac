@@ -51,6 +51,17 @@ public enum SessionTheme {
         }
     }
 
+    /// A quota window's figure, colour and weight together so they cannot
+    /// disagree. Pass `Usage.level(of:)`, not the window's raw level — that is
+    /// what keeps a stale or already-reset reading quiet.
+    public static func usage(_ level: Usage.Level, _ palette: ThemePalette?) -> (color: Color, bold: Bool) {
+        switch level {
+        case .ok: return (.primary, false)
+        case .warn: return (gitWarn(palette), true)
+        case .critical: return (resolve(palette?.danger) ?? .red, true)
+        }
+    }
+
     /// A served color as SwiftUI sees it. `system` wins when the core names
     /// one — that is how the state dots keep following the user's live accent
     /// instead of a frozen #007aff. Otherwise the light/dark pair, as a
@@ -127,5 +138,9 @@ public enum SessionTheme {
         // so the caller's semantic fallback wins.
         assert(resolve(ThemeColor(light: "11", dark: "11")) == nil)
         assert(resolve(ThemeColor(light: "#83a598", dark: "")) == nil, "both halves or neither")
+
+        assert(usage(.critical, nil) == (.red, true), "no palette yet falls back to system red")
+        assert(usage(.warn, nil) == (.orange, true))
+        assert(usage(.ok, nil) == (.primary, false), "an ok window is plain, neither coloured nor bold")
     }
 }
