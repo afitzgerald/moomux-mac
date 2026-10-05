@@ -490,6 +490,11 @@ private struct GeneralPane: View {
                         get: { cfg?.autoSubmitDefault ?? false },
                         set: { app.setAutoSubmitDefault($0) }))
                         .help("The starting state of the new-session form's send toggle, here and in the TUI")
+                    Toggle("Terminal pane", isOn: Binding(
+                        get: { !(cfg?.noTerminalPane ?? false) },
+                        set: { app.setTerminalPane($0) }))
+                        .help("New sessions open with a shell beside the agent. Turn off for "
+                              + "the agent alone. A project's .moomux-panes.toml still wins.")
                 }
                 // This app's own (`UserDefaults`), so it stays usable with no
                 // core — which is why the gate above is per row and not over

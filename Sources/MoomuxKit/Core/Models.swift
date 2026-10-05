@@ -389,12 +389,17 @@ public struct Config: Decodable, Sendable {
     /// The Go side applies the sort; this is what tells a front end that its
     /// move-up/move-down actions would be undone by the next open.
     public var sortRecentFirst: Bool
+    /// New sessions open as the agent alone, without the shell pane beside it.
+    /// Stored negated so absent means today's split; a project's
+    /// `.moomux-panes.toml` still wins, and running sessions keep their layout.
+    public var noTerminalPane: Bool
 
     enum CodingKeys: String, CodingKey {
         case projects, folders, order, theme, appearance
         case autoTmux = "auto_tmux"
         case autoSubmitDefault = "auto_submit_default"
         case sortRecentFirst = "sort_recent_first"
+        case noTerminalPane = "no_terminal_pane"
     }
 
     public init(from decoder: Decoder) throws {
@@ -407,6 +412,7 @@ public struct Config: Decodable, Sendable {
         autoTmux = try c.decodeIfPresent(Bool.self, forKey: .autoTmux) ?? false
         autoSubmitDefault = try c.decodeIfPresent(Bool.self, forKey: .autoSubmitDefault) ?? false
         sortRecentFirst = try c.decodeIfPresent(Bool.self, forKey: .sortRecentFirst) ?? false
+        noTerminalPane = try c.decodeIfPresent(Bool.self, forKey: .noTerminalPane) ?? false
     }
 
     public var orderedProjectNames: [String] {
@@ -1113,12 +1119,14 @@ public enum Wire {
         // as an absent key and must not decode as nil-shaped garbage.
         assert(cfg.autoTmux == false && cfg.sortRecentFirst == false)
         assert(cfg.autoSubmitDefault == false)
+        assert(cfg.noTerminalPane == false, "absent means the terminal pane is on")
         let flagsJSON = """
         {"projects":{},"auto_tmux":true,"auto_submit_default":true,
-         "sort_recent_first":true,"appearance":"dark"}
+         "sort_recent_first":true,"no_terminal_pane":true,"appearance":"dark"}
         """
         let flags = try! decoder.decode(Config.self, from: Data(flagsJSON.utf8))
         assert(flags.autoTmux && flags.autoSubmitDefault && flags.sortRecentFirst)
+        assert(flags.noTerminalPane)
         assert(flags.appearance == "dark")
 
         // prompt_agent is the one Project field the app has to honour rather
