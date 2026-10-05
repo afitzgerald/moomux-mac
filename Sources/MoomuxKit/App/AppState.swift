@@ -62,6 +62,8 @@ public final class AppState {
     /// something worth drawing — and from one on a Mac with no agent-usage,
     /// forever.
     public private(set) var usage: Usage?
+    /// Why there is no usage, off the snapshot — Settings' "Claude usage" row.
+    public private(set) var usageSetup: String?
     public private(set) var config: Config?
     /// Which agents the core can launch, and what to offer in a model or
     /// thinking-level picker for each. Fetched once — it is a static table in
@@ -1295,6 +1297,7 @@ public final class AppState {
         if snapshot.folderRows != folderRows { folderRows = snapshot.folderRows }
         let drawable = snapshot.usage.flatMap { $0.isDrawable ? $0 : nil }
         if drawable != usage { usage = drawable }
+        if snapshot.usageSetup != usageSetup { usageSetup = snapshot.usageSetup }
         adopt(sessions: snapshot.sessions)
     }
 

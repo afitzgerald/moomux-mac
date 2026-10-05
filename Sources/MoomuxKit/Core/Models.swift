@@ -703,9 +703,14 @@ public struct Snapshot: Decodable, Sendable {
     /// core has nothing to say — no agent-usage on that Mac, or a core older
     /// than the key — and nil draws nothing at all.
     public var usage: Usage?
+    /// Why `usage` is absent, when the core knows: `not_installed`,
+    /// `unreadable`, `unsupported` or `no_claude`. Nil beside a usage, and
+    /// from a core older than the key — `UsageSetup` reads that as "update".
+    public var usageSetup: String?
 
     enum CodingKeys: String, CodingKey {
         case sessions, views, rows, err, usage
+        case usageSetup = "usage_setup"
         case folderRows = "folder_rows"
         case pollTime = "poll_time"
     }
@@ -721,6 +726,7 @@ public struct Snapshot: Decodable, Sendable {
         // A usage block this build cannot read must not take the session list
         // down with it: it is the least important thing on the snapshot.
         usage = try? c.decodeIfPresent(Usage.self, forKey: .usage)
+        usageSetup = try? c.decodeIfPresent(String.self, forKey: .usageSetup)
         // Present-but-null counts: a core with no sessions at all sends
         // `"views": null`, and that is an answer.
         derived = c.contains(.views)
@@ -728,6 +734,47 @@ public struct Snapshot: Decodable, Sendable {
 }
 
 // MARK: - Claude usage
+
+/// What Settings says about Claude usage, from the snapshot's `usage` and
+/// `usage_setup`. The toolbar draws nothing when usage is absent, so this is
+/// the one place a user learns the feature exists and how to turn it on.
+public enum UsageSetup {
+    public static let installCommand =
+        "brew install afitzgerald/agent-usage/agent-usage && brew services start agent-usage"
+
+    /// A line of state, plus the command to copy when there is one.
+    public static func advice(showing: Bool, setup: String?) -> (status: String, command: String?) {
+        if showing { return ("Showing in the toolbar.", nil) }
+        switch setup {
+        case "not_installed":
+            return ("Not set up. Claude usage comes from agent-usage, a separate tool — "
+                    + "install it on the Mac running moomux serve and allow Keychain access when asked.",
+                    installCommand)
+        case "unreadable":
+            return ("agent-usage's file can't be read. Its log is ~/Library/Logs/agent-usage.log.", nil)
+        case "unsupported":
+            return ("agent-usage and moomux disagree on the file's format. Update both.",
+                    "brew upgrade agent-usage moomux")
+        case "no_claude":
+            return ("agent-usage is running but has no Claude quota yet. Sign in to Claude Code "
+                    + "on that Mac and give it five minutes.", nil)
+        default:
+            // A core older than `usage_setup`, or a reason this build has not heard of.
+            return ("Not showing. Claude usage needs agent-usage running beside a current moomux.",
+                    installCommand)
+        }
+    }
+
+    public static func demo() {
+        assert(advice(showing: true, setup: nil).command == nil)
+        assert(advice(showing: true, setup: "not_installed").status.hasPrefix("Showing"),
+               "a usage on screen beats a stale reason")
+        assert(advice(showing: false, setup: "not_installed").command == installCommand)
+        assert(advice(showing: false, setup: "no_claude").command == nil)
+        assert(advice(showing: false, setup: nil).command == installCommand,
+               "an older core says nothing; still point at the fix")
+    }
+}
 
 /// `usage.Usage` — Claude's 5-hour and weekly quota, as the core read it from
 /// agent-usage's `usage.json`. The core owns every rule here: the stale cut,
@@ -1303,6 +1350,10 @@ public enum Wire {
         assert(none.derived, "present-but-null is an answer, not an older core")
         assert(none.sessions.isEmpty)
         assert(none.usage == nil, "no usage key is nothing to draw")
+        assert(none.usageSetup == nil)
+        let missing = try! decoder.decode(
+            Snapshot.self, from: Data(#"{"views":{},"usage_setup":"not_installed"}"#.utf8))
+        assert(missing.usage == nil && missing.usageSetup == "not_installed")
 
         // `usage`, exactly as erickgnclvs/moomux#314 serializes it.
         let withUsage = try! decoder.decode(Snapshot.self, from: Data(#"""

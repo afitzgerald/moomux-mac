@@ -19,6 +19,7 @@ enum SelfTest {
         requireAssertsAreLive()
 
         Wire.demo()
+        UsageSetup.demo()
         MoomuxClient.demo()
         StreamSocket.demo()
         AttachChannel.demo()

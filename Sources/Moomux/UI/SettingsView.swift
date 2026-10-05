@@ -480,6 +480,8 @@ private struct GeneralPane: View {
 
             CoreSection()
 
+            if cfg != nil { ClaudeUsageSection() }
+
             Section("Sessions") {
                 if cfg != nil {
                     Toggle("Sort sessions by last opened", isOn: Binding(
@@ -555,6 +557,35 @@ private struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The toolbar's usage badge draws nothing until agent-usage is running, so
+/// this is where the feature is discoverable at all — and, with a core that
+/// sends `usage_setup`, where it says what is wrong.
+private struct ClaudeUsageSection: View {
+    @Environment(AppState.self) private var app
+
+    var body: some View {
+        let advice = UsageSetup.advice(showing: app.usage != nil, setup: app.usageSetup)
+        Section {
+            Text(advice.status)
+            if let command = advice.command {
+                LabeledContent {
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(command, forType: .string)
+                    }
+                } label: {
+                    Text(command).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                }
+            }
+        } header: {
+            Text("Claude usage")
+        } footer: {
+            Text("Your 5-hour and weekly Claude quota, in the toolbar. Paste the command into Terminal.")
+                .font(.caption)
+        }
     }
 }
 
