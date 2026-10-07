@@ -87,6 +87,20 @@ launchctl load ~/Library/LaunchAgents/com.erickgnclvs.moomux.plist
 
 `launchctl unload` the same path to stop it, or delete the plist to remove it for good.
 
+## Claude usage in the toolbar
+
+The toolbar can show your Claude quota (5-hour and weekly, with reset times). It comes from
+[agent-usage](https://github.com/afitzgerald/agent-usage), a separate tool that is not installed
+with Moomux or moomux. Install it on the Mac running `moomux serve`:
+
+```sh
+brew install afitzgerald/agent-usage/agent-usage
+brew services start agent-usage
+```
+
+Allow its one Keychain prompt, and the numbers appear within five minutes. Until then the toolbar
+shows nothing; Settings → General → Claude usage says what's missing.
+
 ## Compatibility
 
 `Sources/Moomux/Core/Models.swift` decodes the core's `internal/ipc` JSON into Swift structs with

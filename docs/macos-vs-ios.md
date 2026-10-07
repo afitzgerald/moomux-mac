@@ -759,7 +759,9 @@ These look like they could differ. Here is why they do not:
   The detail is the same lines (`Usage.detail`, one per reset time) in a click-to-open popover on
   the Mac and a menu on the phone. Only the Mac's line says "used" — the phone's top bar is too
   narrow, the same call the TUI makes in its footer. No `usage` key — no agent-usage on the core's
-  Mac, or an older core — draws nothing on either.
+  Mac, or an older core — draws nothing on either. The Mac's Settings → General has a "Claude
+  usage" section that says why, from the snapshot's `usage_setup`, with the install command; the
+  phone has none yet (see drift).
 - **A failed call never reads as empty.** The phone's "No sessions" waits for `.connected`, not
   merely "not down".
 
@@ -780,3 +782,5 @@ Not questions, just things out of step. Fix them and remove them from here.
 1. **Background refresh has not been watched working.** It builds and registers, and `pollOnce`
    shares the foreground's `apply`, but a refresh only fires when iOS decides. In the simulator,
    the debugger's `_simulateLaunchForTaskWithIdentifier:` is the way to force one.
+2. **The phone has no "Claude usage" setup row.** The Mac's Settings explains a missing usage
+   (`UsageSetup.advice`, in the Kit); the phone's ⋯ menu should show the same lines.
