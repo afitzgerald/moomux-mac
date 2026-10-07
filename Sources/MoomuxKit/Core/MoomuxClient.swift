@@ -630,6 +630,11 @@ public final class MoomuxClient: Sendable {
         try call("SetAutoTmux", Args(on: on))
     }
 
+    /// `on` keeps the shell pane beside the agent; the config stores it negated.
+    public func setTerminalPane(_ on: Bool) throws {
+        try call("SetTerminalPane", Args(on: on))
+    }
+
     // MARK: - Status stream
 
     /// Yields a snapshot per tick until the connection drops, then finishes
@@ -786,6 +791,13 @@ public final class MoomuxClient: Sendable {
                 Request(method: "SetSessionArchived", args: Args(id: "s1", on: false))),
             as: UTF8.self)
         assert(unarchive == #"{"args":{"id":"s1","on":false},"method":"SetSessionArchived"}"#, unarchive)
+
+        // Off is the agent-only layout, so `on:false` must reach the core
+        // rather than vanish as an unset field.
+        let paneOff = String(
+            decoding: try! encoder.encode(Request(method: "SetTerminalPane", args: Args(on: false))),
+            as: UTF8.self)
+        assert(paneOff == #"{"args":{"on":false},"method":"SetTerminalPane"}"#, paneOff)
 
         // A create rides entirely inside `req` — one transaction the core runs
         // end to end, rather than a dozen flat args and five follow-up calls.

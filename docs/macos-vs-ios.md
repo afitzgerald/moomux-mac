@@ -651,7 +651,7 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 | Setting | Where it lives | Mac | iPhone |
 |---|---|---|---|
 | projects, agent, skip-permissions, base branch, branch prefix, emoji | core | ✅ Settings → Projects | applies, not editable |
-| sort by last opened, send first prompt by default, relaunch TUI in tmux | core | ✅ Settings → General | applies, not editable |
+| sort by last opened, send first prompt by default, relaunch TUI in tmux, terminal pane in new sessions | core | ✅ Settings → General | applies, not editable |
 | theme, TUI appearance | core | ✅ Settings → Appearance | theme colours apply to the rows |
 | project collapsed, folder collapsed | core | ✅ | ✅ (both toggle the same flag) |
 | group by folder (`folderFirst`) | device | ✅ toolbar, ⇧⌘F | ✅ ⋯ menu |

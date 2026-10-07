@@ -2099,6 +2099,10 @@ public final class AppState {
         mutate("Save setting") { try $0.setAutoTmux(on); return nil }
     }
 
+    public func setTerminalPane(_ on: Bool) {
+        mutate("Save setting") { try $0.setTerminalPane(on); return nil }
+    }
+
     /// The TUI's palette, edited from here because it is one config file. This
     /// app draws itself with semantic colors and is unaffected by either value.
     public func setTheme(_ theme: String, appearance: String) {
