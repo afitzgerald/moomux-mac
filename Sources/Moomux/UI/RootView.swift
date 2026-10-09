@@ -929,12 +929,17 @@ private struct SessionRow: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            // Second row, right aligned. Empty for a session with no tags
-            // and a clean worktree, and an empty HStack takes no height, so
-            // those rows stay single-line.
+            // Second row, right aligned, and always there — the hidden glyph
+            // holds its height when there are no badges. A row whose height
+            // changed in the same List update that moved rows crashed AppKit
+            // (NSTableRowData rowIndexForView, null deref, macOS 27.0), and a
+            // badge appearing on a snapshot was what changed it.
             // Order, colours and rules are the Kit's; the tags are links here.
-            SessionBadges(app: app, session: session, spacing: 10) { symbol, link, help in
-                TagIcon(symbol: symbol, link: link, help: help)
+            ZStack(alignment: .trailing) {
+                Image(systemName: "ticket").hidden()
+                SessionBadges(app: app, session: session, spacing: 10) { symbol, link, help in
+                    TagIcon(symbol: symbol, link: link, help: help)
+                }
             }
                 // Badges track the name 3pt down — what .caption (10pt) was
                 // under .body (13pt) before any of this was adjustable.
