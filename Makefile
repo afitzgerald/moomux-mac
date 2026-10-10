@@ -148,6 +148,9 @@ app: build
 	cp Resources/PeekabooPlate.png $(APP)/Contents/Resources/PeekabooPlate.png
 	cp Resources/icons/moomux-terminal-nose.svg $(APP)/Contents/Resources/moomux-terminal-nose.svg
 	cp Resources/icons/moomux-menubar.svg $(APP)/Contents/Resources/MenuBarIcon.svg
+	# MIT requires the notices of the statically linked dependencies to ship with
+	# the binary.
+	cp THIRD_PARTY_NOTICES.md LICENSE $(APP)/Contents/Resources/
 	# Release notes, written by the Release workflow and named by it. A variable
 	# rather than a file in Resources/ so a notes file generated once locally
 	# cannot ride along into every later build under a newer version. Unset in
@@ -388,7 +391,7 @@ IOS_ASSETS    = $(wildcard Resources/icons/*.svg) Scripts/rasterize.swift \
 
 ios: $(IOS_APP)
 
-$(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.plist Makefile
+$(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.plist THIRD_PARTY_NOTICES.md LICENSE Makefile
 	@# `--product MoomuxKit` only works because that product is declared
 	@# `type: .static` — an automatic one is ignored with a warning and the
 	@# default target set is built instead, which includes the macOS
@@ -410,6 +413,7 @@ $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.p
 		$(IOS_PRODUCTS)/MSDisplayLink.o $(IOS_PRODUCTS)/DiffKit.o \
 		$(IOS_PRODUCTS)/libghostty.a -lc++
 	cp Resources/iOS-Info.plist $(IOS_APP)/Info.plist
+	cp THIRD_PARTY_NOTICES.md LICENSE $(IOS_APP)/
 	@# Nothing expands $(CURRENT_PROJECT_VERSION) on this path — the plist is
 	@# copied, not built.
 	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1" $(IOS_APP)/Info.plist
