@@ -8,12 +8,16 @@
 
 /* Begin PBXBuildFile section */
 		AA0000000000000000000013 /* ghostty-themes in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* ghostty-themes */; };
+		AA0000000000000000000015 /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000014 /* THIRD_PARTY_NOTICES.md */; };
+		AA0000000000000000000017 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000016 /* LICENSE */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		AA0000000000000000000010 /* Moomux.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Moomux.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000011 /* iOS-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "iOS-Info.plist"; sourceTree = "<group>"; };
 		AA0000000000000000000012 /* ghostty-themes */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "ghostty-themes"; sourceTree = "<group>"; };
+		AA0000000000000000000014 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000016 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -53,6 +57,8 @@
 			children = (
 				AA0000000000000000000011 /* iOS-Info.plist */,
 				AA0000000000000000000012 /* ghostty-themes */,
+				AA0000000000000000000014 /* THIRD_PARTY_NOTICES.md */,
+				AA0000000000000000000016 /* LICENSE */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -134,6 +140,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA0000000000000000000013 /* ghostty-themes in Resources */,
+				AA0000000000000000000015 /* THIRD_PARTY_NOTICES.md in Resources */,
+				AA0000000000000000000017 /* LICENSE in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
