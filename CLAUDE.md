@@ -416,6 +416,7 @@ Core/ToolPath.swift      finding tmux without a shell's PATH
 App/Forms.swift          the two multi-field forms' state and defaulting rules, pure
 App/WhatsNew.swift       release notes baked into the bundle, both apps; self-contained, so it copies
                          to other apps
+App/Acknowledgements.swift  LICENSE + THIRD_PARTY_NOTICES.md as bundled, both apps' Help/⋯ item
 App/Attachments.swift    first-prompt attachments, both front ends: re-encode, upload
                          through `SaveFile`, and the queue each New Session sheet runs
 App/AppState.swift       the single root store, snapshot loop, config poll

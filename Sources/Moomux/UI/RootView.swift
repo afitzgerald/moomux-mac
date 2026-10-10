@@ -224,6 +224,8 @@ struct RootView: View {
                 SettingsSheet()
             case let .whatsNew(after):
                 WhatsNewSheet(releases: WhatsNew.releases(after: after))
+            case .acknowledgements:
+                AcknowledgementsSheet()
             }
         }
         .alert(Text(app.pendingDelete.map { "Delete “\($0.name)”?" } ?? "Delete session?"),

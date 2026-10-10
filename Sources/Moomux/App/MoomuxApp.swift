@@ -152,6 +152,8 @@ struct SessionCommands: Commands {
         CommandGroup(replacing: .help) {
             Button("What's New in Moomux") { app.sheet = .whatsNew(after: "0") }
                 .disabled(WhatsNew.releases.isEmpty)
+            Button("Acknowledgements") { app.sheet = .acknowledgements }
+                .disabled(Acknowledgements.text.isEmpty)
         }
         CommandMenu("Session") {
             // The sidebar List's own up/down-arrow navigation stops working
