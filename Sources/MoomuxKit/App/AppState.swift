@@ -167,6 +167,7 @@ public final class AppState {
         /// seen; nil shows the running release alone. Help passes "0", which
         /// every version is newer than, for the whole baked history.
         case whatsNew(after: String?)
+        case acknowledgements
         public var id: Self { self }
     }
     public var sheet: Sheet?
