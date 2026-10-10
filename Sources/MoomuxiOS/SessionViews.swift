@@ -630,6 +630,9 @@ struct SessionDetailView: View {
                         .foregroundStyle(.orange)
                 }
             }
+            // Branch and project are what gets pasted elsewhere; the Mac's
+            // detail fields are selectable for the same reason.
+            .textSelection(.enabled)
 
             // Tappable here rather than in the list: the row's own tap
             // attaches, and a 12pt glyph beside it is a mis-tap waiting to
@@ -703,11 +706,14 @@ struct SessionDetailView: View {
                         LabeledContent("Unresolved", value: "\(pr.unresolved)")
                     }
                 }
+                .textSelection(.enabled)
             }
 
             let prompt = app.prompt(for: session)
             if !prompt.isEmpty {
-                Section("First prompt") { Text(prompt).font(.callout) }
+                // Long-press copies it — the one thing on this screen you are
+                // likely to want back verbatim, to reuse in another session.
+                Section("First prompt") { Text(prompt).font(.callout).textSelection(.enabled) }
             }
 
             Section {
