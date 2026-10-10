@@ -1330,6 +1330,13 @@ private struct Field: View {
                 }
                 .buttonStyle(.link)
                 .onHover { NSCursor.pointingHand.set(); if !$0 { NSCursor.arrow.set() } }
+                // The click opens it, so copying needs another way in.
+                .contextMenu {
+                    Button("Copy Link") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(value, forType: .string)
+                    }
+                }
             } else {
                 Text(value).font(Theme.mono).textSelection(.enabled)
             }
