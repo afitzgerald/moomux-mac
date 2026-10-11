@@ -2281,3 +2281,101 @@ private func withoutBlockingTheUI<T: Sendable>(
 ) async throws -> T {
     try await Task.detached(priority: .userInitiated, operation: work).value
 }
+
+// MARK: - Flow checks
+
+extension AppState {
+    /// The store's two flows that only exist end to end, against `FakeCore`:
+    /// the delete dialog's status-then-delete sequence, and the watch loop's
+    /// reaction to what a stream can do. Both are `withoutBlockingTheUI` hops
+    /// and main-actor tasks, so they are run, not read.
+    public static func flowsDemo() {
+        let core = FakeCore()
+        // One answer for every one-shot call: the session the stream will
+        // also serve (so a racing pull adopts nothing new), and a dirty
+        // worktree for the delete dialog.
+        _ = core.requests(answering: #"{"result":{"cfg":{},"sessions":[{"id":"p:a","name":"a","project":"p","#
+                                     + #""worktree_path":"/w/a"}],"ok":true,"dirty":true,"files":2}}"#) {}
+        let app = AppState(client: MoomuxClient(socketPath: core.path))
+        let a = try! Wire.decoder.decode(Session.self, from: Data(
+            #"{"id":"p:a","name":"a","project":"p","worktree_path":"/w/a"}"#.utf8))
+
+        // MARK: Delete
+
+        // The dialog opens at once and says it is checking — a worktree nobody
+        // has looked at must never read as clean — then fills in from a fresh
+        // status, at-risk work first.
+        app.selectedSessionID = a.id
+        assert(app.deleteWarning(for: a).hasPrefix("Checking /w/a"), app.deleteWarning(for: a))
+        // A cached answer is up to a minute old, and this one says clean: the
+        // dialog must not trust it.
+        app.statuses[a.id] = MoomuxClient.SessionStatus(known: true)
+        app.askDelete(a)
+        assert(app.pendingDelete == a)
+        assert(FakeCore.spin { app.statuses[a.id]?.filesChanged == 2 },
+               "askDelete must re-fetch the worktree status, not reuse a cached one")
+        assert(core.count("WorktreeStatus") == 1 && core.count("ChangeSummary") == 1)
+        assert(app.deleteWarning(for: a).hasPrefix("⚠︎ 2 FILES CHANGED\n"), app.deleteWarning(for: a))
+
+        app.delete(a)
+        assert(app.selectedSessionID == nil, "a deleted session cannot stay selected")
+        assert(FakeCore.spin { core.count("DeleteSession") == 1 && app.busy == nil }, "delete must reach the core")
+        assert(core.log.contains(#"{"args":{"id":"p:a"},"method":"DeleteSession"}"#))
+        assert(app.actionError == nil)
+        // A refusal is the core's words in the action alert — not a dropped
+        // connection, which would blank the sidebar.
+        core.on("DeleteSession") { try? $0.write(Data(#"{"err":"worktree is locked"}"#.utf8)) }
+        app.delete(a)
+        assert(FakeCore.spin { app.actionError != nil })
+        assert(app.actionError == "Delete failed: worktree is locked", app.actionError ?? "")
+        assert(!app.connection.isDown)
+
+        // MARK: Watch
+
+        // First connection: a snapshot, a watcher error once (a half-written
+        // status file — must not flash), the same error again (real — must
+        // show), then the core goes away. Second: a core too old for derived
+        // state, which must not blank the list. Each step waits for the test,
+        // and changes the view so the test can see it landed.
+        final class Script: @unchecked Sendable {
+            let step = DispatchSemaphore(value: 0)
+            var connections = 0
+        }
+        let script = Script()
+        func snapshot(_ state: String, err: String? = nil) -> Data {
+            let errKey = err.map { #","err":"\#($0)""# } ?? ""
+            return Data((#"{"sessions":[{"id":"p:a","name":"a","project":"p","worktree_path":"/w/a"}],"#
+                         + #""views":{"p:a":{"id":"p:a","state":"\#(state)"}}\#(errKey)}"# + "\n").utf8)
+        }
+        let first = [snapshot("working"), snapshot("needs-input", err: "boom"), snapshot("done", err: "boom")]
+        core.on("Watch") { socket in
+            script.connections += 1
+            if script.connections == 1 {
+                for line in first {
+                    try? socket.write(line)
+                    script.step.wait()
+                }
+            } else {
+                try? socket.write(Data((#"{"sessions":[]}"# + "\n").utf8))
+                _ = try? socket.readChunk()  // held until the app hangs up
+            }
+        }
+        app.start()
+        defer { app.stop() }
+        assert(FakeCore.spin { app.views[a.id]?.state == .working }, "the first snapshot must land")
+        assert(app.sessions.map(\.id) == [a.id] && app.statusError == nil)
+        script.step.signal()
+        assert(FakeCore.spin { app.views[a.id]?.state == .needsInput })
+        assert(app.statusError == nil, "one watcher error is the self-clearing race")
+        script.step.signal()
+        assert(FakeCore.spin { app.views[a.id]?.state == .done })
+        assert(app.statusError == "boom", "the same error twice is real")
+        script.step.signal()
+        assert(FakeCore.spin { app.statusError?.hasPrefix("status stream lost") == true },
+               "a dropped stream says so: \(app.statusError ?? "nil")")
+        assert(FakeCore.spin { app.statusError?.contains("too old") == true },
+               "the loop must reconnect, and say when the core is too old: \(app.statusError ?? "nil")")
+        assert(script.connections == 2)
+        assert(app.sessions.map(\.id) == [a.id], "an old core's empty snapshot must not blank the list")
+    }
+}

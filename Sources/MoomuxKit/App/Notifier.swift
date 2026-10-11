@@ -56,19 +56,24 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         if !change.ended.isEmpty {
             center.removeDeliveredNotifications(withIdentifiers: change.ended)
         }
-        for id in change.started {
-            guard let session = app.session(id: id), !session.archived else { continue }
-            // A banner for the window you are already looking at is noise.
-            // On the phone that is the pane on screen; every other session
-            // still banners in the foreground (`willPresent` below).
-            #if os(macOS)
-            if NSApp.isActive, app.selectedSessionID == session.id { continue }
-            #else
-            if UIApplication.shared.applicationState == .active,
-               app.paneOnScreen == session.id { continue }
-            #endif
+        // A banner for the window you are already looking at is noise. On the
+        // phone that is the pane on screen; every other session still banners
+        // in the foreground (`willPresent` below).
+        #if os(macOS)
+        let focused = NSApp.isActive ? app.selectedSessionID : nil
+        #else
+        let focused = UIApplication.shared.applicationState == .active ? app.paneOnScreen : nil
+        #endif
+        for session in Notifier.bannered(change.started.compactMap(app.session(id:)), focused: focused) {
             post(session, to: center)
         }
+    }
+
+    /// Of the sessions that just started waiting, the ones worth a banner: not
+    /// archived, and not the one in front of you. A session the store does not
+    /// know is already gone from `started` by the caller's lookup.
+    nonisolated static func bannered(_ started: [Session], focused: Session.ID?) -> [Session] {
+        started.filter { !$0.archived && $0.id != focused }
     }
 
     private func post(_ session: Session, to center: UNUserNotificationCenter) {
@@ -167,5 +172,15 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // transition either.
         let u = transitions(from: [a: .needsInput, b: .working], to: [b: .working])
         assert(u.started.isEmpty && u.ended.isEmpty, "\(u)")
+
+        // Archived sessions and the focused one never banner; `focused` is nil
+        // whenever the app is not in front, and then everything else does.
+        func session(_ id: String, archived: Bool = false) -> Session {
+            try! Wire.decoder.decode(Session.self, from: Data(
+                #"{"id":"\#(id)","project":"p","name":"\#(id)","archived":\#(archived)}"#.utf8))
+        }
+        let started = [session(a), session(b), session("p:c", archived: true)]
+        assert(bannered(started, focused: nil).map(\.id) == [a, b])
+        assert(bannered(started, focused: a).map(\.id) == [b], "the session in front is not news")
     }
 }
