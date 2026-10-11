@@ -44,3 +44,24 @@ public enum SidebarGrid {
         indent(level, font) + disclosure(font) + gap
     }
 }
+
+extension SidebarGrid {
+    /// The rule the grid exists for: a session's dot sits exactly one step
+    /// right of its header's icon, at every level and every font size — the
+    /// alignment two hand-tuned constants could not hold.
+    public static func demo() {
+        for font in [11.0, SidebarGrid.phoneFont, 22] {
+            for level in 0...1 {
+                // x of the icon column as RootView lays rows out: a header is
+                // [indent][disclosure][icon][name], a session [rowIndent][icon][name].
+                let headerIcon = indent(level, font) + disclosure(font) + gap
+                let childDot = rowIndent(level + 1, font)
+                assert(childDot - headerIcon == step(font),
+                       "a session sits one step in from its header (level \(level), \(font)pt)")
+                // A subheader one level in lines its icon up with that session's dot.
+                assert(indent(level + 1, font) + disclosure(font) + gap == childDot)
+            }
+        }
+        assert(indent(0, 15) == 0, "the top level is flush")
+    }
+}

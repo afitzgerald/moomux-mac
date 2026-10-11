@@ -366,3 +366,130 @@ public enum AttachRoute: Equatable, Sendable {
                "a remote core needs no tmux here at all")
     }
 }
+
+// MARK: - Checks
+
+extension RemoteAttach {
+    /// The far end of one attach: records what was typed, and hangs up when
+    /// told to. `closed` once either side has left.
+    private final class FarEnd: @unchecked Sendable {
+        private let lock = NSLock()
+        private var bytes = Data()
+        private var socket: StreamSocket?
+        private var ended = false
+        var typed: String { lock.withLock { String(decoding: bytes, as: UTF8.self) } }
+        var closed: Bool { lock.withLock { ended } }
+
+        /// The core leaving: the attach's read sees EOF, as for a killed session.
+        func hangUp() { lock.withLock { socket }?.close() }
+
+        /// `Attach` answered as a core does: the response line, the first
+        /// frame in the same write, then raw bytes until one side leaves.
+        func serve(on core: FakeCore, token: String?) {
+            let header = token.map { #"{"result":{"ok":true,"attach":"\#($0)"}}"# } ?? #"{"result":{"ok":true}}"#
+            core.on("Attach") { [self] socket in
+                lock.withLock { self.socket = socket }
+                try? socket.write(Data((header + "\n" + "drawn").utf8))
+                while let chunk = try? socket.readChunk(), !chunk.isEmpty { lock.withLock { bytes.append(chunk) } }
+                lock.withLock { ended = true }
+            }
+        }
+    }
+
+    private final class Count: @unchecked Sendable { var value = 0 }
+
+    /// The three things here that once went wrong in a way no screenshot
+    /// shows: the first layout pass's size kept, keys lost across the attach,
+    /// and a killed session brought back to life by a reattach.
+    public static func demo() {
+        func quiet() { _ = FakeCore.spin(0.6) { false } }  // > the 250ms settle
+
+        // MARK: Settle, keys, resize in place, the far end leaving
+
+        do {
+            let core = FakeCore(), far = FarEnd(), ended = Count()
+            far.serve(on: core, token: "t0")
+            let pane = RemoteAttach(client: MoomuxClient(socketPath: core.path), sessionID: "p:a") { ended.value += 1 }
+            pane.session.sendInput(Data("early ".utf8))  // before any channel: buffered, not dropped
+            pane.terminalDidResize(columns: 62, rows: 62)
+            pane.terminalDidResize(columns: 62, rows: 53)
+            assert(FakeCore.spin { core.count("Attach") == 1 }, "a settled size must attach")
+            quiet()
+            assert(core.log.filter { $0.contains("Attach") }
+                == [#"{"args":{"cols":62,"id":"p:a","rows":53},"method":"Attach"}"#],
+                   "one attach, at the settled size — not the first layout pass's: \(core.log)")
+            pane.session.sendInput(Data("late".utf8))
+            assert(FakeCore.spin { far.typed == "early late" }, "keys arrive once, in order: \(far.typed)")
+
+            // A core that named the attach resizes it in place: no reconnect.
+            pane.terminalDidResize(columns: 80, rows: 24)
+            assert(FakeCore.spin { core.count("ResizeAttach") == 1 })
+            assert(core.log.contains(#"{"args":{"attach":"t0","cols":80,"rows":24},"method":"ResizeAttach"}"#))
+            assert(core.count("Attach") == 1)
+
+            // The far end closing is the session ending: leave, once, and
+            // never attach again — `Attach` would recreate a killed session.
+            far.hangUp()
+            assert(FakeCore.spin { ended.value == 1 }, "a closed attach ends the pane")
+            pane.terminalDidResize(columns: 100, rows: 30)
+            quiet()
+            assert(core.count("Attach") == 1 && ended.value == 1, "an ended pane must not reattach")
+        }
+
+        // MARK: A reattach checks the session is still there
+
+        do {
+            // No token: an older core, so a resize is a reattach. Its `Capture`
+            // answers without the session — killed meanwhile — so the pane ends
+            // instead of attaching, which would have revived it.
+            let core = FakeCore(), far = FarEnd(), ended = Count()
+            far.serve(on: core, token: nil)
+            let pane = RemoteAttach(client: MoomuxClient(socketPath: core.path), sessionID: "p:b") { ended.value += 1 }
+            pane.terminalDidResize(columns: 80, rows: 24)
+            assert(FakeCore.spin { core.count("Attach") == 1 })
+            assert(FakeCore.spin { pane.channel != nil }, "the attach must land before the resize")
+            pane.terminalDidResize(columns: 100, rows: 30)
+            assert(FakeCore.spin { ended.value == 1 }, "a reattach to a dead session ends the pane")
+            assert(core.count("Capture") == 1, "every reattach asks first")
+            assert(core.count("Attach") == 1, "and never attaches to a session that is gone")
+            assert(FakeCore.spin { far.closed }, "the old attach is closed, not left as a stray tmux client")
+        }
+
+        // MARK: A refused resize falls back to reattaching
+
+        do {
+            // The core forgot the token (restarted, or the attach is gone): the
+            // pane reattaches at the new size rather than keeping the old one.
+            let core = FakeCore(), far = FarEnd(), ended = Count()
+            far.serve(on: core, token: "t0")
+            core.on("ResizeAttach") { try? $0.write(Data(#"{"err":"unknown attach"}"#.utf8)) }
+            // Still alive, so the reattach's check lets it through.
+            core.on("Capture") { try? $0.write(Data(#"{"result":{"screens":{"p:d":"$ "}}}"#.utf8)) }
+            let pane = RemoteAttach(client: MoomuxClient(socketPath: core.path), sessionID: "p:d") { ended.value += 1 }
+            pane.terminalDidResize(columns: 80, rows: 24)
+            assert(FakeCore.spin { pane.channel != nil })
+            pane.terminalDidResize(columns: 100, rows: 30)
+            assert(FakeCore.spin { core.count("Attach") == 2 }, "a refused resize must reattach")
+            assert(core.log.last == #"{"args":{"cols":100,"id":"p:d","rows":30},"method":"Attach"}"#,
+                   core.log.last ?? "")
+            assert(ended.value == 0)
+            pane.teardown()
+        }
+
+        // MARK: Teardown
+
+        do {
+            let core = FakeCore(), far = FarEnd(), ended = Count()
+            far.serve(on: core, token: "t0")
+            let pane = RemoteAttach(client: MoomuxClient(socketPath: core.path), sessionID: "p:c") { ended.value += 1 }
+            pane.terminalDidResize(columns: 80, rows: 24)
+            assert(FakeCore.spin { pane.channel != nil })
+            pane.teardown()
+            assert(FakeCore.spin { far.closed }, "teardown hangs up — that is the detach")
+            pane.terminalDidResize(columns: 90, rows: 30)
+            quiet()
+            assert(core.count("Attach") == 1, "a torn-down pane never attaches again")
+            assert(ended.value == 0, "leaving is not the far end ending")
+        }
+    }
+}

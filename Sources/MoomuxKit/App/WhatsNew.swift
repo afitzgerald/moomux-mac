@@ -52,11 +52,12 @@ public enum WhatsNew {
     /// What to show at launch, if anything: the version last seen before this
     /// one. Marks this one seen as it answers, so quitting with the sheet up
     /// does not show it again.
-    public static func takeUnseen(_ defaults: UserDefaults = .standard) -> (show: Bool, seen: String?) {
+    public static func takeUnseen(_ defaults: UserDefaults = .standard, in all: [Release] = releases,
+                                  current: String = version) -> (show: Bool, seen: String?) {
         let seen = defaults.string(forKey: seenKey)
-        guard !releases.isEmpty, seen != version else { return (false, seen) }
-        defaults.set(version, forKey: seenKey)
-        return (!releases(after: seen).isEmpty, seen)
+        guard !all.isEmpty, seen != current else { return (false, seen) }
+        defaults.set(current, forKey: seenKey)
+        return (!releases(after: seen, in: all, current: current).isEmpty, seen)
     }
 
     /// GitHub's generated-notes markdown, one body per `# vX.Y.Z` line, cut down
@@ -144,6 +145,21 @@ public enum WhatsNew {
         assert(releases(after: nil, in: all, current: "0.0.97").map(\.version) == ["0.0.97"])
         // An all-internal running release has nothing to say to a new install.
         assert(releases(after: nil, in: all, current: "0.0.96").isEmpty)
+
+        // The launch check marks the running version seen as it answers, so the
+        // sheet shows once per upgrade — and a local build, with no notes baked
+        // in, neither shows it nor marks anything.
+        let suite = "moomux.selftest.whatsnew.\(getpid())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        assert(takeUnseen(defaults, in: [], current: "0.0.97") == (false, nil))
+        assert(defaults.string(forKey: seenKey) == nil, "a build with no notes marks nothing seen")
+        assert(takeUnseen(defaults, in: all, current: "0.0.97") == (true, nil), "a fresh install sees its release")
+        assert(takeUnseen(defaults, in: all, current: "0.0.97") == (false, "0.0.97"), "and only once")
+        assert(takeUnseen(defaults, in: all, current: "0.0.96") == (false, "0.0.97"),
+               "a release with nothing user-facing is marked seen but not shown")
+        defaults.set("0.0.9", forKey: seenKey)
+        assert(takeUnseen(defaults, in: all, current: "0.0.97") == (true, "0.0.9"))
 
         assert(text("See [docs](file:///etc/passwd) and `code`").link == nil)
         assert(String(text("See [docs](https://x) now").characters) == "See docs now")

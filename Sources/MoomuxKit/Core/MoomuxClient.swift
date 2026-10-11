@@ -741,166 +741,11 @@ public final class MoomuxClient: Sendable {
     // MARK: Checks
 
     public static func demo() {
-        let encoder = JSONEncoder()
-        // `.withoutEscapingSlashes` only so a path in an expected literal below
-        // reads as a path; the shipping encoder writes "\/" and Go is indifferent.
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-
-        // Unset args must vanish, not serialize as null: the Go side decodes
-        // into a struct union where an explicit null is fine but an unexpected
-        // key is not, and `Watch` is dispatched on method alone.
-        let watch = String(decoding: try! encoder.encode(Request(method: "Watch")), as: UTF8.self)
+        // `Watch` is the one request that is not a `call()`, so it is pinned
+        // straight off the encoder. Unset args must vanish, not serialize as
+        // null: the stream is dispatched on method alone.
+        let watch = String(decoding: try! JSONEncoder().encode(Request(method: "Watch")), as: UTF8.self)
         assert(watch == #"{"method":"Watch"}"#, watch)
-
-        let ensure = String(
-            decoding: try! encoder.encode(Request(method: "EnsureTmux", args: Args(id: "s1"))),
-            as: UTF8.self)
-        assert(ensure == #"{"args":{"id":"s1"},"method":"EnsureTmux"}"#, ensure)
-        var resize = Args()
-        resize.attach = "t0"
-        resize.cols = 62
-        resize.rows = 51
-        let resized = String(
-            decoding: try! encoder.encode(Request(method: "ResizeAttach", args: resize)),
-            as: UTF8.self)
-        assert(resized == #"{"args":{"attach":"t0","cols":62,"rows":51},"method":"ResizeAttach"}"#, resized)
-
-        // `GhosttyConfig`'s answer, as the contract spells it.
-        let ghostty = try! Wire.decoder.decode(Response.self, from: Data(
-            #"{"result":{"ghostty":{"text":"font-size = 13\n","files":["/h/.config/ghostty/config.ghostty"]}}}"#.utf8))
-        assert(ghostty.result?.ghostty?.text == "font-size = 13\n")
-        assert(ghostty.result?.ghostty?.files == ["/h/.config/ghostty/config.ghostty"])
-        let none = try! Wire.decoder.decode(Response.self, from: Data(#"{"result":{"ghostty":{"text":""}}}"#.utf8))
-        assert(none.result?.ghostty?.text == "" && none.result?.ghostty?.files == nil, "no config is empty, not absent")
-
-        // An empty tag is how a tag is cleared, so it has to go over the wire
-        // as "" rather than being dropped — and every field nobody set must be
-        // absent, never null.
-        let tags = String(
-            decoding: try! encoder.encode(
-                Request(method: "SetSessionTags", args: Args(id: "s1", ticket: "T-1", pr: ""))),
-            as: UTF8.self)
-        assert(tags == #"{"args":{"id":"s1","pr":"","ticket":"T-1"},"method":"SetSessionTags"}"#, tags)
-        assert(!tags.contains("name"), "unset fields must vanish")
-
-        // Unarchiving sends `on:false` explicitly. Go's omitempty would drop it
-        // and the zero value is the same false, so both spellings are correct —
-        // this pins which one we send, so a reader isn't left guessing.
-        let unarchive = String(
-            decoding: try! encoder.encode(
-                Request(method: "SetSessionArchived", args: Args(id: "s1", on: false))),
-            as: UTF8.self)
-        assert(unarchive == #"{"args":{"id":"s1","on":false},"method":"SetSessionArchived"}"#, unarchive)
-
-        // Off is the agent-only layout, so `on:false` must reach the core
-        // rather than vanish as an unset field.
-        let paneOff = String(
-            decoding: try! encoder.encode(Request(method: "SetTerminalPane", args: Args(on: false))),
-            as: UTF8.self)
-        assert(paneOff == #"{"args":{"on":false},"method":"SetTerminalPane"}"#, paneOff)
-
-        // A create rides entirely inside `req` — one transaction the core runs
-        // end to end, rather than a dozen flat args and five follow-up calls.
-        // `Dangerous` is spelled out because this app's form asks; leaving it
-        // nil would mean "the project's default", which is a different answer.
-        let create = String(
-            decoding: try! encoder.encode(Request(method: "CreateSession", args: Args(
-                req: CreateRequest(project: "moomux", name: "macos", dangerous: false)))),
-            as: UTF8.self)
-        assert(create == #"{"args":{"req":{"Agent":"","AutoSubmit":false,"BaseBranch":"","#
-               + #""Branch":"","Dangerous":false,"Model":"","Name":"macos","PR":"","#
-               + #""Project":"moomux","Prompt":"","Thinking":"","Ticket":""}},"#
-               + #""method":"CreateSession"}"#, create)
-
-        // A whole config.Project rides in `proj`, encoded by `Project` itself.
-        let addProject = String(
-            decoding: try! encoder.encode(Request(method: "AddProject", args: Args(
-                name: "site", proj: Project(repo: "/src/site", baseBranch: "main")))),
-            as: UTF8.self)
-        assert(addProject == #"{"args":{"name":"site","proj":{"base_branch":"main","#
-               + #""collapsed":false,"dangerous":false,"no_worktree":false,"#
-               + #""prompt_agent":false,"repo":"/src/site"}},"method":"AddProject"}"#, addProject)
-
-        // The two folder args: a rename carries the old name in `name` and the
-        // new one in `new_name`. No project — folders are a global namespace,
-        // and a stray `project` key would be accepted and ignored rather than
-        // refused, so it has to be left off here.
-        // The keys are snake_case on the wire; a mismatch here is silent on
-        // both sides — Go ignores the unknown key and uses the zero value.
-        let rename = String(
-            decoding: try! encoder.encode(Request(method: "RenameFolder", args: Args(
-                name: "wip", newName: "done"))),
-            as: UTF8.self)
-        assert(rename == #"{"args":{"name":"wip","new_name":"done"},"#
-               + #""method":"RenameFolder"}"#, rename)
-
-        // A reorder sends the project's whole resulting order, not a delta.
-        let order = String(
-            decoding: try! encoder.encode(
-                Request(method: "ReorderSessions", args: Args(ids: ["a", "b"]))),
-            as: UTF8.self)
-        assert(order == #"{"args":{"ids":["a","b"]},"method":"ReorderSessions"}"#, order)
-
-        // An upload's bytes go as base64, which is what Go's []byte decodes;
-        // its answer comes back on `path`.
-        let upload = String(
-            decoding: try! encoder.encode(
-                Request(method: "SaveFile", args: Args(name: "a.png", data: Data([0, 1, 0xff])))),
-            as: UTF8.self)
-        assert(upload == #"{"args":{"data":"AAH/","name":"a.png"},"method":"SaveFile"}"#, upload)
-        let saved = try! Wire.decoder.decode(
-            Response.self, from: Data(#"{"result":{"path":"/tmp/moomux-images/ab-a.png"}}"#.utf8))
-        assert(saved.result?.path == "/tmp/moomux-images/ab-a.png")
-
-        // The theme call is the only one sending both of these, and clearing
-        // the appearance override means sending "" rather than dropping it.
-        let theme = String(
-            decoding: try! encoder.encode(
-                Request(method: "SetTheme", args: Args(theme: "gruvbox", appearance: ""))),
-            as: UTF8.self)
-        assert(theme == #"{"args":{"appearance":"","theme":"gruvbox"},"method":"SetTheme"}"#, theme)
-
-        // A mutating call answers with the updated session, not a bare ok.
-        let renamed = #"{"result":{"session":{"id":"p:new","name":"new","project":"p"}}}"#
-        let rr = try! Wire.decoder.decode(Response.self, from: Data(renamed.utf8))
-        assert(rr.result?.session?.name == "new")
-
-        // A server-side error arrives as a string beside an empty result; it
-        // must surface as a thrown error rather than as "no sessions".
-        let failed = """
-        {"result":{},"err":"tmux: no server running","code":""}
-        """
-        let response = try! Wire.decoder.decode(Response.self, from: Data(failed.utf8))
-        assert(response.err == "tmux: no server running")
-        assert(response.result?.sessions == nil)
-
-        // `code` is how a sentinel survives the round trip, and this one is a
-        // question rather than a failure: "not a git repo" is what the app
-        // answers with "init one" or "add it as a plain folder". Without the
-        // code it would be an unactionable error string, exactly as it would be
-        // for the TUI.
-        let notRepo = try! Wire.decoder.decode(
-            Response.self,
-            from: Data(#"{"err":"/tmp/x: not a git repository","code":"not_git_repo"}"#.utf8))
-        assert(notRepo.code == "not_git_repo")
-
-        // The agent table, as `AgentOptions` answers it.
-        let agentsJSON = """
-        {"result":{"agents":[{"name":"claude","models":["default","opus"],
-                              "thinking":["default","ultrathink"]}]}}
-        """
-        let served = try! Wire.decoder.decode(Response.self, from: Data(agentsJSON.utf8))
-        assert(served.result?.agents?.count == 1)
-        assert(served.result?.agents?.first?.thinking == ["default", "ultrathink"])
-
-        // The status calls share one Result union, so an absent field must not
-        // read as a zero: `ok:false` with no counts means "don't know", which
-        // is different from "clean".
-        let statusJSON = #"{"result":{"dirty":true,"ok":true,"files":3,"commits":2}}"#
-        let st = try! Wire.decoder.decode(Response.self, from: Data(statusJSON.utf8))
-        assert(st.result?.dirty == true)
-        assert(st.result?.unpushed == nil, "omitempty means absent, not false")
-        assert(st.result?.files == 3 && st.result?.commits == 2)
 
         var summary = SessionStatus(known: true, dirty: true, unpushed: true,
                                     filesChanged: 3, unpushedCommits: 1)
@@ -909,12 +754,245 @@ public final class MoomuxClient: Sendable {
         assert(summary.changeSummary == "uncommitted changes", summary.changeSummary)
         assert(SessionStatus(known: true).changeSummary.isEmpty, "a clean worktree says nothing")
 
-        // A plain successful call: no error, and the fields it did not fill
-        // stay nil rather than reading as zeros.
-        let good = try! Wire.decoder.decode(
-            Response.self, from: Data(#"{"result":{"hint":"attach with: tmux attach -t x"}}"#.utf8))
-        assert(good.err == nil)
-        assert(good.result?.hint == "attach with: tmux attach -t x")
-        assert(good.result?.sessions == nil)
+        callsDemo()
+    }
+
+    /// Every call, through the real `call()` against `FakeCore`: the method
+    /// name and argument mapping in each wrapper, the half-close, and the error
+    /// mapping. A wrapper that sends the wrong method or puts a value in the
+    /// wrong key is silent on both sides — Go ignores the unknown key and uses
+    /// the zero value — so each request is pinned whole.
+    private static func callsDemo() {
+        let core = FakeCore()
+        let client = MoomuxClient(socketPath: core.path)
+
+        func expect(_ want: String, answer: String = #"{"result":{}}"#,
+                    file: StaticString = #file, line: UInt = #line, _ body: () throws -> Void) {
+            let sent = core.requests(answering: answer) {
+                do { try body() } catch { assertionFailure("\(error)", file: file, line: line) }
+            }
+            assert(sent == want, sent, file: file, line: line)
+        }
+        // `assert`'s autoclosure cannot throw; an ordinary argument can.
+        func check(_ ok: Bool, _ message: String = "", file: StaticString = #file, line: UInt = #line) {
+            assert(ok, message, file: file, line: line)
+        }
+        func refused(_ answer: String, file: StaticString = #file, line: UInt = #line,
+                     _ body: () throws -> Void) -> Failure? {
+            var caught: Failure?
+            _ = core.requests(answering: answer) {
+                do { try body() } catch let f as Failure { caught = f } catch {
+                    assertionFailure("not a Failure: \(error)", file: file, line: line)
+                }
+            }
+            return caught
+        }
+
+        // MARK: Reads
+
+        expect(#"{"method":"Config"}"#,
+               answer: #"{"result":{"cfg":{"order":["a"]},"project_emoji":{"a":"🐄"}}}"#) {
+            let (cfg, emoji) = try client.config()
+            assert(cfg.order == ["a"] && emoji == ["a": "🐄"])
+        }
+        expect(#"{"method":"AgentOptions"}"#, answer: """
+            {"result":{"agents":[{"name":"claude","models":["default","opus"],"thinking":["default","ultrathink"]}]}}
+            """) {
+            check(try client.agentOptions().first?.thinking == ["default", "ultrathink"])
+        }
+        expect(#"{"method":"Themes"}"#) { check(try client.themes().isEmpty) }
+        expect(#"{"method":"Sessions"}"#,
+               answer: #"{"result":{"sessions":[{"id":"p:a","name":"a","project":"p"}]}}"#) {
+            check(try client.sessions().map(\.id) == ["p:a"])
+        }
+
+        // An upload's bytes go as base64, which is what Go's []byte decodes.
+        expect(#"{"args":{"data":"AAH/","name":"a.png"},"method":"SaveFile"}"#,
+               answer: #"{"result":{"path":"/tmp/moomux-images/ab-a.png"}}"#) {
+            check(try client.saveFile(name: "a.png", data: Data([0, 1, 0xff])) == "/tmp/moomux-images/ab-a.png")
+        }
+        // No `data` key is an empty file: Go's omitempty drops a zero-length []byte.
+        expect(#"{"args":{"id":"s1","path":"a.txt"},"method":"ReadFile"}"#,
+               answer: #"{"result":{"path":"/w/a.txt"}}"#) {
+            let file = try client.readFile(id: "s1", path: "a.txt")
+            assert(file.path == "/w/a.txt" && file.data.isEmpty)
+        }
+        expect(#"{"args":{"id":"s1","path":"a.txt"},"method":"ResolveFile"}"#,
+               answer: #"{"result":{"path":"/w/a.txt"}}"#) {
+            check(try client.resolveFile(id: "s1", path: "a.txt") == "/w/a.txt")
+        }
+
+        // Two round trips, and an absent field must not read as a zero:
+        // `unpushed` was never sent, so it is false rather than guessed.
+        expect(#"{"args":{"id":"s1"},"method":"WorktreeStatus"}"# + "\n"
+               + #"{"args":{"id":"s1"},"method":"ChangeSummary"}"#,
+               answer: #"{"result":{"ok":true,"dirty":true,"files":3,"commits":2}}"#) {
+            check(try client.status(id: "s1") == SessionStatus(
+                known: true, dirty: true, unpushed: false, filesChanged: 3, unpushedCommits: 2))
+        }
+        // "We asked and the core does not know" — the delete dialog's guard
+        // must never read that as clean.
+        expect(#"{"args":{"id":"s1"},"method":"WorktreeStatus"}"#) {
+            check(try client.worktreeStatus(id: "s1").known == false)
+        }
+
+        expect(#"{"args":{"id":"s1"},"method":"EnsureTmux"}"#, answer: #"{"result":{"hint":"revived"}}"#) {
+            check(try client.ensureTmux(id: "s1") == "revived")
+        }
+        expect(#"{"args":{"ids":["a","b"]},"method":"Capture"}"#, answer: #"{"result":{"screens":{"a":"$ "}}}"#) {
+            check(try client.capture(ids: ["a", "b"]) == ["a": "$ "])
+        }
+        expect(#"{"args":{"id":"s1"},"method":"Diff"}"#,
+               answer: #"{"result":{"ok":true,"patch":"diff --git","base":"main"}}"#) {
+            let diff = try client.diff(id: "s1")
+            assert(diff?.patch == "diff --git" && diff?.base == "main" && diff?.truncated == false)
+        }
+        expect(#"{"args":{"id":"s1"},"method":"Diff"}"#) {
+            check(try client.diff(id: "s1") == nil, "ok=false is a non-git worktree, not an empty diff")
+        }
+        expect(#"{"args":{"id":"s1"},"method":"Review"}"#) { check(try client.review(id: "s1") == "") }
+
+        expect(#"{"method":"GhosttyConfig"}"#, answer: #"{"result":{"ghostty":{"text":"font-size = 13\n"}}}"#) {
+            check(try client.ghosttyConfig() == "font-size = 13\n")
+        }
+        expect(#"{"method":"GhosttyConfig"}"#) {
+            check(try client.ghosttyConfig() == "", "no config is empty, not absent")
+        }
+        // A core too old to serve it is not an error: the pane keeps its built-in look.
+        expect(#"{"method":"GhosttyConfig"}"#, answer: #"{"err":"unknown method \"GhosttyConfig\""}"#) {
+            check(try client.ghosttyConfig() == nil)
+        }
+
+        // MARK: Session writes
+
+        // A create rides entirely inside `req`. `Dangerous` is spelled out
+        // because this app's form asks; nil would mean "the project's
+        // default", a different answer — how a `dangerous` project once got
+        // sessions without the flag. `Wire.demo` pins every key's spelling.
+        expect(#"{"args":{"req":{"Agent":"","AutoSubmit":false,"BaseBranch":"","#
+               + #""Branch":"","Dangerous":false,"Model":"","Name":"macos","PR":"","#
+               + #""Project":"moomux","Prompt":"","Thinking":"","Ticket":""}},"#
+               + #""method":"CreateSession"}"#,
+               answer: #"{"result":{"session":{"id":"moomux:macos","name":"macos","project":"moomux"},"hint":"h"}}"#) {
+            let (session, hint) = try client.createSession(CreateRequest(project: "moomux", name: "macos", dangerous: false))
+            assert(session.id == "moomux:macos" && hint == "h")
+        }
+        expect(#"{"args":{"id":"s1"},"method":"DeleteSession"}"#) { try client.deleteSession(id: "s1") }
+        // A pty is never smaller than 1x1; the core reads a zero as 80x24.
+        expect(#"{"args":{"attach":"t0","cols":1,"rows":1},"method":"ResizeAttach"}"#) {
+            try client.resizeAttach(token: "t0", cols: 0, rows: -3)
+        }
+        expect(#"{"args":{"id":"s1"},"method":"KillTmux"}"#) { try client.killTmux(id: "s1") }
+        expect(#"{"args":{"id":"s1","name":"new"},"method":"RenameSession"}"#) { try client.rename(id: "s1", to: "new") }
+        // An empty tag is how a tag is cleared, so it goes over as "".
+        expect(#"{"args":{"id":"s1","pr":"","ticket":"T-1"},"method":"SetSessionTags"}"#) {
+            try client.setTags(id: "s1", ticket: "T-1", pr: "")
+        }
+        expect(#"{"args":{"id":"s1","on":false},"method":"SetSessionArchived"}"#) { try client.setArchived(id: "s1", false) }
+        // `dangerous:false` explicit: the agent and its permission flag are one choice.
+        expect(#"{"args":{"agent":"codex","dangerous":false,"id":"s1"},"method":"SetSessionAgent"}"#) {
+            try client.setAgent(id: "s1", agent: "codex", dangerous: false)
+        }
+        // The project's whole resulting order, never a delta.
+        expect(#"{"args":{"ids":["a","b"]},"method":"ReorderSessions"}"#) { try client.reorderSessions(["a", "b"]) }
+
+        // MARK: Folders — global, so no `project` key on any of them
+
+        // An empty folder un-files the session, so "" must reach the core.
+        expect(#"{"args":{"id":"s1","name":""},"method":"SetSessionFolder"}"#) { try client.setSessionFolder(id: "s1", folder: "") }
+        expect(#"{"args":{"name":"wip"},"method":"CreateFolder"}"#) { try client.createFolder(name: "wip") }
+        expect(#"{"args":{"name":"wip","new_name":"done"},"method":"RenameFolder"}"#) { try client.renameFolder(from: "wip", to: "done") }
+        expect(#"{"args":{"name":"wip"},"method":"DeleteFolder"}"#) { try client.deleteFolder(name: "wip") }
+        expect(#"{"args":{"name":"wip","on":true},"method":"SetFolderCollapsed"}"#) { try client.setFolderCollapsed(name: "wip", true) }
+        expect(#"{"args":{"on":false,"project":"p"},"method":"SetProjectCollapsed"}"#) {
+            try client.setProjectCollapsed(project: "p", false)
+        }
+
+        // MARK: Projects — a whole config.Project in `proj`, encoded by `Project`
+
+        let site = Project(repo: "/src/site", baseBranch: "main")
+        let proj = #""proj":{"base_branch":"main","collapsed":false,"dangerous":false,"#
+            + #""no_worktree":false,"prompt_agent":false,"repo":"/src/site"}"#
+        expect(#"{"args":{"name":"site","# + proj + #"},"method":"AddProject"}"#) { try client.addProject(name: "site", site) }
+        expect(#"{"args":{"name":"site","# + proj + #"},"method":"InitProjectAndAdd"}"#) { try client.initProjectAndAdd(name: "site", site) }
+        expect(#"{"args":{"name":"site","# + proj + #"},"method":"AddPlainProject"}"#) { try client.addPlainProject(name: "site", site) }
+        expect(#"{"args":{"name":"site","# + proj + #"},"method":"UpdateProject"}"#) { try client.updateProject(name: "site", site) }
+        expect(#"{"args":{"name":"site"},"method":"RemoveProject"}"#) { try client.removeProject(name: "site") }
+        expect(#"{"args":{"delta":-1,"name":"site"},"method":"MoveProject"}"#) { try client.moveProject(name: "site", delta: -1) }
+
+        // MARK: Settings — `on:false` must arrive, not vanish as unset
+
+        expect(#"{"args":{"appearance":"","theme":"gruvbox"},"method":"SetTheme"}"#) { try client.setTheme("gruvbox", appearance: "") }
+        expect(#"{"args":{"on":true},"method":"SetAutoSubmitDefault"}"#) { try client.setAutoSubmitDefault(true) }
+        expect(#"{"args":{"on":false},"method":"SetSortRecentFirst"}"#) { try client.setSortRecentFirst(false) }
+        expect(#"{"args":{"on":true},"method":"SetAutoTmux"}"#) { try client.setAutoTmux(true) }
+        expect(#"{"args":{"on":false},"method":"SetTerminalPane"}"#) { try client.setTerminalPane(false) }
+
+        // MARK: Failures
+
+        // A server error must throw, never read as "no sessions" — one nil
+        // list would look like every session was deleted.
+        if case .server("tmux: no server running")? = refused(#"{"result":{},"err":"tmux: no server running","code":""}"#, {
+            _ = try client.sessions()
+        }) {} else { assertionFailure("a server error must surface") }
+        // `code` is how the one question-shaped error survives the round trip.
+        if case .notGitRepo? = refused(#"{"err":"/tmp/x: not a git repository","code":"not_git_repo"}"#, {
+            try client.addProject(name: "x", Project(repo: "/tmp/x"))
+        }) {} else { assertionFailure("not_git_repo must map to .notGitRepo") }
+        // A closed connection with no answer is a failure, not an empty result.
+        if case .emptyResponse? = refused("", { _ = try client.sessions() }) {} else {
+            assertionFailure("no answer must be .emptyResponse")
+        }
+        if case .emptyResponse? = refused(#"{"result":{}}"#, {
+            _ = try client.createSession(CreateRequest(project: "p", name: "n"))
+        }) {} else { assertionFailure("a create with no session is not a success") }
+        // An old core's "unknown method" is reworded into something a user can act on.
+        for (method, call) in [("SaveFile", { _ = try client.saveFile(name: "a", data: Data()) }),
+                               ("ReadFile", { _ = try client.readFile(id: "s", path: "a") }),
+                               ("ResolveFile", { _ = try client.resolveFile(id: "s", path: "a") }),
+                               ("Diff", { _ = try client.diff(id: "s") })] as [(String, () throws -> Void)] {
+            if case let .server(message)? = refused(#"{"err":"unknown method \"\#(method)\""}"#, call) {
+                assert(message.contains("too old"), message)
+            } else { assertionFailure("\(method): unknown method must be reworded") }
+        }
+
+        // MARK: The status stream
+
+        // One snapshot per line, blank lines skipped; a `nudge()` lands on the
+        // open connection; and the server hanging up ends the stream with
+        // `.disconnected` rather than a quiet finish, which is what tells
+        // `AppState.watchLoop` to reconnect.
+        final class Seen: @unchecked Sendable {
+            var snapshots: [Snapshot] = []
+            var nudge = ""
+            var end: Error?
+        }
+        let seen = Seen()
+        core.on("Watch") { socket in
+            try? socket.write(Data((#"{"views":{},"sessions":[{"id":"p:a","name":"a","project":"p"}]}"#
+                                    + "\n\n").utf8))
+            seen.nudge = String(decoding: (try? socket.readChunk()) ?? Data(), as: UTF8.self)
+            // `null` is an answer — a core with no sessions — not an old core.
+            try? socket.write(Data((#"{"views":null}"# + "\n").utf8))
+        }
+        let ended = DispatchSemaphore(value: 0)
+        Task.detached {
+            do {
+                for try await snapshot in client.watch() {
+                    seen.snapshots.append(snapshot)
+                    if seen.snapshots.count == 1 { client.nudge() }
+                }
+            } catch { seen.end = error }
+            ended.signal()
+        }
+        assert(ended.wait(timeout: .now() + 3) == .success, "a stream the server closed must end")
+        assert(seen.snapshots.map(\.sessions.count) == [1, 0], "\(seen.snapshots.map(\.sessions))")
+        assert(seen.snapshots.allSatisfy(\.derived))
+        assert(seen.nudge == #"{"nudge":true}"#, seen.nudge)
+        if case .disconnected? = seen.end as? Failure {} else {
+            assertionFailure("a closed stream must throw .disconnected, got \(String(describing: seen.end))")
+        }
+        // With no stream open, a nudge is a no-op rather than an error or a hang.
+        client.nudge()
     }
 }

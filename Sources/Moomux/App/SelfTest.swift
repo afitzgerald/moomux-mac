@@ -49,6 +49,11 @@ enum SelfTest {
         PromptDrop.demo()
         Attachments.demo()
         SessionBadges<Never>.demo()
+        SidebarGrid.demo()
+        MainActor.assumeIsolated {
+            AppState.flowsDemo()
+            RemoteAttach.demo()
+        }
 
         print("selftest: ok")
         exit(0)
