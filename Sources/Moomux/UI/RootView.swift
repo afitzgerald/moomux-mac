@@ -962,6 +962,7 @@ private struct SessionRow: View {
                     .frame(width: SidebarGrid.icon(app.listFontSize))
                     .help(app.label(for: session))
                 Text(session.name)
+                    .foregroundStyle(state == .parked ? .secondary : .primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)

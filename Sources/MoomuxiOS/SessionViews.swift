@@ -552,6 +552,7 @@ private struct SessionRow: View {
                 .accessibilityLabel(app.state(for: session).label)
             Text(session.name)
                 .font(.body)
+                .foregroundStyle(app.state(for: session) == .parked ? .secondary : .primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 6)

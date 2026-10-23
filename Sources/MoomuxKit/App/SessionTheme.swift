@@ -28,6 +28,7 @@ public enum SessionTheme {
             case .needsInput: return .orange
             case .working: return .accentColor
             case .done: return .green
+            case .background: return .teal
             case .parked, .unknown: return .secondary
             }
         }()
@@ -72,6 +73,7 @@ public enum SessionTheme {
         switch c.system {
         case "accent": return .accentColor
         case "green": return .green
+        case "teal": return .teal
         case "orange": return .orange
         case "secondary": return .secondary
         default: break
@@ -133,6 +135,7 @@ public enum SessionTheme {
         assert(resolve(ThemeColor(light: "#ff0000", dark: "#ff0000", system: "chartreuse")) != nil,
                "an unfamiliar system name falls back to the pair, not to nil")
         assert(resolve(nil) == nil)
+        assert(color(.background, nil) == .teal, "a core with no background color still draws one")
         // The ANSI theme never reaches here (`ThemePalette.resolved` swaps it
         // for default), but a half it could not parse must read as "no color"
         // so the caller's semantic fallback wins.

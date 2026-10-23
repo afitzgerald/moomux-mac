@@ -23,6 +23,9 @@ public enum AgentState: String, Decodable, Sendable, CaseIterable {
     case unknown
     case parked
     case done
+    /// A finished turn with a shell the agent started still running. Quiet,
+    /// like `working`: nothing is waiting on the user.
+    case background
     case working
     case needsInput = "needs-input"
 
@@ -38,6 +41,7 @@ public enum AgentState: String, Decodable, Sendable, CaseIterable {
         case .unknown: return "unknown"
         case .parked: return "parked"
         case .done: return "done"
+        case .background: return "background shell"
         case .working: return "working"
         case .needsInput: return "needs input"
         }
@@ -49,6 +53,7 @@ public enum AgentState: String, Decodable, Sendable, CaseIterable {
         case .unknown: return "questionmark.circle"
         case .parked: return "moon.zzz"
         case .done: return "checkmark.circle"
+        case .background: return "ellipsis.circle"
         case .working: return "circle.dotted"
         case .needsInput: return "exclamationmark.circle.fill"
         }
@@ -318,6 +323,9 @@ public struct ThemePalette: Decodable, Hashable, Sendable {
 
     public var working: ThemeColor
     public var done: ThemeColor
+    /// Empty from a core that predates the state, which `SessionTheme`
+    /// reads as "no color" and falls back from.
+    public var background: ThemeColor
     public var needsInput: ThemeColor
     public var parked: ThemeColor
     /// Non-fatal warnings — the sidebar's ± / ↑ badges. Amber in every
@@ -330,7 +338,7 @@ public struct ThemePalette: Decodable, Hashable, Sendable {
     // with them (SwiftUI's own semantic colors do that job), so they are not
     // decoded — add them the day a view needs one.
     enum CodingKeys: String, CodingKey {
-        case name, ansi, working, done, parked, warn, danger
+        case name, ansi, working, done, background, parked, warn, danger
         case needsInput = "needs_input"
     }
 
@@ -341,6 +349,7 @@ public struct ThemePalette: Decodable, Hashable, Sendable {
         ansi = try c.decodeIfPresent(Bool.self, forKey: .ansi) ?? false
         working = try color(.working)
         done = try color(.done)
+        background = try color(.background)
         needsInput = try color(.needsInput)
         parked = try color(.parked)
         warn = try color(.warn)
@@ -351,6 +360,7 @@ public struct ThemePalette: Decodable, Hashable, Sendable {
         switch state {
         case .working: return working
         case .done: return done
+        case .background: return background
         case .needsInput: return needsInput
         case .parked, .unknown: return parked
         }
@@ -1235,6 +1245,7 @@ public enum Wire {
         let palettes = try! decoder.decode([ThemePalette].self, from: Data("""
         [{"name":"default","working":{"light":"#007aff","dark":"#007aff","system":"accent"},
           "done":{"light":"#34c759","dark":"#30d158","system":"green"},
+          "background":{"light":"#30b0c7","dark":"#40c8e0","system":"teal"},
           "needs_input":{"light":"#ff8d28","dark":"#ff9230","system":"orange"},
           "parked":{"light":"#808080","dark":"#99999a","system":"secondary"},
           "warn":{"light":"#946f1a","dark":"#e0af68"}},
@@ -1252,6 +1263,8 @@ public enum Wire {
         assert(palettes[0].working.system == "accent", "the live system accent beats the frozen hex")
         assert(palettes[2].working.system.isEmpty, "only default names system colors")
         assert(palettes[0].color(for: .unknown) == palettes[0].parked)
+        assert(palettes[0].background.system == "teal")
+        assert(palettes[2].background.light.isEmpty, "an older core sends no background color")
         assert(ThemePalette.resolved("gruvbox", in: palettes)?.name == "gruvbox")
         assert(ThemePalette.resolved("terminal", in: palettes)?.name == "default",
                "ANSI indices are not hex — fall back rather than parse them")
@@ -1321,7 +1334,8 @@ public enum Wire {
                          "git_ok":true,"dirty":true,
                          "pr":{"state":"OPEN","mergeable":"MERGEABLE","ci":"PASSING"}},
                   "p:b":{"id":"p:b","state":"parked","label":"in the barn"},
-                  "p:c":{"id":"p:c","state":"grazing"}},
+                  "p:c":{"id":"p:c","state":"grazing"},
+                  "p:d":{"id":"p:d","state":"background"}},
          "poll_time":"2026-09-02T10:11:12Z"}
         """
         let snap = try! decoder.decode(Snapshot.self, from: Data(snapJSON.utf8))
@@ -1336,6 +1350,7 @@ public enum Wire {
         assert(snap.views["p:b"]?.gitOK == false, "no git_ok means don't draw a badge")
         assert(snap.views["p:b"]?.pr == nil, "no PR attached is nil, not a blank row")
         assert(snap.views["p:c"]?.state == .unknown, "an unknown state name must degrade, not throw")
+        assert(snap.views["p:d"]?.state == .background)
         assert(snap.err == nil)
         assert(snap.derived)
 
