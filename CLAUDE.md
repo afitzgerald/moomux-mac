@@ -1067,7 +1067,9 @@ Decisions, not oversights. Don't "fix" these without being asked.
   package, shared with MergeRight) and the core grew `Diff`: the same merge-base diff as raw text,
   untracked files included via `--no-index` (no index writes), no tmux needed — so, unlike Review,
   a parked session's diff opens (`canDiff`). `MoomuxiOS/ChangesScreen.swift` is the file list and
-  `PatchView`. The Mac still reviews in tmux.
+  one page of every file's rows — DiffKit's `PatchRow`s in one `LazyVStack`, windowed by
+  `PatchPageWindow` so only the files near the top are listed, as MergeRight's iPhone page does.
+  The Mac still reviews in tmux.
   **The escape hatch is one field**: Settings → Preferences → Diff tool takes a command, and ⌘D
   runs it with the session's worktree appended as the last argument (`diffier`, `code --diff`).
   Split on whitespace and run through `ToolPath`, not a shell — nothing to quote, and a GUI app's

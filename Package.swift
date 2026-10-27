@@ -45,7 +45,7 @@ let package = Package(
         // screen — MergeRight's engine, extracted so both apps share it.
         // Minor-pinned for libghostty's reason: pre-1.0, so a minor can break
         // the API, and a bump here is a deliberate act with a screenshot behind it.
-        .package(url: "https://github.com/afitzgerald/DiffKit.git", .upToNextMinor(from: "0.3.19")),
+        .package(url: "https://github.com/afitzgerald/DiffKit.git", .upToNextMinor(from: "0.3.23")),
     ],
     targets: [
         // Everything platform-independent: the wire types, the client, the
