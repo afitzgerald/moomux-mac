@@ -512,9 +512,11 @@ core new enough to serve them** — there is no fallback to the old local paths.
   and it is a **column grid**, not a per-row padding: `SidebarGrid` lays every row out as
   `[indent][disclosure][icon][name]` with the disclosure and icon columns fixed-width, left *empty*
   rather than skipped by a row that has neither. So a name's x follows from its nesting level and
-  nothing else — not whether the row has a chevron, not whether a project set an emoji, not the
-  glyph metrics of whatever font the sidebar is set to. A session is **not** indented from its
-  header: its dot sits straight under the header's icon (`SidebarGrid.rowIndent` of the header's
+  nothing else — not whether the row has a chevron, not the glyph metrics of whatever font the
+  sidebar is set to. One exception: a project header with no emoji drops its icon column, because
+  an empty one read as a stray space, so its name moves left onto its sessions' dots. A session is
+  **not** indented from its header: its dot sits straight under the header's icon
+  (`SidebarGrid.rowIndent` of the header's
   level, which is the session's `level - 1` — it pays for the chevron column it does not use). What
   says which header a session belongs to is the header's band instead: small bold caps on a tinted
   row, rounded on top while expanded and a full pill when collapsed, on both apps. One knob,

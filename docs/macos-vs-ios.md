@@ -713,10 +713,10 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 The practical consequence: turning MergeRight links or folder grouping on at the desk does
 nothing on the phone. That is harmless while each one has a control on both sides.
 
-With `showProjectEmoji` off, a Mac header keeps its empty icon column (the `SidebarGrid` rule
-that puts a session's dot under its header's icon), while an iPhone header, which joins the emoji
-into its title, moves the name left. The iPhone already does the same for a project with no
-emoji, so the switch adds no new difference.
+A project header with no emoji (none set, or `showProjectEmoji` off) drops its icon column on
+both apps, so its name moves left and its sessions' dots sit under the name rather than under an
+empty gap. The Mac used to keep that column empty for the `SidebarGrid` rule; it read as a stray
+space.
 
 ---
 

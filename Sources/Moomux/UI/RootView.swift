@@ -868,8 +868,9 @@ private struct FolderProjectHeader: View {
                 .foregroundStyle(.secondary)
                 .frame(width: SidebarGrid.disclosure(app.listFontSize))
                 .rotationEffect(.degrees(collapsed ? 0 : 90))
-            Text(app.listEmoji(for: name) ?? "")
-                .frame(width: SidebarGrid.icon(app.listFontSize))
+            if let emoji = app.listEmoji(for: name) {
+                Text(emoji).frame(width: SidebarGrid.icon(app.listFontSize))
+            }
             Text(name)
         }
         .font(Theme.list(app.listFontFamily, app.listFontSize))
@@ -980,8 +981,9 @@ private struct ProjectHeader: View {
                 .foregroundStyle(.secondary)
                 .frame(width: SidebarGrid.disclosure(app.listFontSize))
                 .rotationEffect(.degrees(expanded ? 90 : 0))
-            Text(app.listEmoji(for: name) ?? "")
-                .frame(width: SidebarGrid.icon(app.listFontSize))
+            if let emoji = app.listEmoji(for: name) {
+                Text(emoji).frame(width: SidebarGrid.icon(app.listFontSize))
+            }
             Text(name)
         }
         // Small caps on a band: the tint is what says "group" now that
