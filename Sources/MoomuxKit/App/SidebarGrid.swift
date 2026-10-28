@@ -6,9 +6,11 @@ import CoreGraphics
 /// laid out as `[indent][disclosure][icon][name]`, where the disclosure and
 /// icon columns are **fixed widths** that a row leaves empty rather than
 /// skipping. So a name's x depends on its nesting level and nothing else: not
-/// on whether the row has a chevron, not on whether a project set an emoji,
-/// and not on the glyph metrics of whatever font the user picked. A session
-/// row has no chevron, so it pays for that column in its leading padding.
+/// on whether the row has a chevron, and not on the glyph metrics of whatever
+/// font the user picked. A session row has no chevron, so it pays for that
+/// column in its leading padding. The one exception is a project header with
+/// no emoji: it drops the icon column, because an empty one reads as a stray
+/// space, and its sessions' dots then sit under its name.
 ///
 /// This replaces two constants that had to be tuned against each other (a
 /// per-level step plus a fudge for the missing chevron) and still came out
