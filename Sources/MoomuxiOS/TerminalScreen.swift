@@ -41,7 +41,7 @@ struct TerminalScreen: View {
     /// this both would raise the alert.
     @State private var deleting = false
     @State private var killing = false
-    /// From the key bar. `focus` says no: the user is attached to a session and
+    /// From the ⋯ menu. `focus` says no: the user is attached to a session and
     /// a create takes tens of seconds, so a jump would detach them from it.
     @State private var creating = false
     /// The pane's own, for the same reason as `deleting`: detail binds its
@@ -71,10 +71,8 @@ struct TerminalScreen: View {
                          onFile: open(file:),
                          onPinch: { fontSize = $0 },
                          onSwipe: { app.selectWindow(sessionID, delta: $0) },
-                         onNewSession: { creating = true },
-                         onChanges: {
-                             if app.session(id: sessionID).map(app.canDiff) == true { push(.changes(sessionID)) }
-                         })
+                         onPhotos: { pickingPhotos = true },
+                         onFiles: { importingFiles = true })
             // The core's Ghostty config arriving after this pane was built:
             // a new surface is the only way to apply it (`paneConfigGeneration`).
             .id(app.paneConfigGeneration)
@@ -112,7 +110,7 @@ struct TerminalScreen: View {
                     }
                 }
                 // The diff is one tap because "what has it changed?" is the
-                // question you attach to ask. Details and Attach share a menu:
+                // question you attach to ask. Details and New Session share a menu:
                 // three icons beside the quip squeezed it to a word or two.
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(value: Route.changes(sessionID)) {
@@ -123,20 +121,9 @@ struct TerminalScreen: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        // One row, not two: the menu otherwise outgrows the
-                        // screen and scrolls.
-                        ControlGroup {
-                            // A `Button` and not a `PhotosPicker`: inside a
-                            // `Menu` the picker lays its label out itself, so
-                            // its icon sat at a different gap from Files'.
-                            Button { pickingPhotos = true } label: {
-                                Label("Photos", systemImage: "photo.on.rectangle")
-                            }
-                            Button { importingFiles = true } label: {
-                                Label("Files", systemImage: "folder")
-                            }
+                        Button { creating = true } label: {
+                            Label("New Session", systemImage: "plus.bubble")
                         }
-                        .disabled(attachments.pending > 0)
                         if let session = app.session(id: sessionID) {
                             SessionActions(app: app, session: session, edit: $edit, inMenu: true,
                                            kill: { killing = true },
@@ -186,6 +173,15 @@ struct TerminalScreen: View {
             }
             .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item],
                           allowsMultipleSelection: true) { attach(app.attachJobs($0)) }
+            // A picker takes focus, and the key bar only exists while the
+            // terminal has it: give it back when either one closes, or the bar
+            // stays gone until the next tap.
+            .onChange(of: pickingPhotos) { _, open in if !open { pane.view?.becomeFirstResponder() } }
+            .onChange(of: importingFiles) { _, open in if !open { pane.view?.becomeFirstResponder() } }
+            .onChange(of: creating) { _, open in if !open { pane.view?.becomeFirstResponder() } }
+            .onChange(of: edit == nil) { _, closed in if closed { pane.view?.becomeFirstResponder() } }
+            .onChange(of: killing) { _, open in if !open { pane.view?.becomeFirstResponder() } }
+            .onChange(of: deleting) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             // No form to put it under, and the pane is the program's screen.
             .alert("Couldn't attach",
                    isPresented: Binding(get: { attachments.error != nil },
@@ -291,16 +287,16 @@ struct AttachedTerminal: UIViewRepresentable {
     let onFile: (String) -> Void
     let onPinch: (Double) -> Void
     let onSwipe: (Int) -> Void
-    let onNewSession: () -> Void
-    let onChanges: () -> Void
+    let onPhotos: () -> Void
+    let onFiles: () -> Void
 
     func makeUIView(context: Context) -> UITerminalView {
         let view = LinkTapView(frame: .init(x: 0, y: 0, width: 390, height: 600))
         view.liveFontSize = fontSize
         view.onPinch = onPinch
         view.onSwipe = onSwipe
-        view.keyBar.onNewSession = onNewSession
-        view.keyBar.onChanges = onChanges
+        view.keyBar.onPhotos = onPhotos
+        view.keyBar.onFiles = onFiles
         pane.view = view
         view.delegate = context.coordinator
         view.controller = controller
@@ -432,6 +428,20 @@ struct AttachedTerminal: UIViewRepresentable {
 
         override var inputAccessoryView: UIView? { keyBar }
 
+        /// Focus on first arrival, keyboard down: the bar is an accessory view
+        /// and only exists while this is first responder, so without this it
+        /// appears after the first tap. Once only — coming back from Details
+        /// must not undo the user's choice of keyboard up or down.
+        private var focusedOnArrival = false
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil, !focusedOnArrival else { return }
+            focusedOnArrival = true
+            keyBar.keyboardHidden = true
+            // Can fail mid-transition; the next run-loop pass is past it.
+            if !becomeFirstResponder() { DispatchQueue.main.async { _ = self.becomeFirstResponder() } }
+        }
+
         private let noKeyboard = UIView(frame: .zero)
         override var inputView: UIView? { keyBar.keyboardHidden ? noKeyboard : super.inputView }
 
@@ -451,7 +461,9 @@ struct AttachedTerminal: UIViewRepresentable {
         /// `PaneKeyBar.keyboardHidden`.
         override func resignFirstResponder() -> Bool {
             let resigned = super.resignFirstResponder()
-            if resigned { keyBar.closeArrowPad() }
+            if resigned {
+                keyBar.closeArrowPad()
+            }
             return resigned
         }
 
