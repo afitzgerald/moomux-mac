@@ -56,7 +56,9 @@ struct TerminalScreen: View {
     /// and runs to the end, and the next fetch clears what it wrote.
     @State private var fetch: Task<Void, Never>?
 
-    var body: some View {
+    // Split from `body` because the whole chain as one expression times out
+    // Xcode 26's type checker.
+    private var terminal: some View {
         AttachedTerminal(controller: app.terminalController,
                          client: app.client,
                          sessionID: sessionID,
@@ -162,6 +164,10 @@ struct TerminalScreen: View {
                     .accessibilityLabel("More")
                 }
             }
+    }
+
+    var body: some View {
+        terminal
             // The New Session sheet's pickers, with the path pasted into the
             // pane rather than appended to a form: the agent is already
             // running, so this is a file dropped on its terminal.
