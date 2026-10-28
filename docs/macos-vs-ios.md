@@ -488,15 +488,18 @@ waits out the double-tap, which is also when `LinkTapView`'s link probe runs.
 `inputAccessoryView` is `PaneKeyBar`, not libghostty-spm's own bar: that one's items are a closed
 enum and its look is four colours, so it cannot hold Moomux's buttons. The package supports a host
 drawing its own (`toggleStickyModifier`, `sendKey`, `paste(text:)`), so Ctrl and Alt still ride its
-sticky state. One glass pill: Ctrl, Esc, Tab; Arrow Pad, Paste, Snippets, New Session, View Changes;
+sticky state. One glass pill: Ctrl, Esc, Tab; Arrow Pad, Snippets, Paste, Attach (Photos and Files);
 Alt; and Hide Keyboard pinned at the right, which sends Return on a double tap instead (so a single
 tap hides 0.3s late, waiting out the second). Hiding swaps the keyboard for an empty `inputView`
 instead of resigning, so the bar stays docked at the bottom with the pane above it, and the same key
 (now Show Keyboard) or a tap on the pane brings it back. The arrows live on a floating pad (`PaneArrowPad`) that
 the bar's pad button opens over the pane — a subview of the terminal, because the accessory host
 clips and hit-tests to the bar — and its keys repeat while held. A handle on its top edge drags it out of the way of an input field;
-the position is kept in `UserDefaults`. New Session opens the same sheet without jumping to
-the new session (the user is attached to another one), and Changes is the toolbar's own route.
+the position is kept in `UserDefaults`. The pane takes focus when it first appears, keyboard down, so
+the bar is there before the first tap, and again whenever a picker or sheet over it closes. New Session
+is in the toolbar's ⋯ menu and opens the same sheet without jumping to the new session (the user is
+attached to another one); Changes is the toolbar's own button, always shown. Photos and Files left the
+⋯ menu: the bar's paperclip is their only place on the phone.
 Snippets (`PaneKeyBar.snippets`) are pasted and then sent Return as a keystroke, except one marked
 not to submit (`/spawn `, which takes an argument, and `/kill`, which parks the session, so it
 waits for the user's own Return). The list carries moomux's own slash commands: `/spawn`, `/tag`,

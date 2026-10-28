@@ -79,24 +79,31 @@ struct NewSessionSheet: View {
                     TextField("What should the agent do?", text: $form.prompt, axis: .vertical)
                         .lineLimit(3...8)
                     // Borderless, or two buttons sharing a Form row both fire
-                    // on any tap in it.
-                    HStack {
-                        PhotosPicker(selection: $photos, matching: .images) {
-                            Label("Photos", systemImage: "photo.on.rectangle")
+                    // on any tap in it. The pill and Thinking share the row:
+                    // both are settings of the prompt above.
+                    HStack(spacing: 8) {
+                        HStack(spacing: 0) {
+                            PhotosPicker(selection: $photos, matching: .images) {
+                                Image(systemName: "photo.on.rectangle").attachBarIcon()
+                            }
+                            .accessibilityLabel("Photos")
+                            Button { importingFiles = true } label: {
+                                Image(systemName: "paperclip").attachBarIcon()
+                            }
+                            .accessibilityLabel("Files")
                         }
-                        Spacer()
-                        Button { importingFiles = true } label: {
-                            Label("Files", systemImage: "paperclip")
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .labelStyle(RowLabel())
-                    if attachments.pending > 0 {
-                        LabeledContent("Uploading…") { ProgressView() }
-                    }
-                    if !thinking.isEmpty {
-                        Picker("Thinking", selection: $form.thinking) {
-                            ForEach(thinking, id: \.self) { Text($0).tag($0) }
+                        .buttonStyle(.borderless)
+                        .tint(.white)
+                        .attachBarPill()
+                        if attachments.pending > 0 { ProgressView().accessibilityLabel("Uploading") }
+                        Spacer(minLength: 8)
+                        if !thinking.isEmpty {
+                            Picker("Thinking", selection: $form.thinking) {
+                                ForEach(thinking, id: \.self) { Text($0).tag($0) }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(.secondary)
+                            .fixedSize()
                         }
                     }
                 } footer: {
@@ -221,6 +228,23 @@ extension AppState {
                                       type: UTType(filenameExtension: url.pathExtension),
                                       data: try await Attachments.read(url))
             } }
+        }
+    }
+}
+
+/// The key bar's look (`PaneKeyBar`): icon-only buttons, 14pt glyphs, 51pt
+/// tall, in one dark glass pill.
+private extension View {
+    func attachBarIcon() -> some View {
+        font(.system(size: 14)).frame(minWidth: 48, minHeight: 51).contentShape(Rectangle())
+    }
+
+    @ViewBuilder func attachBarPill() -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(.regular.tint(.black.opacity(0.7)).interactive(), in: Capsule())
+        } else {
+            // Dark whatever the system theme, as the key bar is: the icons are white.
+            environment(\.colorScheme, .dark).background(.thickMaterial, in: Capsule())
         }
     }
 }

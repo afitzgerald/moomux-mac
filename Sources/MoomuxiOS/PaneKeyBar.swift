@@ -31,8 +31,8 @@ final class PaneKeyBar: UIView {
             refresh()
         }
     }
-    var onNewSession: () -> Void = {}
-    var onChanges: () -> Void = {}
+    var onPhotos: () -> Void = {}
+    var onFiles: () -> Void = {}
 
     /// Hiding the keyboard swaps it for an empty input view rather than
     /// resigning, so the terminal keeps focus and this bar stays docked at the
@@ -51,7 +51,7 @@ final class PaneKeyBar: UIView {
     private var hideButton: UIButton?
     private var arrowPad: PaneArrowPad?
     private var pendingHide: DispatchWorkItem?
-    private let height: CGFloat = 44
+    private let height: CGFloat = 51
     private let pill = UIVisualEffectView(effect: PaneKeyBar.glass())
     private var modifiers: [(TerminalPublicStickyModifier, UIButton)] = []
 
@@ -101,15 +101,14 @@ final class PaneKeyBar: UIView {
             key("Tab") { $0.sendKey(.tab) },
             spacer(),
             icon("dpad", "Arrow Pad") { [weak self] view in self?.toggleArrowPad(in: view) },
-            icon("doc.on.clipboard", "Paste") {
+            snippetMenu(),
+            icon("clipboard", "Paste") {
                 // The package's own paste: text, or an image/file as a path,
                 // and it commits an open IME composition first.
                 $0.resetStickyModifiers()
                 $0.paste(nil)
             },
-            snippetMenu(),
-            icon("plus.bubble", "New Session") { [weak self] _ in self?.onNewSession() },
-            icon("plus.forwardslash.minus", "View Changes") { [weak self] _ in self?.onChanges() },
+            attachMenu(),
             spacer(),
             modifier("Alt", .alt),
         ])
@@ -199,7 +198,7 @@ final class PaneKeyBar: UIView {
         var config = button.configuration ?? .plain()
         config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 7, bottom: 0, trailing: 7)
         config.attributedTitle = AttributedString(title, attributes: AttributeContainer([
-            .font: UIFont.monospacedSystemFont(ofSize: 15, weight: .regular),
+            .font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
         ]))
         button.configuration = config
     }
@@ -215,7 +214,7 @@ final class PaneKeyBar: UIView {
         let button = base(label) { [weak self] in if let view = self?.terminal { send(view) } }
         var config = button.configuration ?? .plain()
         config.image = UIImage(systemName: symbol,
-                               withConfiguration: UIImage.SymbolConfiguration(pointSize: 17))
+                               withConfiguration: UIImage.SymbolConfiguration(pointSize: 10))
         config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6)
         button.configuration = config
         return button
@@ -230,7 +229,7 @@ final class PaneKeyBar: UIView {
 
     private static func keyboardImage(hidden: Bool) -> UIImage? {
         UIImage(systemName: hidden ? "keyboard" : "keyboard.chevron.compact.down",
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 17))
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 10))
     }
 
     /// A tap hides or shows the keyboard; a double tap sends Return instead, so
@@ -270,7 +269,7 @@ final class PaneKeyBar: UIView {
     /// a phone. Return is a keystroke, so it submits even to a program that
     /// treats pasted newlines as text.
     private func snippetMenu() -> UIButton {
-        let button = icon("text.append", "Snippets") { _ in }
+        let button = icon("bolt", "Snippets") { _ in }
         button.menu = UIMenu(children: Self.snippets.map { snippet in
             UIAction(title: snippet.text.trimmingCharacters(in: .whitespaces) + (snippet.submit ? "" : "…")) { [weak self] _ in
                 guard let view = self?.terminal else { return }
@@ -282,6 +281,18 @@ final class PaneKeyBar: UIView {
         })
         button.showsMenuAsPrimaryAction = true
         // The menu opens upward; the default would flip the list.
+        button.preferredMenuElementOrder = .fixed
+        return button
+    }
+
+    /// Photos and Files, as in the pane's More menu, one tap closer.
+    private func attachMenu() -> UIButton {
+        let button = icon("paperclip", "Attach") { _ in }
+        button.menu = UIMenu(children: [
+            UIAction(title: "Photos", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in self?.onPhotos() },
+            UIAction(title: "Files", image: UIImage(systemName: "folder")) { [weak self] _ in self?.onFiles() },
+        ])
+        button.showsMenuAsPrimaryAction = true
         button.preferredMenuElementOrder = .fixed
         return button
     }
