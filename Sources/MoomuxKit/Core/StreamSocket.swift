@@ -223,8 +223,19 @@ public final class StreamSocket {
 
     /// Reads until the peer closes. The server closes after one response, so
     /// this is the whole answer to a one-shot call.
+    ///
+    /// A loop over `readChunk` and **not** `FileHandle.readToEnd`, which
+    /// folds a TCP reset into `NSCocoaErrorDomain 256` ("The file couldn't be
+    /// opened.") — the one failure a wrong-account phone gets, since the core
+    /// drops it unread. `readChunk` keeps the errno, so `ConnectFailure` can
+    /// tell a reset from a dead route.
     public func readToEnd() throws -> Data {
-        try handle.readToEnd() ?? Data()
+        var all = Data()
+        while true {
+            let chunk = try readChunk()
+            if chunk.isEmpty { return all }
+            all.append(chunk)
+        }
     }
 
     /// Line-delimited reads, for the `Watch` stream. Go's `json.Encoder.Encode`
@@ -274,6 +285,74 @@ public final class StreamSocket {
             assert(broke, "a write to a departed peer must throw, not signal")
             socket.close()
         }
+
+        // A one-shot call's answer must surface a reset as a reset. The core
+        // drops a wrong-account phone unread, so the kernel sends RST, and
+        // `FileHandle.readToEnd` turned that into "The file couldn't be
+        // opened." — which `ConnectFailure` can never classify. A loopback
+        // listener stands in for the core; the client runs on its own thread
+        // against a deadline so a hang fails instead of parking.
+        func oneShot(reset: Bool, reply: String) -> (data: Data?, why: String?, finished: Bool) {
+            let listener = socket(AF_INET, SOCK_STREAM, 0)
+            guard listener >= 0 else { return (nil, "socket", true) }
+            defer { Darwin.close(listener) }
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+            let bound = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            guard bound == 0, listen(listener, 1) == 0 else { return (nil, "listen", true) }
+            var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+            _ = withUnsafeMutablePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &len) }
+            }
+            let port = UInt16(bigEndian: addr.sin_port)
+
+            Thread {
+                let peer = accept(listener, nil, nil)
+                guard peer >= 0 else { return }
+                if reset {
+                    var linger = linger(l_onoff: 1, l_linger: 0)
+                    setsockopt(peer, SOL_SOCKET, SO_LINGER, &linger, socklen_t(MemoryLayout<linger>.size))
+                } else {
+                    var buf = [UInt8](repeating: 0, count: 64)
+                    _ = Darwin.read(peer, &buf, buf.count)
+                    _ = reply.withCString { Darwin.write(peer, $0, strlen($0)) }
+                }
+                Darwin.close(peer)
+            }.start()
+
+            final class Box: @unchecked Sendable { var data: Data?; var why: String? }
+            let box = Box()
+            let done = DispatchSemaphore(value: 0)
+            Thread {
+                do {
+                    let client = try StreamSocket(host: "127.0.0.1", port: port)
+                    try client.write(Data("{\"method\":\"Config\"}\n".utf8))
+                    client.closeWrite()
+                    box.data = try client.readToEnd()
+                } catch {
+                    box.why = error.localizedDescription
+                }
+                done.signal()
+            }.start()
+            let finished = done.wait(timeout: .now() + 3) == .success
+            return (box.data, box.why, finished)
+        }
+
+        let reset = oneShot(reset: true, reply: "")
+        assert(reset.finished, "a reset one-shot call must end, not park forever")
+        assert(reset.why == Failure.syscall("read", ECONNRESET).localizedDescription,
+               "a reset one-shot call must report the reset, not a Cocoa error: \(reset.why ?? "nil")")
+        assert(reset.why.flatMap(ConnectFailure.init) == .refused, "a reset must classify as refused")
+
+        let answered = oneShot(reset: false, reply: "{\"ok\":true}\n")
+        assert(answered.finished, "an answered one-shot call must end")
+        assert(answered.data == Data("{\"ok\":true}\n".utf8), "a normal close must deliver exactly the reply")
 
         // No unresolvable-host check on purpose: it would call `getaddrinfo`,
         // which has no deadline of its own (`connectWithin`'s 5s starts after
