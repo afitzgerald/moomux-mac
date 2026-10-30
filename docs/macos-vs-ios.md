@@ -158,8 +158,9 @@ actually got, under the same version, and a failed upload does not block the cas
 strict concurrency would break the blocking-fd socket client first.
 
 **D53. Only the Mac checks for a newer release of itself.** `AppState.updateLoop` asks GitHub's
-latest-release endpoint at launch and every six hours, and the bottom-right "Update available"
-pill hovers with the answer. The phone updates through TestFlight, so a GitHub tag says nothing
+latest-release endpoint at launch and every six hours, and the bottom-right pill says which half
+is behind ("Update available", "Core update available", or "Updates available" for both) and opens
+a popover with the versions on a click. The phone updates through TestFlight, so a GitHub tag says nothing
 about what it can install, and the loop is `#if os(macOS)`. The core's own update
 (`Snapshot.updateAvailable`) arrives on the snapshot and is drawn by the Mac's pill; the phone
 decodes it and draws nothing.

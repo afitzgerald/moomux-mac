@@ -99,6 +99,9 @@ struct RootView: View {
                 NoSessionSelectedView()
             }
         }
+        // The empty state hugs its content; without this the badge sits at
+        // the plate's corner, not the window's.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomTrailing) { UpdateBadge() }
     }
 
@@ -1577,24 +1580,46 @@ private struct ConnectionBadge: View {
     }
 }
 
-/// Bottom-right, only while the app or the core is out of date. Hover for which and how
+/// Bottom-right, only while the app or the core is out of date. Click for which and how
 /// to update; the cask follows every tag, so `brew upgrade` is the whole fix.
 private struct UpdateBadge: View {
     @Environment(AppState.self) private var app
+    @State private var showingDetail = false
 
     var body: some View {
         let lines = [
             app.appUpdate.map { "Moomux \(WhatsNew.version) → \($0)" },
             app.coreUpdate.map { "Core \($0.current) → \($0.latest)" },
         ].compactMap { $0 }
+        // Name which half is behind, so a core update isn't mistaken for the app's.
+        let title = switch (app.appUpdate != nil, app.coreUpdate != nil) {
+        case (true, true): "Updates available"
+        case (false, true): "Core update available"
+        default: "Update available"
+        }
         if !lines.isEmpty {
-            Label("Update available", systemImage: "arrow.down.circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(.regularMaterial, in: Capsule())
-                .padding(10)
-                .help(lines.joined(separator: "\n"))
+            // A popover, not only `.help`: a tooltip on a plain label in an
+            // overlay did not show at all, same lesson as `UsageBadge`.
+            Button { showingDetail.toggle() } label: {
+                Label(title, systemImage: "arrow.down.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.regularMaterial, in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help(lines.joined(separator: "\n"))
+            .popover(isPresented: $showingDetail, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(lines, id: \.self) { Text($0) }
+                    Text("Update with `brew upgrade`.").foregroundStyle(.secondary)
+                }
+                .monospacedDigit()
+                .fixedSize()
+                .padding(12)
+            }
+            .padding(10)
         }
     }
 }
