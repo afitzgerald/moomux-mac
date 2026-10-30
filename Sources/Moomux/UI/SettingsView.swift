@@ -513,7 +513,7 @@ private struct CoreSection: View {
             Text(p.link)
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
-            Text("Scan with your iPhone's Camera. On the iPhone, sign in to Tailscale as \(p.owner).")
+            Text("Scan it with the Moomux app on your iPhone. On the iPhone, sign in to Tailscale as \(p.owner).")
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
             if p.turnedOn {

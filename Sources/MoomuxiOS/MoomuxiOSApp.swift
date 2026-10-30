@@ -36,7 +36,9 @@ struct MoomuxiOSApp: App {
                         // screen in between to reset the list's navigation.
                         .id(ObjectIdentifier(app))
                 } else {
-                    ConnectView(endpoint: endpoint, connect: connect)
+                    // The camera stops while anything is up over it.
+                    ConnectView(endpoint: endpoint, paused: link != nil || unseenNotes != nil,
+                                scanned: scanned, connect: connect)
                 }
             }
             .task {
@@ -46,17 +48,7 @@ struct MoomuxiOSApp: App {
                 let unseen = WhatsNew.takeUnseen()
                 if unseen.show, link == nil { unseenNotes = WhatsNew.releases(after: unseen.seen) }
             }
-            .onOpenURL { url in
-                // A pairing link outranks the release notes: the alert would
-                // wait under (or be dropped by) a sheet. They are already
-                // marked seen, so they simply yield.
-                unseenNotes = nil
-                do {
-                    link = .connect(try PairingLink(url: url))
-                } catch {
-                    link = .refused(error.localizedDescription)
-                }
-            }
+            .onOpenURL { offer($0) }
             // Never connects without asking: Tailscale vouches for the phone
             // to the computer, not the other way round, and a link that
             // silently repointed the phone would send someone else's server
@@ -94,6 +86,27 @@ struct MoomuxiOSApp: App {
         state.start()
         app = state
         BackgroundRefresh.app = state
+    }
+
+    /// Every pairing link lands here, opened from outside or scanned.
+    private func offer(_ url: URL) {
+        // A pairing link outranks the release notes: the alert would wait
+        // under (or be dropped by) a sheet. They are already marked seen, so
+        // they simply yield.
+        unseenNotes = nil
+        do {
+            link = .connect(try PairingLink(url: url))
+        } catch {
+            link = .refused(error.localizedDescription)
+        }
+    }
+
+    /// A code the connect screen's camera read. Every QR code in view gets
+    /// here, so only a `moomux://connect` link is acted on, and none while an
+    /// alert is already up.
+    private func scanned(_ payload: String) {
+        guard link == nil, let url = PairingLink.scanned(payload) else { return }
+        offer(url)
     }
 
     /// Disconnect then Connect, as the ⋯ menu would do it. On a cold launch
@@ -221,16 +234,23 @@ final class EndpointStore {
     }
 }
 
-/// Leads with the scan; typing an address is the fallback.
+/// Leads with the camera; typing an address is the fallback.
 struct ConnectView: View {
     @Bindable var endpoint: EndpointStore
+    /// Stops the camera, while an alert or a sheet is up over it.
+    let paused: Bool
+    /// What the camera read, unfiltered: the app decides what is a link.
+    let scanned: (String) -> Void
     let connect: () -> Void
     /// Open from the start when there is an address to show — after a
     /// Disconnect, say — since hiding the one thing to edit helps nobody.
     @State private var manual: Bool
 
-    init(endpoint: EndpointStore, connect: @escaping () -> Void) {
+    init(endpoint: EndpointStore, paused: Bool, scanned: @escaping (String) -> Void,
+         connect: @escaping () -> Void) {
         self.endpoint = endpoint
+        self.paused = paused
+        self.scanned = scanned
         self.connect = connect
         _manual = State(initialValue: endpoint.remembered)
     }
@@ -239,7 +259,11 @@ struct ConnectView: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings), then scan the code with your iPhone's Camera.")
+                    PairingScanner(paused: paused, onCode: scanned)
+                }
+
+                Section {
+                    Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings), and point this camera at the code.")
                     Text("New here? Install Tailscale on this iPhone and your computer, and sign in to the same account.")
                     Link("Get Tailscale", destination: URL(string: "https://tailscale.com/download")!)
                 }

@@ -22,7 +22,7 @@ extension PairingLink {
     /// Only tailnet and loopback hosts are accepted: a link is attacker-controlled
     /// input, and anything else would let one repoint the phone at their host.
     public init(url: URL) throws {
-        guard url.scheme?.lowercased() == "moomux", url.host?.lowercased() == "connect",
+        guard Self.isConnect(url),
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               let host = items.first(where: { $0.name == "host" })?.value, !host.isEmpty
         else { throw Refused.notALink }
@@ -37,6 +37,21 @@ extension PairingLink {
         let name = String(String(raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
             .trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
         self.init(host: host, port: port, name: name.isEmpty ? host : name)
+    }
+
+    /// The link in a scanned QR code, or nil when the code is not ours.
+    ///
+    /// The camera reads every QR code in view, a menu's or a poster's, so
+    /// anything but `moomux://connect` is dropped without a word. One of ours
+    /// that `init(url:)` then refuses still gets through, so the user hears why.
+    public static func scanned(_ payload: String) -> URL? {
+        guard let url = URL(string: payload.trimmingCharacters(in: .whitespacesAndNewlines)),
+              isConnect(url) else { return nil }
+        return url
+    }
+
+    private static func isConnect(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "moomux" && url.host?.lowercased() == "connect"
     }
 
     /// `100.64.0.0/10`, `fd7a:115c:a1e0::/48`, `*.ts.net`, or loopback.
@@ -101,6 +116,17 @@ extension PairingLink {
         for bad in ["moomux://connect?host=8.8.8.8", "moomux://connect?host=evil.example.com",
                     "moomux://connect?host=100.100.1.2&port=70000", "moomux://connect", "moomux://other?host=100.100.1.2"] {
             assert((try? PairingLink(url: URL(string: bad)!)) == nil, bad)
+        }
+        // Scanned: only `moomux://connect` gets as far as an alert.
+        let read = scanned(" moomux://connect?host=100.100.1.2&name=Mac\n")
+        assert(read.flatMap { try? PairingLink(url: $0) } == PairingLink(host: "100.100.1.2", port: 45876, name: "Mac"))
+        assert(scanned("MOOMUX://Connect?host=100.100.1.2") != nil)
+        for stray in ["", "hello", "https://example.com/menu", "WIFI:S:cafe;T:WPA;P:secret;;",
+                      "moomux://other?host=100.100.1.2", "moomux:connect?host=100.100.1.2"] {
+            assert(scanned(stray) == nil, stray)
+        }
+        for refused in ["moomux://connect?host=8.8.8.8", "moomux://connect"] {
+            assert(scanned(refused).map { (try? PairingLink(url: $0)) == nil } == true, refused)
         }
         for good in ["100.64.0.1", "100.127.255.255", "fd7a:115c:a1e0::1", "mac.tail1234.ts.net", "MAC.TAIL1234.TS.NET.", "127.0.0.1", "localhost"] {
             assert(isTailnet(good), good)

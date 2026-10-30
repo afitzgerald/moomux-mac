@@ -268,8 +268,9 @@ The pane's own connection has the same half-open window (D28 notices only when a
 
 **D55. The phone connects from a pairing link; the Mac only draws one.** `moomux pair` and the
 Mac's Pair iPhone… show a QR code for `moomux://connect?host=<tailnet IPv4>&name=<Tailscale
-machine name>` (`port` optional, default 45876). The iPhone's Camera opens it in the app, which
-registers the scheme. The Mac's plist does not: it is the computer being paired, not a client.
+machine name>` (`port` optional, default 45876). The phone's connect screen scans it in-app, and
+the iPhone's Camera opens it too, through the scheme the app registers. The Mac's plist does not
+register it: it is the computer being paired, not a client.
 - **It always asks.** An alert, "Connect to `<name>`?", with the host under it. Connect saves
   host, port and name and reconnects, the same path as Disconnect then Connect. Cancel changes
   nothing. Tailscale vouches for the phone to the computer, not the other way round, so a link
@@ -281,8 +282,15 @@ registers the scheme. The Mac's plist does not: it is the computer being paired,
   refused with "This link points outside your tailnet. Use Connect manually if you meant it." A
   tailnet with a custom IP pool types the address instead. A port outside 1–65535 refuses rather
   than clamps (D22).
-- **The connect screen leads with the scan.** Typing an address is under Connect manually, open
-  from the start when one is remembered. A manual Connect clears the name.
+- **The connect screen leads with a camera.** VisionKit's `DataScannerViewController`, QR only,
+  so no dependency. A scanned code takes the same path as a link opened from outside, alert
+  included, but only a `moomux://connect` link gets that far: the camera reads every QR code in
+  view, so anything else is ignored without a word, while one of ours that fails validation is
+  refused out loud. The camera stops while an alert or sheet is up, and a code it has handed over
+  is ignored until it leaves the frame, so Cancel does not bring the alert straight back. Where
+  it can't run, one line says why instead: access denied (with a Settings link), or a device or
+  simulator that can't scan, which points at the Camera app. Typing an address is under Connect
+  manually, open from the start when one is remembered. A manual Connect clears the name.
 - **Two failures, named.** A core that hung up unread (EOF or a reset) is the tailnet listener
   turning away another Tailscale account: "`<name>` refused this iPhone. Sign in to Tailscale here
   with the same account as `<name>`." A connect that failed, timed out or did not resolve, or a
@@ -292,8 +300,8 @@ registers the scheme. The Mac's plist does not: it is the computer being paired,
 
 The name is display only. It is Tailscale's, not the macOS Computer Name, so it matches the device
 list on the phone and exists on Linux. The owner login stays out of the link; `pair` prints it on
-the computer. *Where:* `PairingLink`, `ConnectFailure`, `MoomuxiOSApp` (`onOpenURL`,
-`EndpointStore.name`, `ConnectView`), `ConnectionRow`.
+the computer. *Where:* `PairingLink` (`scanned`), `ConnectFailure`, `PairingScanner`,
+`MoomuxiOSApp` (`offer`, `EndpointStore.name`, `ConnectView`), `ConnectionRow`.
 
 ---
 
