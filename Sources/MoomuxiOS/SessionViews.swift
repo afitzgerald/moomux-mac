@@ -980,12 +980,64 @@ private struct UsageMenu: View {
                     }
                 }
             } label: {
-                HStack {
-                    if let usage = app.usage { UsageLine(usage, palette: app.palette, now: context.date, free: app.showFreeQuota) }
-                    if let usage = app.codexUsage { UsageLine(usage, agent: "Codex", palette: app.palette, now: context.date, free: app.showFreeQuota) }
-                }.font(.footnote)
+                HStack(spacing: 8) {
+                    if let usage = app.usage { usageRings(usage, agent: "Claude", now: context.date) }
+                    if let usage = app.codexUsage { usageRings(usage, agent: "Codex", now: context.date) }
+                }
+            }
+            .accessibilityLabel("Usage")
+            .accessibilityValue(accessibilityValue(now: context.date))
+        }
+    }
+
+    private func usageRings(_ usage: Usage, agent: String, now: Date) -> some View {
+        HStack(spacing: 3) {
+            Text(agent == "Claude" ? "C" : "X")
+                .font(.system(size: 10, weight: .semibold))
+            if usage.status == .signedOut {
+                Image(systemName: "person.crop.circle.badge.exclamationmark")
+                    .font(.caption)
+            } else if usage.headline.isEmpty {
+                Image(systemName: usage.tokens == nil ? "exclamationmark.circle" : "number.circle")
+                    .font(.caption)
+            } else {
+                ZStack {
+                    ring(usage, window: usage.headline.first { $0.kind == "session" }, size: 20, now: now)
+                    ring(usage, window: usage.headline.first { $0.kind == "weekly_all" }, size: 10, now: now)
+                }
+                .frame(width: 20, height: 20)
+                if !usage.isCurrent && usage.status != .idle {
+                    Image(systemName: "clock.badge.exclamationmark").font(.caption2)
+                } else if usage.inline(now: now).contains(where: { !$0.headline }) {
+                    Image(systemName: "exclamationmark.circle.fill").font(.caption2).foregroundStyle(.orange)
+                }
             }
         }
+    }
+
+    private func ring(_ usage: Usage, window: Usage.Window?, size: CGFloat, now: Date) -> some View {
+        let percent = window.map { usage.percent(of: $0, free: app.showFreeQuota) } ?? 0
+        let color = window.map { SessionTheme.usage(usage.level(of: $0, now: now), app.palette).color } ?? .primary
+        return Canvas { context, bounds in
+            let rect = CGRect(origin: .zero, size: bounds).insetBy(dx: 1, dy: 1)
+            context.stroke(Path(ellipseIn: rect), with: .color(.primary.opacity(0.2)), lineWidth: 2)
+            let fraction = Double(max(0, min(100, percent))) / 100
+            if fraction > 0 {
+                var arc = Path()
+                arc.addArc(center: CGPoint(x: bounds.width / 2, y: bounds.height / 2),
+                           radius: rect.width / 2, startAngle: .degrees(-90),
+                           endAngle: .degrees(-90 + 360 * fraction), clockwise: false)
+                context.stroke(arc, with: .color(usage.isCurrent ? color : .secondary), lineWidth: 2)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func accessibilityValue(now: Date) -> String {
+        [("Claude", app.usage), ("Codex", app.codexUsage)].compactMap { agent, usage in
+            guard let usage else { return nil }
+            return "\(agent): " + usage.detail(now: now, agent: agent, free: app.showFreeQuota).joined(separator: ", ")
+        }.joined(separator: "; ")
     }
 }
 
