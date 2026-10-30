@@ -318,6 +318,7 @@ struct SessionListView: View {
                         Toggle("Archived Only", isOn: $app.showArchived)
                         Toggle("Show Project Emoji", isOn: $app.showProjectEmoji)
                         Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
+                        Toggle("Show free quota", isOn: $app.showFreeQuota)
                         // Off in a build with no notes baked in (`make ios`).
                         Button("What's New") { showingNotes = true }
                             .disabled(WhatsNew.releases.isEmpty)
@@ -331,8 +332,8 @@ struct SessionListView: View {
                         Image(systemName: "ellipsis.circle")
                     }
                 }
-                if let usage = app.usage {
-                    ToolbarItem(placement: .topBarTrailing) { UsageMenu(app: app, usage: usage) }
+                if app.usage != nil || app.codexUsage != nil {
+                    ToolbarItem(placement: .topBarTrailing) { UsageMenu(app: app) }
                 }
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge(app: app) }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -965,16 +966,24 @@ extension View {
 /// opens, and the snapshot alone may not change for hours.
 private struct UsageMenu: View {
     let app: AppState
-    let usage: Usage
-
     var body: some View {
         TimelineView(.everyMinute) { context in
             Menu {
-                ForEach(Array(usage.detail(now: context.date).enumerated()), id: \.offset) { _, line in
-                    Text(line)
+                if let usage = app.usage {
+                    Section("Claude") {
+                        ForEach(Array(usage.detail(now: context.date, free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in Text(line) }
+                    }
+                }
+                if let usage = app.codexUsage {
+                    Section("Codex") {
+                        ForEach(Array(usage.detail(now: context.date, agent: "Codex", free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in Text(line) }
+                    }
                 }
             } label: {
-                UsageLine(usage, palette: app.palette, now: context.date).font(.footnote)
+                HStack {
+                    if let usage = app.usage { UsageLine(usage, palette: app.palette, now: context.date, free: app.showFreeQuota) }
+                    if let usage = app.codexUsage { UsageLine(usage, agent: "Codex", palette: app.palette, now: context.date, free: app.showFreeQuota) }
+                }.font(.footnote)
             }
         }
     }

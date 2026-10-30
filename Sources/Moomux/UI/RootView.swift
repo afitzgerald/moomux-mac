@@ -1608,23 +1608,31 @@ private struct UsageBadge: View {
     @State private var showingDetail = false
 
     var body: some View {
-        if let usage = app.usage {
+        if app.usage != nil || app.codexUsage != nil {
             // The countdowns, and whether a window has reset, move every
             // minute; the snapshot only when agent-usage rewrites its file,
             // and not at all once the stream has dropped.
             TimelineView(.everyMinute) { context in
                 Button { showingDetail.toggle() } label: {
-                    UsageLine(usage, palette: app.palette, now: context.date, saysUsed: true)
+                    HStack {
+                        if let usage = app.usage { UsageLine(usage, palette: app.palette, now: context.date, free: app.showFreeQuota) }
+                        if let usage = app.codexUsage { UsageLine(usage, agent: "Codex", palette: app.palette, now: context.date, free: app.showFreeQuota) }
+                    }
                         .font(.subheadline)
                         .padding(.horizontal, 4)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Claude usage — click for reset times")
+                .help("Agent usage — click for details")
                 .popover(isPresented: $showingDetail, arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(usage.detail(now: context.date).enumerated()), id: \.offset) { _, line in
-                            Text(line)
+                        if let usage = app.usage {
+                            Text("Claude").fontWeight(.semibold)
+                            ForEach(Array(usage.detail(now: context.date, free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in Text(line) }
+                        }
+                        if let usage = app.codexUsage {
+                            Text("Codex").fontWeight(.semibold)
+                            ForEach(Array(usage.detail(now: context.date, agent: "Codex", free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in Text(line) }
                         }
                     }
                     .monospacedDigit()
