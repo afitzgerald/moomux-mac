@@ -265,13 +265,16 @@ struct ConnectView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // Where the code comes from is always said; pointing this
+                // camera at it only when there is a camera to point.
                 Section {
+                    if !camera.showsViewfinder {
+                        Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings).")
+                    }
                     PairingScanner(camera: $camera, paused: paused, onCode: scanned)
                 }
 
                 Section {
-                    // With the square only: where there is none, the line in
-                    // its place already says what to do instead.
                     if camera.showsViewfinder {
                         Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings), and point this camera at the code.")
                     }
