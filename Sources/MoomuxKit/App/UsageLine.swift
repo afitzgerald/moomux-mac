@@ -6,27 +6,27 @@ import SwiftUI
 /// alike; the detail around it (a tooltip, a menu) is each platform's own.
 public struct UsageLine: View {
     let usage: Usage
+    let agent: String
     let palette: ThemePalette?
     let now: Date
-    /// A muted "used" after the numbers, which a bare percent leaves open.
-    /// Where there is room for it — the TUI drops it first in its narrow footer,
-    /// and the phone's top bar is that footer.
-    let saysUsed: Bool
+    let free: Bool
 
-    public init(_ usage: Usage, palette: ThemePalette?, now: Date = Date(), saysUsed: Bool = false) {
+    public init(_ usage: Usage, agent: String = "Claude", palette: ThemePalette?, now: Date = Date(), free: Bool = false) {
         self.usage = usage
+        self.agent = agent
         self.palette = palette
         self.now = now
-        self.saysUsed = saysUsed
+        self.free = free
     }
 
     public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(agent).font(.caption).foregroundStyle(.secondary)
             if usage.status == .signedOut {
                 Label("Signed out", systemImage: "person.crop.circle.badge.exclamationmark")
                     .foregroundStyle(.secondary)
             } else {
-                if !usage.isCurrent {
+                if !usage.isCurrent && usage.status != .idle {
                     Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.secondary)
                 }
                 // The name is the label and the number is the reading, so the
@@ -36,13 +36,13 @@ public struct UsageLine: View {
                     let style = SessionTheme.usage(usage.level(of: window, now: now), palette)
                     HStack(alignment: .firstTextBaseline, spacing: 3) {
                         Text(window.name).font(.caption).foregroundStyle(.secondary)
-                        Text("\(window.percent)%")
+                        Text("\(usage.percent(of: window, free: free))%")
                             .foregroundStyle(usage.isCurrent ? style.color : .secondary)
                             .fontWeight(style.bold ? .semibold : .medium)
                     }
                 }
-                if saysUsed {
-                    Text("used").font(.caption).foregroundStyle(.tertiary)
+                if usage.inline(now: now).isEmpty && usage.tokens != nil {
+                    Text("Tokens").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -55,7 +55,7 @@ public struct UsageLine: View {
 
     private var accessibilityText: String {
         let numbers = usage.status == .signedOut ? []
-            : usage.inline(now: now).map { "\($0.name) \($0.percent) percent used" }
-        return "Claude usage: " + (numbers + [usage.problem].compactMap { $0 }).joined(separator: ", ")
+            : usage.inline(now: now).map { "\($0.name) \(usage.percent(of: $0, free: free)) percent \(free ? "free" : "used")" }
+        return "\(agent) usage: " + (numbers + [usage.tokens?.detail, usage.status == .signedOut ? "\(agent) is signed out" : usage.problem].compactMap { $0 }).joined(separator: ", ")
     }
 }

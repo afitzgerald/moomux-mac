@@ -723,6 +723,7 @@ public struct Snapshot: Decodable, Sendable {
     /// core has nothing to say — no agent-usage on that Mac, or a core older
     /// than the key — and nil draws nothing at all.
     public var usage: Usage?
+    public var codexUsage: Usage?
     /// Why `usage` is absent, when the core knows: `not_installed`,
     /// `unreadable`, `unsupported` or `no_claude`. Nil beside a usage, and
     /// from a core older than the key — `UsageSetup` reads that as "update".
@@ -738,6 +739,7 @@ public struct Snapshot: Decodable, Sendable {
         case sessions, views, rows, err, usage
         case whatsNew = "whats_new"
         case updateAvailable = "update_available"
+        case codexUsage = "codex_usage"
         case usageSetup = "usage_setup"
         case folderRows = "folder_rows"
         case pollTime = "poll_time"
@@ -754,6 +756,7 @@ public struct Snapshot: Decodable, Sendable {
         // A usage block this build cannot read must not take the session list
         // down with it: it is the least important thing on the snapshot.
         usage = try? c.decodeIfPresent(Usage.self, forKey: .usage)
+        codexUsage = try? c.decodeIfPresent(Usage.self, forKey: .codexUsage)
         usageSetup = try? c.decodeIfPresent(String.self, forKey: .usageSetup)
         updateAvailable = try? c.decodeIfPresent(CoreUpdate.self, forKey: .updateAvailable)
         whatsNew = try? c.decodeIfPresent(CoreWhatsNew.self, forKey: .whatsNew)
@@ -813,7 +816,7 @@ public enum UsageSetup {
 /// the one thing not worth sending.
 public struct Usage: Decodable, Equatable, Sendable {
     public enum Status: String, Sendable {
-        case ok, failed, stale
+        case idle, ok, failed, stale
         case signedOut = "signed_out"
     }
 
@@ -862,10 +865,33 @@ public struct Usage: Decodable, Equatable, Sendable {
         }
     }
 
+    public struct Tokens: Decodable, Equatable, Sendable {
+        public var windowDays: Int
+        public var input: Int64
+        public var output: Int64
+        public var cacheRead: Int64
+        public var cacheWrite: Int64
+
+        enum CodingKeys: String, CodingKey {
+            case input, output
+            case windowDays = "window_days"
+            case cacheRead = "cache_read"
+            case cacheWrite = "cache_write"
+        }
+
+        public var detail: String {
+            let format = NumberFormatter()
+            format.numberStyle = .decimal
+            func count(_ n: Int64) -> String { format.string(from: NSNumber(value: n)) ?? String(n) }
+            return "Local tokens (\(windowDays) days): input \(count(input)), output \(count(output)), cache read \(count(cacheRead)), cache write \(count(cacheWrite))"
+        }
+    }
+
     public var status: Status
     public var windows: [Window]
+    public var tokens: Tokens?
 
-    enum CodingKeys: String, CodingKey { case status, windows }
+    enum CodingKeys: String, CodingKey { case status, windows, tokens }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -873,9 +899,14 @@ public struct Usage: Decodable, Equatable, Sendable {
         // means, it is not "these numbers are current".
         status = Status(rawValue: try c.decodeIfPresent(String.self, forKey: .status) ?? "") ?? .stale
         windows = try c.decodeIfPresent([Window].self, forKey: .windows) ?? []
+        tokens = try? c.decodeIfPresent(Tokens.self, forKey: .tokens)
     }
 
     public var headline: [Window] { windows.filter(\.headline) }
+
+    public func percent(of window: Window, free: Bool) -> Int {
+        free ? 100 - window.percent : window.percent
+    }
 
     /// What goes on the line itself: the headline windows always, and a
     /// carve-out only once it is worth a glance — Fable at 96% shows, Opus
@@ -890,7 +921,7 @@ public struct Usage: Decodable, Equatable, Sendable {
 
     /// Whether there is anything to draw. A signed-out account has no windows
     /// and says so; a failed first run has none and nothing to say.
-    public var isDrawable: Bool { status == .signedOut || !headline.isEmpty }
+    public var isDrawable: Bool { status == .signedOut || !headline.isEmpty || tokens != nil }
 
     /// The level to draw `window` at — the core's, unless the reading is not
     /// current or the window has already rolled over. The core grades a reading
@@ -906,7 +937,7 @@ public struct Usage: Decodable, Equatable, Sendable {
     /// What to say instead of, or beside, the numbers.
     public var problem: String? {
         switch status {
-        case .ok: return nil
+        case .ok, .idle: return nil
         case .failed: return "Last update failed — showing the previous numbers"
         case .stale: return "agent-usage isn't updating — these numbers are old"
         case .signedOut: return "Claude is signed out — run claude login"
@@ -919,7 +950,7 @@ public struct Usage: Decodable, Equatable, Sendable {
     /// countdown three times over is noise. Grouped by the *phrase*, not the
     /// date: the server stamps them seconds apart ("13:59:59", "14:00:00").
     /// "used" because a bare percent leaves open whether it is used or left.
-    public func detail(now: Date = Date()) -> [String] {
+    public func detail(now: Date = Date(), agent: String = "Claude", free: Bool = false) -> [String] {
         var groups: [(resets: String?, windows: [Window])] = []
         for window in windows {
             let resets = window.resets(now: now)
@@ -930,10 +961,11 @@ public struct Usage: Decodable, Equatable, Sendable {
             }
         }
         let lines = groups.map { group in
-            group.windows.map { "\($0.name) \($0.percent)%" }.joined(separator: ", ")
-                + " used" + (group.resets.map { " · \($0)" } ?? "")
+            group.windows.map { "\($0.name) \(percent(of: $0, free: free))%" }.joined(separator: ", ")
+                + (group.resets.map { " · \($0)" } ?? "")
         }
-        return lines + [problem].compactMap { $0 }
+        let message = status == .signedOut ? "\(agent) is signed out — run \(agent.lowercased()) login" : problem
+        return lines + [tokens?.detail, message].compactMap { $0 }
     }
 }
 
@@ -1386,6 +1418,17 @@ public enum Wire {
             Snapshot.self, from: Data(#"{"sessions":null,"views":null,"poll_time":"2026-09-02T10:11:12Z"}"#.utf8))
         assert(none.derived, "present-but-null is an answer, not an older core")
         assert(none.sessions.isEmpty)
+        let codex = try! decoder.decode(Snapshot.self, from: Data(#"""
+        {"views":{},"usage":{"status":"ok","windows":[]},"codex_usage":{"status":"idle","windows":[],
+         "tokens":{"window_days":30,"input":1234,"output":56,"cache_read":78,"cache_write":90}}}
+        """#.utf8))
+        assert(codex.usage != nil && codex.codexUsage?.status == .idle)
+        assert(codex.codexUsage?.isDrawable == true && codex.codexUsage?.tokens?.input == 1234)
+        assert(codex.codexUsage?.detail(agent: "Codex").first?.contains("Local tokens") == true)
+        let brokenCodex = try! decoder.decode(Snapshot.self, from: Data(#"{"views":{},"usage":{"status":"ok"},"codex_usage":{"windows":"bad"}}"#.utf8))
+        assert(brokenCodex.usage != nil && brokenCodex.codexUsage == nil)
+        let codexSignedOut = try! decoder.decode(Usage.self, from: Data(#"{"status":"signed_out"}"#.utf8))
+        assert(codexSignedOut.detail(agent: "Codex") == ["Codex is signed out — run codex login"])
         assert(none.usage == nil, "no usage key is nothing to draw")
         assert(none.usageSetup == nil)
         let missing = try! decoder.decode(
@@ -1414,9 +1457,9 @@ public enum Wire {
         assert(usage.windows[1].resets(now: resetNow) == "resets in 1d 18h")
         assert(usage.windows[0].resets(now: parseTimestamp("2026-09-30T22:00:00Z")!) == nil,
                "an elapsed reset drops the countdown rather than going negative")
-        assert(usage.detail(now: resetNow) == ["5h 82% used · resets in 2h 26m",
-                                                "Week 53% used · resets in 1d 18h",
-                                                "Fable 0% used"], "\(usage.detail(now: resetNow))")
+        assert(usage.detail(now: resetNow) == ["5h 82% · resets in 2h 26m",
+                                                "Week 53% · resets in 1d 18h",
+                                                "Fable 0%"], "\(usage.detail(now: resetNow))")
         // Resets a second apart, as the server sends them, share one line.
         let shared = try! decoder.decode(Usage.self, from: Data(#"""
         {"status":"ok","windows":[
@@ -1424,9 +1467,12 @@ public enum Wire {
          {"kind":"weekly_all","name":"Week","percent":12,"resets_at":"2026-10-02T13:59:59Z","headline":true},
          {"kind":"weekly_scoped","name":"Fable","percent":0,"resets_at":"2026-10-02T14:00:00Z"}]}
         """#.utf8))
-        assert(shared.detail(now: resetNow) == ["5h 55% used · resets in 2h 26m",
-                                                 "Week 12%, Fable 0% used · resets in 1d 18h"],
+        assert(shared.detail(now: resetNow) == ["5h 55% · resets in 2h 26m",
+                                                 "Week 12%, Fable 0% · resets in 1d 18h"],
                "\(shared.detail(now: resetNow))")
+        assert(usage.percent(of: usage.windows[0], free: false) == 82)
+        assert(usage.percent(of: usage.windows[0], free: true) == 18)
+        assert(usage.detail(now: resetNow, free: true).first == "5h 18% · resets in 2h 26m")
         assert(usage.level(of: usage.windows[0], now: resetNow) == .warn)
         assert(usage.level(of: usage.windows[0], now: parseTimestamp("2026-09-30T22:00:00Z")!) == .ok,
                "a window past its reset is not still at its old level")

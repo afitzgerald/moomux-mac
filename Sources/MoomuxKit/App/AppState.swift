@@ -113,6 +113,10 @@ public final class AppState {
     /// something worth drawing — and from one on a Mac with no agent-usage,
     /// forever.
     public private(set) var usage: Usage?
+    public private(set) var codexUsage: Usage?
+    public var showFreeQuota: Bool = UserDefaults.standard.bool(forKey: "showFreeQuota") {
+        didSet { UserDefaults.standard.set(showFreeQuota, forKey: "showFreeQuota") }
+    }
     /// Why there is no usage, off the snapshot — Settings' "Claude usage" row.
     public private(set) var usageSetup: String?
     /// A newer release of this app than the one running, from GitHub. Mac
@@ -1507,6 +1511,8 @@ public final class AppState {
         if snapshot.folderRows != folderRows { folderRows = snapshot.folderRows }
         let drawable = snapshot.usage.flatMap { $0.isDrawable ? $0 : nil }
         if drawable != usage { usage = drawable }
+        let codexDrawable = snapshot.codexUsage.flatMap { $0.isDrawable ? $0 : nil }
+        if codexDrawable != codexUsage { codexUsage = codexDrawable }
         if snapshot.usageSetup != usageSetup { usageSetup = snapshot.usageSetup }
         if snapshot.updateAvailable != coreUpdate { coreUpdate = snapshot.updateAvailable }
         if snapshot.whatsNew != coreWhatsNew { coreWhatsNew = snapshot.whatsNew }

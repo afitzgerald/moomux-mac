@@ -563,6 +563,11 @@ private struct ClaudeUsageSection: View {
     var body: some View {
         let advice = UsageSetup.advice(showing: app.usage != nil, setup: app.usageSetup)
         Section {
+            Picker("Quota display", selection: Binding(
+                get: { app.showFreeQuota }, set: { app.showFreeQuota = $0 })) {
+                Text("Used").tag(false)
+                Text("Free").tag(true)
+            }
             Text(advice.status)
             if let command = advice.command {
                 LabeledContent {
@@ -575,9 +580,9 @@ private struct ClaudeUsageSection: View {
                 }
             }
         } header: {
-            Text("Claude usage")
+            Text("Agent usage")
         } footer: {
-            Text("Your 5-hour and weekly Claude quota, in the toolbar. Paste the command into Terminal.")
+            Text("Claude and Codex quota and local token totals, in the toolbar. Codex requires agent-usage 0.1.3 or later. Paste the command into Terminal.")
                 .font(.caption)
         }
     }
