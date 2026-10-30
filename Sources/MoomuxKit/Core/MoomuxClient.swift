@@ -220,7 +220,7 @@ public final class MoomuxClient: Sendable {
 
         enum CodingKeys: String, CodingKey {
             case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path, data
-            case patch, truncated, base, commit, attach, ghostty
+            case patch, truncated, base, commit, attach, ghostty, pairing
             case screens
             case projectEmoji = "project_emoji"
         }
@@ -1011,10 +1011,15 @@ public final class MoomuxClient: Sendable {
         if case .emptyResponse? = refused(#"{"result":{}}"#, {
             _ = try client.createSession(CreateRequest(project: "p", name: "n"))
         }) {} else { assertionFailure("a create with no session is not a success") }
+        // `Pair` rides `result.pairing`, which `CallResult.CodingKeys` must list.
+        expect(#"{"method":"Pair"}"#, answer: #"{"result":{"pairing":{"link":"moomux://connect?host=100.100.1.2&name=box","name":"box","owner":"me@example.com","turned_on":true}}}"#) {
+            check(try client.pair().turnedOn, "pair() must decode result.pairing")
+        }
         // An old core's "unknown method" is reworded into something a user can act on.
         for (method, call) in [("SaveFile", { _ = try client.saveFile(name: "a", data: Data()) }),
                                ("ReadFile", { _ = try client.readFile(id: "s", path: "a") }),
                                ("ResolveFile", { _ = try client.resolveFile(id: "s", path: "a") }),
+                               ("Pair", { _ = try client.pair() }),
                                ("Diff", { _ = try client.diff(id: "s") }),
                                ("ReadBaseFile", { _ = try client.readBaseFile(id: "s", path: "a", commit: "") })] as [(String, () throws -> Void)] {
             if case let .server(message)? = refused(#"{"err":"unknown method \"\#(method)\""}"#, call) {

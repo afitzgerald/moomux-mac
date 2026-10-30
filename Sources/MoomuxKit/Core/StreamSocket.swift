@@ -316,6 +316,11 @@ public final class StreamSocket {
                 let peer = accept(listener, nil, nil)
                 guard peer >= 0 else { return }
                 if reset {
+                    // The request must have arrived (and stay unread) before the
+                    // linger-0 close, as in production; otherwise the RST can land
+                    // before connect's SO_ERROR read or the write.
+                    var b: UInt8 = 0
+                    _ = recv(peer, &b, 1, MSG_PEEK)
                     var linger = linger(l_onoff: 1, l_linger: 0)
                     setsockopt(peer, SOL_SOCKET, SO_LINGER, &linger, socklen_t(MemoryLayout<linger>.size))
                 } else {

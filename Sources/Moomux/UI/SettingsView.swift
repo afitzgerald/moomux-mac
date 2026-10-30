@@ -811,7 +811,6 @@ private struct TerminalPreferencesPane: View {
     }
 }
 
-
 // MARK: - Pairing QR
 
 /// The pairing link as a QR code the iPhone's Camera reads.

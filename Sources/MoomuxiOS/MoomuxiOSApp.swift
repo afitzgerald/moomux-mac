@@ -44,9 +44,13 @@ struct MoomuxiOSApp: App {
                 // connected, to the core it named.
                 if app == nil, endpoint.remembered { connect() }
                 let unseen = WhatsNew.takeUnseen()
-                if unseen.show { unseenNotes = WhatsNew.releases(after: unseen.seen) }
+                if unseen.show, link == nil { unseenNotes = WhatsNew.releases(after: unseen.seen) }
             }
             .onOpenURL { url in
+                // A pairing link outranks the release notes: the alert would
+                // wait under (or be dropped by) a sheet. They are already
+                // marked seen, so they simply yield.
+                unseenNotes = nil
                 do {
                     link = .connect(try PairingLink(url: url))
                 } catch {

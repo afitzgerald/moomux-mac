@@ -32,7 +32,10 @@ extension PairingLink {
             port = p
         }
         guard Self.isTailnet(host) else { throw Refused.outsideTailnet }
-        let name = items.first(where: { $0.name == "name" })?.value ?? ""
+        // The name is untrusted and lands in the confirm alert's title.
+        let raw = items.first(where: { $0.name == "name" })?.value ?? ""
+        let name = String(String(raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+            .trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
         self.init(host: host, port: port, name: name.isEmpty ? host : name)
     }
 
@@ -92,6 +95,9 @@ extension PairingLink {
         assert(ok == PairingLink(host: "100.71.5.0", port: 45876, name: "José's Mac"))
         assert((try? PairingLink(url: URL(string: "moomux://connect?host=100.100.1.2&port=8765")!))?.port == 8765)
         assert((try? PairingLink(url: URL(string: "moomux://connect?host=100.100.1.2")!))?.name == "100.100.1.2")
+        assert((try! PairingLink(url: URL(string: "moomux://connect?host=100.100.1.2&name=a%0Ab")!)).name == "ab")
+        assert((try! PairingLink(url: URL(string: "moomux://connect?host=100.100.1.2&name=\(String(repeating: "x", count: 200))")!)).name.count == 64)
+        assert((try! PairingLink(url: URL(string: "moomux://connect?host=100.100.1.2&name=%20%20")!)).name == "100.100.1.2")
         for bad in ["moomux://connect?host=8.8.8.8", "moomux://connect?host=evil.example.com",
                     "moomux://connect?host=100.100.1.2&port=70000", "moomux://connect", "moomux://other?host=100.100.1.2"] {
             assert((try? PairingLink(url: URL(string: bad)!)) == nil, bad)
