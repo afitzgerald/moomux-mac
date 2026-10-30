@@ -38,6 +38,9 @@ extension PairingLink {
 
     /// `100.64.0.0/10`, `fd7a:115c:a1e0::/48`, `*.ts.net`, or loopback.
     public static func isTailnet(_ host: String) -> Bool {
+        // URLComponents decodes %00 into a real NUL, which getaddrinfo treats as
+        // the end of the name: "evil.com\0.ts.net" would resolve evil.com.
+        guard !host.isEmpty, host.utf8.allSatisfy({ ($0 >= 0x30 && $0 <= 0x39) || ($0 | 0x20 >= 0x61 && $0 | 0x20 <= 0x7a) || $0 == 0x2e || $0 == 0x3a || $0 == 0x2d }) else { return false }
         var v4 = in_addr()
         if inet_pton(AF_INET, host, &v4) == 1 {
             let a = UInt32(bigEndian: v4.s_addr)
@@ -69,7 +72,11 @@ public enum ConnectFailure: Equatable {
     public init?(_ why: String) {
         if why.hasPrefix("connect ") || why.hasPrefix("cannot resolve ") {
             self = .unreachable
-        } else if why.hasPrefix("read: ") || why == MoomuxClient.Failure.emptyResponse.localizedDescription {
+        } else if why == StreamSocket.Failure.syscall("read", ETIMEDOUT).localizedDescription {
+            // A keepalive timeout: the computer is asleep or gone, not a wrong account.
+            self = .unreachable
+        } else if why == MoomuxClient.Failure.emptyResponse.localizedDescription
+                    || why == StreamSocket.Failure.syscall("read", ECONNRESET).localizedDescription {
             self = .refused
         } else {
             return nil
@@ -81,8 +88,8 @@ public enum ConnectFailure: Equatable {
 
 extension PairingLink {
     public static func demo() {
-        let ok = try! PairingLink(url: URL(string: "moomux://connect?host=100.71.5.0&name=Erick%27s%20Mac")!)
-        assert(ok == PairingLink(host: "100.71.5.0", port: 45876, name: "Erick's Mac"))
+        let ok = try! PairingLink(url: URL(string: "moomux://connect?host=100.71.5.0&name=Jos%C3%A9%27s%20Mac")!)
+        assert(ok == PairingLink(host: "100.71.5.0", port: 45876, name: "José's Mac"))
         assert((try? PairingLink(url: URL(string: "moomux://connect?host=100.100.1.2&port=8765")!))?.port == 8765)
         assert((try? PairingLink(url: URL(string: "moomux://connect?host=100.100.1.2")!))?.name == "100.100.1.2")
         for bad in ["moomux://connect?host=8.8.8.8", "moomux://connect?host=evil.example.com",
@@ -92,6 +99,8 @@ extension PairingLink {
         for good in ["100.64.0.1", "100.127.255.255", "fd7a:115c:a1e0::1", "mac.tail1234.ts.net", "MAC.TAIL1234.TS.NET.", "127.0.0.1", "localhost"] {
             assert(isTailnet(good), good)
         }
+        assert(!isTailnet("evil.example.com\u{0}.ts.net"))
+        assert((try? PairingLink(url: URL(string: "moomux://connect?host=evil.example.com%00.ts.net")!)) == nil)
         for bad in ["100.63.255.255", "100.128.0.0", "10.0.0.1", "fd7a:115c:a1e1::1", "ts.net.evil.com"] {
             assert(!isTailnet(bad), bad)
         }
@@ -100,6 +109,7 @@ extension PairingLink {
         assert(ConnectFailure(StreamSocket.Failure.syscall("read", ECONNRESET).localizedDescription) == .refused)
         assert(ConnectFailure(StreamSocket.Failure.syscall("connect 100.1.2.3:45876", ETIMEDOUT).localizedDescription) == .unreachable)
         assert(ConnectFailure(StreamSocket.Failure.unresolved("mac.ts.net", "nodename nor servname").localizedDescription) == .unreachable)
+        assert(ConnectFailure(StreamSocket.Failure.syscall("read", ETIMEDOUT).localizedDescription) == .unreachable)
         assert(ConnectFailure("unknown method \"Pair\"") == nil)
     }
 }

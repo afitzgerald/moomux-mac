@@ -421,7 +421,7 @@ App/WhatsNew.swift       release notes baked into the bundle, both apps; self-co
 App/Acknowledgements.swift  LICENSE + THIRD_PARTY_NOTICES.md as bundled, both apps' Help/⋯ item
 App/Attachments.swift    first-prompt attachments, both front ends: re-encode, upload
                          through `SaveFile`, and the queue each New Session sheet runs
-App/PairingLink.swift   the `moomux://connect` link (tailnet and loopback hosts only) and refused-vs-unreachable
+App/PairingLink.swift    the `moomux://connect` link (tailnet and loopback hosts only) and refused-vs-unreachable
                          for a failed connection
 App/AppState.swift       the single root store, snapshot loop, config poll
 App/Notifier.swift       the only file allowed to touch UNUserNotificationCenter
