@@ -1928,6 +1928,11 @@ public final class AppState {
         }
     }
 
+    /// The iPhone pairing link, from the core (off the main actor).
+    public func pair() async throws -> Pairing {
+        try await withoutBlockingTheUI { [client] in try client.pair() }
+    }
+
     /// Creates a session. One call: the core cuts the worktree and branch,
     /// starts the agent, attaches the PR tag, composes the first prompt
     /// (thinking-level prefix for the agents with no launch flag for it, then

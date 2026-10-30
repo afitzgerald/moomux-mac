@@ -211,6 +211,8 @@ public final class MoomuxClient: Sendable {
         /// `GhosttyConfig`: the core machine's Ghostty config, concatenated in
         /// ghostty's own load order, and the files it came from.
         var ghostty: ServedGhostty?
+        /// `Pair`: the iPhone pairing link and who may use it.
+        var pairing: Pairing?
         /// `Attach`: the token that names this attach to `ResizeAttach`. Absent
         /// from a core older than it, which is the signal to fall back to
         /// reattaching on a size change.
@@ -327,6 +329,20 @@ public final class MoomuxClient: Sendable {
         }
         guard let path = result.path else { throw Failure.emptyResponse }
         return path
+    }
+
+    /// Asks the core for an iPhone pairing link, turning its tailnet listener
+    /// on if needed. The core words every refusal; a core from before `Pair`
+    /// says "unknown method", which is reworded.
+    public func pair() throws -> Pairing {
+        let result: CallResult
+        do {
+            result = try call("Pair")
+        } catch let Failure.server(message) where message.hasPrefix("unknown method") {
+            throw Failure.server("This moomux core is too old to pair — upgrade it.")
+        }
+        guard let pairing = result.pairing else { throw Failure.emptyResponse }
+        return pairing
     }
 
     /// A file on the core's machine, for a path tapped in a session's pane.

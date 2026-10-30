@@ -1033,6 +1033,36 @@ public struct CreateRequest: Encodable, Sendable {
     }
 }
 
+/// What `Pair` hands back: the link the phone's Camera opens, the computer's
+/// Tailscale name, and the account the phone has to be signed in as.
+/// `turnedOn` is true only when this call is what enabled the tailnet listener.
+public struct Pairing: Decodable, Sendable, Equatable {
+    public let link: String
+    public let name: String
+    public let owner: String
+    public let turnedOn: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case link, name, owner
+        case turnedOn = "turned_on"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        link = try c.decode(String.self, forKey: .link)
+        name = try c.decode(String.self, forKey: .name)
+        owner = try c.decode(String.self, forKey: .owner)
+        turnedOn = try c.decodeIfPresent(Bool.self, forKey: .turnedOn) ?? false
+    }
+
+    public init(link: String, name: String, owner: String, turnedOn: Bool = false) {
+        self.link = link
+        self.name = name
+        self.owner = owner
+        self.turnedOn = turnedOn
+    }
+}
+
 // MARK: - Coding
 
 public enum Wire {
@@ -1145,6 +1175,13 @@ public enum Wire {
 
     /// Every assumption above that the Go side could quietly change under us.
     public static func demo() {
+        let pj = #"{"link":"moomux://connect?host=100.1.2.3&name=box","name":"box","owner":"me@example.com"}"#
+        let p0 = try! JSONDecoder().decode(Pairing.self, from: Data(pj.utf8))
+        assert(p0.link == "moomux://connect?host=100.1.2.3&name=box" && p0.name == "box"
+               && p0.owner == "me@example.com" && !p0.turnedOn, "Pairing: turned_on absent is false")
+        let p1 = try! JSONDecoder().decode(Pairing.self, from: Data(
+            pj.replacingOccurrences(of: "}", with: #","turned_on":true}"#).utf8))
+        assert(p1.turnedOn, "Pairing: turned_on true")
         // The hand-rolled parser, against the ICU formatter it replaced: same
         // answer on every shape the Go side emits, or it is not a drop-in.
         // Pre-Gregorian dates are excluded deliberately — Foundation reads
