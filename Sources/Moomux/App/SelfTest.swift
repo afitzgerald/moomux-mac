@@ -51,6 +51,7 @@ enum SelfTest {
         GhosttyResourceBundle.demo()
         PromptDrop.demo()
         Attachments.demo()
+        PairingLink.demo()
         SessionBadges<Never>.demo()
         SidebarGrid.demo()
         MainActor.assumeIsolated {
