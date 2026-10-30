@@ -52,6 +52,7 @@ enum SelfTest {
         PromptDrop.demo()
         Attachments.demo()
         PairingLink.demo()
+        PairingQR.demo()
         SessionBadges<Never>.demo()
         SidebarGrid.demo()
         MainActor.assumeIsolated {
