@@ -208,16 +208,20 @@ The phone builds a new one per Connect. So the `TerminalController` lives in a `
 | Auth | file permissions | the core runs `tailscale whois` on the peer |
 | Connect deadline | none needed; a unix socket fails fast | 5s non-blocking connect |
 | Dead peer | EOF | keepalive, ~30s to `ETIMEDOUT` |
-| Switch cores | Settings → General → Core, or `--socket`; applies on relaunch (D25) | Disconnect in the ⋯ menu |
+| Switch cores | Settings → General → Core, or `--socket`; applies on relaunch (D25) | Disconnect in the ⋯ menu, or a pairing link (D55) |
 | Lifecycle hooks | none | schedules background refresh on `.background`; reconnects on leaving it (D51) |
 
-**D20. TCP over the tailnet, with no pairing, token or TLS.** WireGuard provides encryption and
+**D20. TCP over the tailnet, with no pairing token or TLS.** WireGuard provides encryption and
 machine identity, and the core authorizes each peer by `tailscale whois --json` against its own
 login. The endpoint is therefore in `UserDefaults`, not the Keychain: an address is not a secret.
 The core side, as built:
-- **Opt-in at the machine.** `tailnet_listen = true` in `config.toml`, and it is not settable
-  over the wire. Turning it on exposes `CreateSession`, with its userscripts and
-  permission-skipping flag, to the tailnet, so that choice is made at the machine. The value is
+- **Opt-in at the machine.** `tailnet_listen = true` in `config.toml`, and it is never settable
+  from the tailnet. Turning it on exposes `CreateSession`, with its userscripts and
+  permission-skipping flag, to the tailnet, so that choice is made at the machine: by hand in
+  `config.toml`, or by `Pair` over the unix socket — `moomux pair`, or the Mac's Settings →
+  General → Core → Pair iPhone…. `Pair` checks Tailscale first, starts the listener in the
+  running core (no restart), and saves the flag only once it has bound, so a failed one saves
+  nothing. The core refuses `Pair` when it arrives over the tailnet listener. The value is
   readable on every snapshot as a diagnostic.
 - **Bind.** The tailnet address only, never `0.0.0.0`.
 - **Peer cache.** Authorized peers are cached for 60s, so `tailscale` does not fork on every
@@ -262,6 +266,47 @@ answers at once with a whole snapshot, or with the reason the core is gone.
 
 The pane's own connection has the same half-open window (D28 notices only when a read fails).
 *Where:* `AppState.resume`, `MoomuxiOSApp`'s `scenePhase` handler.
+
+**D55. The phone connects from a pairing link; the Mac only draws one.** `moomux pair` and the
+Mac's Pair iPhone… show a QR code for `moomux://connect?host=<tailnet IPv4>&name=<Tailscale
+machine name>` (`port` optional, default 45876). The phone's connect screen scans it in-app, and
+the iPhone's Camera opens it too, through the scheme the app registers. The Mac's plist does not
+register it: it is the computer being paired, not a client.
+- **It always asks.** An alert, "Connect to `<name>`?", with the host under it. Connect saves
+  host, port and name and reconnects, the same path as Disconnect then Connect. Cancel changes
+  nothing. Tailscale vouches for the phone to the computer, not the other way round, so a link
+  that silently repointed the phone would hand someone else's server every prompt, photo and
+  keystroke. On a cold launch the remembered core may already be connecting; Connect stops it,
+  so the link wins.
+- **Tailnet hosts only, plus loopback.** `100.64.0.0/10`, `fd7a:115c:a1e0::/48` or `*.ts.net`,
+  and loopback so the simulator can be tested through `Scripts/corebridge.py`. Anything else is
+  refused with "This link points outside your tailnet. Use Connect manually if you meant it." A
+  tailnet with a custom IP pool types the address instead. A port outside 1–65535 refuses rather
+  than clamps (D22).
+- **The connect screen leads with a camera.** VisionKit's `DataScannerViewController`, QR only,
+  so no dependency. A scanned code takes the same path as a link opened from outside, alert
+  included, but only a `moomux://connect` link gets that far: the camera reads every QR code in
+  view, so anything else is ignored without a word, while one of ours that fails validation is
+  refused out loud. The camera stops while an alert or sheet is up, and a code it has handed over
+  is ignored until it leaves the frame, so Cancel does not bring the alert straight back. It
+  neither prompts for access nor starts until launch has decided whether to reconnect: the screen
+  is drawn for a frame even when a remembered core is about to replace it. Where it can't run, or
+  stops mid-session, the square goes and one line says why: access denied or restricted (with a
+  Settings link), or a device or simulator that can't scan, which points at the Camera app. The
+  `moomux pair` instruction stays either way; only its "point this camera at the code" half
+  follows the camera. Typing an address is under Connect manually, open from the
+  start when one is remembered. A manual Connect clears the name.
+- **Two failures, named.** A core that hung up unread (EOF or a reset) is the tailnet listener
+  turning away another Tailscale account: "`<name>` refused this iPhone. Sign in to Tailscale here
+  with the same account as `<name>`." A connect that failed, timed out or did not resolve, or a
+  keepalive timeout: "Can't reach `<name>`. Check that Tailscale is on, on this iPhone and on
+  `<name>`, and that it's awake." Anything else is the error as before. Phone only: the Mac's
+  `connection` text is unchanged.
+
+The name is display only. It is Tailscale's, not the macOS Computer Name, so it matches the device
+list on the phone and exists on Linux. The owner login stays out of the link; `pair` prints it on
+the computer. *Where:* `PairingLink` (`scanned`), `ConnectFailure`, `PairingScanner`,
+`MoomuxiOSApp` (`offer`, `EndpointStore.name`, `ConnectView`), `ConnectionRow`.
 
 ---
 

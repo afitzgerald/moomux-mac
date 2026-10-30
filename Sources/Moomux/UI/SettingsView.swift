@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import MoomuxKit
 
 /// Settings and project management: the two write surfaces that are about the
@@ -448,6 +450,11 @@ private struct CoreSection: View {
     @Environment(AppState.self) private var app
     @AppStorage("coreHost") private var host = ""
     @AppStorage("corePort") private var port = 0
+    /// This section's own: a link is a one-off for the person looking at it,
+    /// and nothing else reads it.
+    @State private var pairing: Pairing?
+    @State private var pairError: String?
+    @State private var pairInFlight = false
 
     var body: some View {
         Section {
@@ -457,6 +464,17 @@ private struct CoreSection: View {
                       prompt: Text(String(MoomuxClient.tailnetPort)))
                 .disabled(host.trimmingCharacters(in: .whitespaces).isEmpty)
             LabeledContent("Connected to", value: app.client.endpoint.description)
+            Button("Pair iPhone…") { pair() }
+                .disabled(app.client.isRemote || pairInFlight)
+                .help("Pair from the computer running the core")
+            if let pairing { pairingResult(pairing) }
+            if let pairError {
+                Text(pairError)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         } header: {
             Text("Core")
         } footer: {
@@ -464,6 +482,46 @@ private struct CoreSection: View {
                  + "in its config.toml. Takes effect when Moomux relaunches; `--socket` on the "
                  + "launch line still wins.")
                 .font(.caption)
+        }
+    }
+
+    private func pair() {
+        pairInFlight = true
+        pairError = nil
+        Task {
+            defer { pairInFlight = false }
+            do {
+                pairing = try await app.pair()
+            } catch {
+                pairing = nil
+                // The core words its refusals once; shown as it sent them.
+                pairError = error.localizedDescription
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func pairingResult(_ p: Pairing) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let image = PairingQR.image(for: p.link) {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 180, height: 180)
+                    .accessibilityLabel("Pairing QR code")
+            }
+            Text(p.link)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+            Text("Scan it with the Moomux app on your iPhone. On the iPhone, sign in to Tailscale as \(p.owner).")
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            if p.turnedOn {
+                Text("Devices on your tailnet signed in as \(p.owner) can now reach moomux on this computer.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -753,3 +811,39 @@ private struct TerminalPreferencesPane: View {
     }
 }
 
+// MARK: - Pairing QR
+
+/// The pairing link as a QR code the iPhone's Camera reads.
+enum PairingQR {
+    /// Modules are literal black on white whatever the appearance — the one
+    /// exception to `Theme`'s semantic colours: a scanner needs dark modules
+    /// on a light quiet zone, and dark mode would invert it into nothing.
+    static func image(for link: String) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(link.utf8)
+        filter.correctionLevel = "M"
+        guard let out = filter.outputImage else { return nil }
+        // Integer scale, no interpolation: blurred module edges scan worse.
+        let scale = 8.0
+        let scaled = out.transformed(by: CGAffineTransform(scaleX: scale, y: scale),
+                                     highQualityDownsample: false)
+            .samplingNearest()
+        let quiet = scale * 4
+        let padded = scaled.composited(over: CIImage(color: .white).cropped(
+            to: scaled.extent.insetBy(dx: -quiet, dy: -quiet)))
+        guard let cg = CIContext().createCGImage(padded, from: padded.extent) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+
+    static func demo() {
+        let link = "moomux://connect?host=100.1.2.3&name=Erick%27s%20Mac"
+        guard let img = image(for: link),
+              let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let detector = CIDetector(ofType: CIDetectorTypeQRCode, context: nil,
+                                        options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+        else { assertionFailure("PairingQR: no image or detector"); return }
+        let features = detector.features(in: CIImage(cgImage: cg))
+        assert((features.first as? CIQRCodeFeature)?.messageString == link,
+               "PairingQR: QR does not round-trip the link")
+    }
+}
