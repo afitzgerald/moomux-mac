@@ -268,7 +268,7 @@ struct SessionListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if app.connection.isDown { ConnectionRow(app: app) }
+                if app.connection.isDown { ConnectionRow(app: app, name: endpoint.displayName) }
                 if app.folderView { folderFirstRows } else { projectFirstSections }
             }
             .listStyle(.insetGrouped)
@@ -1042,15 +1042,33 @@ struct RowLabel: LabelStyle {
 /// A failed call must not read as "no sessions" — `AppState.refresh` keeps the
 /// last good list and reports through `connection`, so this row is the only
 /// thing that changes when the core goes away.
+///
+/// It names the likelier cause when the error says which kind it is: a core
+/// that hung up unread is the tailnet listener turning away another account,
+/// and one that never answered is off, asleep, or off the tailnet. The Mac's
+/// `connection` text is untouched; only this row reads it differently.
 private struct ConnectionRow: View {
     let app: AppState
+    /// `EndpointStore.displayName`: the pairing link's name, else the host.
+    let name: String
 
     var body: some View {
         if case let .down(why) = app.connection {
-            Label(why, systemImage: "bolt.horizontal.circle")
+            Label(message(why), systemImage: "bolt.horizontal.circle")
                 .labelStyle(RowLabel())
                 .font(.caption)
                 .foregroundStyle(.orange)
+        }
+    }
+
+    private func message(_ why: String) -> String {
+        switch ConnectFailure(why) {
+        case .refused:
+            "\(name) refused this iPhone. Sign in to Tailscale here with the same account as \(name)."
+        case .unreachable:
+            "Can't reach \(name). Check that Tailscale is on, on this iPhone and on \(name), and that it's awake."
+        case nil:
+            why
         }
     }
 }

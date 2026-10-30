@@ -53,6 +53,20 @@
 	<array>
 		<string>mergeright</string>
 	</array>
+	<!-- `moomux://connect?host=…&name=…`, the link in the pairing QR code that
+	     `moomux pair` and the Mac's Settings → Pair iPhone… show. The Mac's own
+	     plist does not claim it: the Mac draws the code, the phone reads it. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.moomux.Moomux</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>moomux</string>
+			</array>
+		</dict>
+	</array>
 	<!-- Background refresh: `BackgroundRefresh` in MoomuxiOSApp.swift polls the
 	     core for sessions that started waiting while the app was suspended.
 	     Both keys are required — without the mode the task never runs, and
