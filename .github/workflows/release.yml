@@ -158,12 +158,16 @@ jobs:
           gh repo clone afitzgerald/homebrew-moomux-mac /tmp/tap
           mkdir -p /tmp/tap/Casks
 
-          cat > /tmp/tap/Casks/moomux-mac.rb <<EOF
+          # Quoted, so the shell expands nothing in here: the comments' backticks
+          # once ran `brew upgrade` on the runner and pasted its log into the
+          # cask (0.0.154), which brew then could not parse. The three values
+          # go in afterwards.
+          cat > /tmp/tap/Casks/moomux-mac.rb <<'EOF'
           cask "moomux-mac" do
-            version "${VERSION}"
-            sha256 "${sha256}"
+            version "@VERSION@"
+            sha256 "@SHA256@"
 
-            url "https://github.com/afitzgerald/moomux-mac/releases/download/${TAG}/Moomux-${TAG}.dmg"
+            url "https://github.com/afitzgerald/moomux-mac/releases/download/@TAG@/Moomux-@TAG@.dmg"
             name "Moomux"
             desc "Native macOS front end for moomux"
             homepage "https://github.com/afitzgerald/moomux-mac"
@@ -205,6 +209,9 @@ jobs:
             ]
           end
           EOF
+          sed -i '' -e "s/@VERSION@/${VERSION}/g" -e "s/@SHA256@/${sha256}/g" -e "s/@TAG@/${TAG}/g" \
+            /tmp/tap/Casks/moomux-mac.rb
+          ruby -c /tmp/tap/Casks/moomux-mac.rb
 
           cd /tmp/tap
           git config user.name "github-actions[bot]"
