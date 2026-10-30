@@ -17,6 +17,10 @@ struct MoomuxiOSApp: App {
     @State private var unseenNotes: [WhatsNew.Release]?
     /// A pairing link waiting on Connect or Cancel, or why one was refused.
     @State private var link: LinkPrompt?
+    /// Until the launch `.task` has decided whether to reconnect. The Connect
+    /// screen is drawn for that first frame even when a remembered core is
+    /// about to replace it, and must not prompt for or start the camera.
+    @State private var launching = true
     @Environment(\.scenePhase) private var scenePhase
 
     /// In `init`, not a view's `.task`: `BGTaskScheduler` refuses a
@@ -37,7 +41,7 @@ struct MoomuxiOSApp: App {
                         .id(ObjectIdentifier(app))
                 } else {
                     // The camera stops while anything is up over it.
-                    ConnectView(endpoint: endpoint, paused: link != nil || unseenNotes != nil,
+                    ConnectView(endpoint: endpoint, paused: launching || link != nil || unseenNotes != nil,
                                 scanned: scanned, connect: connect)
                 }
             }
@@ -47,6 +51,7 @@ struct MoomuxiOSApp: App {
                 if app == nil, endpoint.remembered { connect() }
                 let unseen = WhatsNew.takeUnseen()
                 if unseen.show, link == nil { unseenNotes = WhatsNew.releases(after: unseen.seen) }
+                launching = false
             }
             .onOpenURL { offer($0) }
             // Never connects without asking: Tailscale vouches for the phone
@@ -237,11 +242,12 @@ final class EndpointStore {
 /// Leads with the camera; typing an address is the fallback.
 struct ConnectView: View {
     @Bindable var endpoint: EndpointStore
-    /// Stops the camera, while an alert or a sheet is up over it.
+    /// Keeps the camera off: at launch, and while an alert or a sheet is up.
     let paused: Bool
     /// What the camera read, unfiltered: the app decides what is a link.
     let scanned: (String) -> Void
     let connect: () -> Void
+    @State private var camera: ScanAvailability
     /// Open from the start when there is an address to show — after a
     /// Disconnect, say — since hiding the one thing to edit helps nobody.
     @State private var manual: Bool
@@ -252,6 +258,7 @@ struct ConnectView: View {
         self.paused = paused
         self.scanned = scanned
         self.connect = connect
+        _camera = State(initialValue: .current)
         _manual = State(initialValue: endpoint.remembered)
     }
 
@@ -259,11 +266,15 @@ struct ConnectView: View {
         NavigationStack {
             Form {
                 Section {
-                    PairingScanner(paused: paused, onCode: scanned)
+                    PairingScanner(camera: $camera, paused: paused, onCode: scanned)
                 }
 
                 Section {
-                    Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings), and point this camera at the code.")
+                    // With the square only: where there is none, the line in
+                    // its place already says what to do instead.
+                    if camera.showsViewfinder {
+                        Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings), and point this camera at the code.")
+                    }
                     Text("New here? Install Tailscale on this iPhone and your computer, and sign in to the same account.")
                     Link("Get Tailscale", destination: URL(string: "https://tailscale.com/download")!)
                 }

@@ -287,10 +287,13 @@ register it: it is the computer being paired, not a client.
   included, but only a `moomux://connect` link gets that far: the camera reads every QR code in
   view, so anything else is ignored without a word, while one of ours that fails validation is
   refused out loud. The camera stops while an alert or sheet is up, and a code it has handed over
-  is ignored until it leaves the frame, so Cancel does not bring the alert straight back. Where
-  it can't run, one line says why instead: access denied (with a Settings link), or a device or
-  simulator that can't scan, which points at the Camera app. Typing an address is under Connect
-  manually, open from the start when one is remembered. A manual Connect clears the name.
+  is ignored until it leaves the frame, so Cancel does not bring the alert straight back. It
+  neither prompts for access nor starts until launch has decided whether to reconnect: the screen
+  is drawn for a frame even when a remembered core is about to replace it. Where it can't run, or
+  stops mid-session, one line says why in place of the square and its "point this camera" line:
+  access denied or restricted (with a Settings link), or a device or simulator that can't scan,
+  which points at the Camera app. Typing an address is under Connect manually, open from the
+  start when one is remembered. A manual Connect clears the name.
 - **Two failures, named.** A core that hung up unread (EOF or a reset) is the tailnet listener
   turning away another Tailscale account: "`<name>` refused this iPhone. Sign in to Tailscale here
   with the same account as `<name>`." A connect that failed, timed out or did not resolve, or a
