@@ -20,8 +20,10 @@ public struct UsageLine: View {
     }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(agent).font(.caption).foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: 9) {
+            Text(agent)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
             if usage.status == .signedOut {
                 Label("Signed out", systemImage: "person.crop.circle.badge.exclamationmark")
                     .foregroundStyle(.secondary)
@@ -34,11 +36,23 @@ public struct UsageLine: View {
                 // reads as a sentence rather than as two figures.
                 ForEach(Array(usage.inline(now: now).enumerated()), id: \.offset) { _, window in
                     let style = SessionTheme.usage(usage.level(of: window, now: now), palette)
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text(window.name).font(.caption).foregroundStyle(.secondary)
-                        Text("\(usage.percent(of: window, free: free))%")
-                            .foregroundStyle(usage.isCurrent ? style.color : .secondary)
-                            .fontWeight(style.bold ? .semibold : .medium)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(window.name).font(.caption).foregroundStyle(.secondary)
+                            Text("\(usage.percent(of: window, free: free))%")
+                                .foregroundStyle(usage.isCurrent ? style.color : .secondary)
+                                .fontWeight(style.bold ? .semibold : .medium)
+                        }
+                        GeometryReader { geometry in
+                            let fraction = CGFloat(max(0, min(100, usage.percent(of: window, free: free)))) / 100
+                            Capsule().fill(.primary.opacity(0.12))
+                                .overlay(alignment: .leading) {
+                                    Capsule()
+                                        .fill(usage.isCurrent ? style.color.opacity(style.bold ? 0.9 : 0.5) : Color.secondary.opacity(0.4))
+                                        .frame(width: geometry.size.width * fraction)
+                                }
+                        }
+                        .frame(height: 3)
                     }
                 }
                 if usage.inline(now: now).isEmpty && usage.tokens != nil {
@@ -46,6 +60,9 @@ public struct UsageLine: View {
                 }
             }
         }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
         .monospacedDigit()
         .lineLimit(1)
         .fixedSize()
