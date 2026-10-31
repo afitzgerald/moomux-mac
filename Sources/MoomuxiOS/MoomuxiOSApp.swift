@@ -17,6 +17,8 @@ struct MoomuxiOSApp: App {
     @State private var unseenNotes: [WhatsNew.Release]?
     /// A pairing link waiting on Connect or Cancel, or why one was refused.
     @State private var link: LinkPrompt?
+    /// The name a pairing link's computer is saved under, editable in its alert.
+    @State private var linkName = ""
     /// Until the launch `.task` has decided whether to reconnect. The Connect
     /// screen is drawn for that first frame even when a remembered core is
     /// about to replace it, and must not prompt for or start the camera.
@@ -69,6 +71,8 @@ struct MoomuxiOSApp: App {
             .alert(link?.title ?? "", isPresented: Binding(get: { link != nil }, set: { if !$0 { link = nil } }),
                    presenting: link) { prompt in
                 if case let .connect(pairing) = prompt {
+                    // The placeholder is what an empty name falls back to.
+                    TextField(pairing.name, text: $linkName)
                     Button("Connect") { connect(to: pairing) }
                     Button("Cancel", role: .cancel) {}
                 } else {
@@ -169,7 +173,11 @@ struct MoomuxiOSApp: App {
         // they simply yield.
         unseenNotes = nil
         do {
-            link = .connect(try PairingLink(url: url))
+            let pairing = try PairingLink(url: url)
+            // A computer already saved at this address offers its own rename.
+            let saved = computers.saved.list.first { $0.host == pairing.host && $0.port == Int(pairing.port) }
+            linkName = saved.map(\.customName).flatMap { $0.isEmpty ? nil : $0 } ?? pairing.name
+            link = .connect(pairing)
         } catch {
             link = .refused(error.localizedDescription)
         }
@@ -186,9 +194,13 @@ struct MoomuxiOSApp: App {
     /// A new computer is added; one already saved (same address) is switched
     /// to, its code name refreshed and any rename kept. On a cold launch the
     /// remembered core may already be connecting; reconnecting is what makes
-    /// the link win.
+    /// the link win. The code's own name left as it is, or cleared, is no
+    /// rename, so a later rescan keeps refreshing it.
     private func connect(to pairing: PairingLink) {
         computers.saved.add(host: pairing.host, port: Int(pairing.port), name: pairing.name)
+        if let id = computers.saved.currentID {
+            computers.saved.rename(id, to: linkName.trimmed == pairing.name ? "" : linkName)
+        }
         reconnect()
     }
 }
