@@ -158,7 +158,17 @@ public struct NewSessionForm: Equatable, Sendable {
     /// to fill — from the branch, else the prompt, else an assigned one — so
     /// only a `prompt_agent` project blocks, until an agent is chosen.
     public var canCreate: Bool {
-        !project.isEmpty && !agent.isEmpty
+        !project.isEmpty && !agent.isEmpty && promptProblem == nil
+    }
+
+    /// Long text belongs in an attached file, which the agent reads, not in
+    /// the prompt: it is typed into the agent's pane, and the phone's editor
+    /// was killed by the watchdog laying out a long one.
+    public static let promptLimit = 4000
+
+    public var promptProblem: String? {
+        prompt.count <= Self.promptLimit ? nil
+            : "The prompt is \(prompt.count) characters; the limit is \(Self.promptLimit). Attach long text as a file."
     }
 
     public static func demo() {
@@ -183,6 +193,11 @@ public struct NewSessionForm: Equatable, Sendable {
         form.agent = "claude"
         form.name = "x"
         assert(form.canCreate)
+        form.prompt = String(repeating: "a", count: promptLimit)
+        assert(form.canCreate && form.promptProblem == nil, "the limit itself is allowed")
+        form.prompt += "a"
+        assert(!form.canCreate && form.promptProblem != nil, "one over refuses")
+        form.prompt = ""
 
         // An unset agent is claude, and an agent the core dropped falls back
         // rather than leaving the picker on a value that cannot be selected.
