@@ -21,8 +21,7 @@ public struct UsageLine: View {
 
     public var body: some View {
         HStack(alignment: .center, spacing: 9) {
-            Text(agent)
-                .font(.caption.weight(.semibold))
+            AgentMark(agent)
                 .foregroundStyle(.secondary)
             if usage.status == .signedOut {
                 Label("Signed out", systemImage: "person.crop.circle.badge.exclamationmark")

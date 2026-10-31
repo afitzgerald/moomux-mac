@@ -35,21 +35,25 @@ import MoomuxKit
 /// takes to force the lookup: `Bundle.module` is a `static let`, so warming it
 /// here settles it for the life of the process and the original implementation
 /// goes straight back.
+///
+/// MoomuxKit's own bundle (the agent logos) has the identical problem — 0.0.163
+/// crashed drawing the first `AgentMark` — so the hook covers both names.
 enum GhosttyResourceBundle {
     static let name = "GhosttyKit_GhosttyTerminal.bundle"
+    static let names: Set = [name, "Moomux_MoomuxKit.bundle"]
 
-    /// Where `make app` puts it. Nil unbundled (`make selfcheck`), where
+    /// Where `make app` puts them. Nil unbundled (`make selfcheck`), where
     /// SwiftPM's own `.build` candidate is present and correct anyway.
-    static var shippedPath: String? {
-        Bundle.main.resourceURL?.appendingPathComponent(name).path
-    }
+    static var resources: String? { Bundle.main.resourceURL?.path }
 
-    /// The one rewrite: a request for the bundle at a path that has none, when
-    /// we ship one, becomes a request for ours. Anything else passes through.
-    static func redirect(_ path: String, shipped: String?, exists: (String) -> Bool) -> String {
-        guard (path as NSString).lastPathComponent == name, !exists(path),
-              let shipped, shipped != path, exists(shipped)
-        else { return path }
+    /// The one rewrite: a request for one of our bundles at a path that has
+    /// none, when we ship it, becomes a request for ours. Anything else passes
+    /// through.
+    static func redirect(_ path: String, resources: String?, exists: (String) -> Bool) -> String {
+        let file = (path as NSString).lastPathComponent
+        guard names.contains(file), !exists(path), let resources else { return path }
+        let shipped = (resources as NSString).appendingPathComponent(file)
+        guard shipped != path, exists(shipped) else { return path }
         return shipped
     }
 
@@ -63,33 +67,37 @@ enum GhosttyResourceBundle {
             @convention(c) (Unmanaged<AnyObject>, Selector, NSString) -> Unmanaged<AnyObject>?
         let previous = method_getImplementation(method)
         let original = unsafeBitCast(previous, to: Original.self)
-        let shipped = shippedPath
+        let resources = resources
         let exists = FileManager.default.fileExists(atPath:)
         let hook: @convention(block) (Unmanaged<AnyObject>, NSString) -> Unmanaged<AnyObject>? = {
             object, path in
-            original(object, sel, redirect(path as String, shipped: shipped, exists: exists) as NSString)
+            original(object, sel, redirect(path as String, resources: resources, exists: exists) as NSString)
         }
         method_setImplementation(method, imp_implementationWithBlock(hook))
         _ = GhosttyRuntimeResources.directoryURL // the fatalError, or not, happens here
+        _ = KitBundle.bundle // and here
         method_setImplementation(method, previous)
     }
 
     static func demo() {
-        let here = Set(["/App.app/Contents/Resources/\(name)", "/build/\(name)"])
+        let kit = "Moomux_MoomuxKit.bundle"
+        let res = "/App.app/Contents/Resources"
+        let here = Set(["\(res)/\(name)", "\(res)/\(kit)", "/build/\(name)"])
         let exists: (String) -> Bool = { here.contains($0) }
-        let shipped = "/App.app/Contents/Resources/\(name)"
 
         // The crash: the accessor asks at the app root, where nothing is.
-        assert(redirect("/App.app/\(name)", shipped: shipped, exists: exists) == shipped)
+        assert(redirect("/App.app/\(name)", resources: res, exists: exists) == "\(res)/\(name)")
+        // 0.0.163's crash: MoomuxKit's bundle, same shape.
+        assert(redirect("/App.app/\(kit)", resources: res, exists: exists) == "\(res)/\(kit)")
         // A candidate that does exist is never second-guessed.
-        assert(redirect("/build/\(name)", shipped: shipped, exists: exists) == "/build/\(name)")
+        assert(redirect("/build/\(name)", resources: res, exists: exists) == "/build/\(name)")
         // Any other missing bundle stays missing — this is not a search path.
-        assert(redirect("/App.app/Other.bundle", shipped: shipped, exists: exists)
-               == "/App.app/Other.bundle")
+        assert(redirect("/App.app/Gone.bundle", resources: res, exists: exists)
+               == "/App.app/Gone.bundle")
         // Unbundled (`make selfcheck`): nothing shipped, nothing rewritten.
-        assert(redirect("/App.app/\(name)", shipped: nil, exists: exists) == "/App.app/\(name)")
+        assert(redirect("/App.app/\(name)", resources: nil, exists: exists) == "/App.app/\(name)")
         // A shipped copy we cannot see is not worth handing back.
-        assert(redirect("/App.app/\(name)", shipped: "/gone/\(name)", exists: exists)
+        assert(redirect("/App.app/\(name)", resources: "/gone", exists: exists)
                == "/App.app/\(name)")
     }
 }

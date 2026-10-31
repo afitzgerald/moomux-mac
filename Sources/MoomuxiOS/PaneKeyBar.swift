@@ -14,26 +14,9 @@ import UIKit
 /// the system keyboard.
 @MainActor
 final class PaneKeyBar: UIView {
-    /// Pasted into the pane, then Return unless `submit` is false — a command
-    /// that takes an argument is left open, with a trailing space, for the user
-    /// to finish. Edit the list to change the menu; nothing else reads it.
-    ///
-    /// Codex names a skill `$tag`, not `/tag`, and Return on a pasted `$tag`
-    /// only accepts its completion popup; the trailing space closes the popup
-    /// so the one Return submits. Measured on codex-cli 0.166.
-    static func snippets(for agent: String) -> [(text: String, submit: Bool)] {
-        let (sigil, end) = agent == "codex" ? ("$", " ") : ("/", "")
-        return [
-            ("/clear", true), ("/compact", true), ("/model", true),
-            // Parks the session, so a menu tap alone must not do it.
-            ("\(sigil)kill\(end)", false),
-            ("\(sigil)tag\(end)", true), ("\(sigil)reseed\(end)", true), ("\(sigil)spawn ", false),
-            ("y", true), ("continue", true),
-        ]
-    }
-
-    /// The attached session's agent, which picks the snippets. Read when the
-    /// menu opens, so a re-agented session gets the new list.
+    /// The attached session's agent, which spells moomux's skills
+    /// (`Snippet.text(for:)`). Read when the menu opens, so a re-agented
+    /// session gets the new spelling.
     var agent = "claude"
 
     weak var terminal: UITerminalView? {
@@ -44,6 +27,7 @@ final class PaneKeyBar: UIView {
     }
     var onPhotos: () -> Void = {}
     var onFiles: () -> Void = {}
+    var onEditSnippets: () -> Void = {}
 
     /// Hiding the keyboard swaps it for an empty input view rather than
     /// resigning, so the terminal keeps focus and this bar stays docked at the
@@ -278,22 +262,29 @@ final class PaneKeyBar: UIView {
 
     /// A menu rather than a button per snippet: the row is already as wide as
     /// a phone. Return is a keystroke, so it submits even to a program that
-    /// treats pasted newlines as text.
+    /// treats pasted newlines as text. Built each time it opens, so an edit
+    /// in the sheet shows on the next tap.
     private func snippetMenu() -> UIButton {
         let button = icon("bolt", "Snippets") { _ in }
         button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
-            done(Self.snippets(for: self?.agent ?? "claude").map { snippet in
+            let agent = self?.agent ?? "claude"
+            let items: [UIMenuElement] = Snippet.saved.map { snippet in
                 let title = snippet.text.trimmingCharacters(in: .whitespaces)
-                // "…" marks the one that takes an argument, not every one left
-                // unsubmitted: /kill waits for Return but needs nothing typed.
-                return UIAction(title: title + (title.hasSuffix("spawn") ? "…" : "")) { [weak self] _ in
+                // "…" marks one that takes an argument (a trailing space), not
+                // every one left unsubmitted: /kill waits for Return but needs
+                // nothing typed.
+                return UIAction(title: title + (snippet.text.hasSuffix(" ") ? "…" : "")) { [weak self] _ in
                     guard let view = self?.terminal else { return }
                     // An armed Ctrl would otherwise turn the Return into Ctrl+Return.
                     view.resetStickyModifiers()
-                    view.paste(text: snippet.text)
+                    view.paste(text: snippet.text(for: agent))
                     if snippet.submit { view.sendKey(.enter) }
                 }
-            })
+            }
+            let edit = UIAction(title: "Edit Snippets…", image: UIImage(systemName: "pencil")) { [weak self] _ in
+                self?.onEditSnippets()
+            }
+            done(items + [UIMenu(options: .displayInline, children: [edit])])
         }])
         button.showsMenuAsPrimaryAction = true
         // The menu opens upward; the default would flip the list.

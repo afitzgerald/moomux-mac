@@ -754,6 +754,12 @@ public final class AppState {
     private var streamAnswered = false
     /// No view reads this, and `@Observable` fires on any assignment.
     @ObservationIgnored private var notifier: Notifier?
+    /// Which computer this store talks to, for its banners and its share of
+    /// the badge. The phone sets both; on the Mac, with one core, they stay
+    /// empty and a banner is exactly what it always was.
+    @ObservationIgnored public var notificationKey = ""
+    /// Named on a banner when the phone has more than one computer.
+    @ObservationIgnored public var computerName = ""
 
     public init(client: MoomuxClient = MoomuxClient(), drafts: UserDefaults = .standard) {
         self.client = client
@@ -1302,9 +1308,6 @@ public final class AppState {
         // from an unbundled binary, where reaching the notification center at
         // all would trap.
         notifier = Notifier(app: self)
-        #if os(iOS)
-        notifier?.claimLaunchTap()
-        #endif
         tasks = [
             // The cold-start pull: the stream is the render path, but the
             // first snapshot is a beat away and a core too old to stream at
@@ -1379,11 +1382,10 @@ public final class AppState {
         watch?.cancel()
         watch = nil
         #if !os(macOS)
-        // Disconnect leaves the Connect screen up, so a badge left at 3 is a
-        // count of sessions nothing is watching any more. macOS has no
-        // equivalent: its dock tile goes with the window.
+        // The badge stays: on the phone this is a switch to another computer,
+        // and background refresh still counts this one. Forgetting it is what
+        // zeroes its share.
         badgeCount = -1
-        notifier?.setBadge(0)
         #endif
     }
 
@@ -1436,7 +1438,10 @@ public final class AppState {
     }
 
     private func refreshSessions() async {
-        guard let fresh = try? await withoutBlockingTheUI({ [client] in try client.sessions() })
+        // Not after `stop()`: on the phone a forgotten computer's late answer
+        // would put its share back on the badge.
+        guard let fresh = try? await withoutBlockingTheUI({ [client] in try client.sessions() }),
+              !Task.isCancelled
         else { return }  // `connection` already carries the failure
         adopt(sessions: fresh)
     }
