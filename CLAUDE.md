@@ -933,8 +933,11 @@ Decisions, not oversights. Don't "fix" these without being asked.
   last-opened sorting turns it off. Refiling and placing go in one `mutate`, so a session dropped
   between two folder members lands there. Both apps drag through `ForEach.onMove` (`AppState.move`,
   `Layout.move`). Straight under a header is inside it, even with a collapsed folder's loose
-  neighbour below; otherwise a sibling on either side reorders, and failing that the row above
-  decides — a folder member files into that folder, a loose session takes it out. A loose block is
+  neighbour below. A folder member dropped below its folder's last member leaves the folder, placed
+  anywhere in the project's order (`Layout.insert`) — `onMove` reports that gap with the member
+  above, so the sibling rule would have kept it filed. Otherwise a sibling on either side reorders,
+  and failing that the row above decides — a folder member files into that folder, a loose session
+  takes it out. A loose block is
   one project's, so another project's refuses the drop, and so does the top of the folder-first
   list. Headers are `.moveDisabled` on both.
   - **The Mac also drops *onto* a header** (`HeaderDrop`, `AppState.drop(_:into:project:)`),
