@@ -63,6 +63,7 @@ struct TerminalScreen: View {
         AttachedTerminal(controller: app.terminalController,
                          client: app.client,
                          sessionID: sessionID,
+                         agent: app.session(id: sessionID)?.agentName ?? "claude",
                          fontSize: fontSize,
                          pane: pane,
                          // The far end going away is the end of the screen's
@@ -290,6 +291,7 @@ struct AttachedTerminal: UIViewRepresentable {
     let controller: TerminalController
     let client: MoomuxClient
     let sessionID: Session.ID
+    let agent: String
     let fontSize: Double
     let pane: PaneHandle
     let onEnded: () -> Void
@@ -331,7 +333,9 @@ struct AttachedTerminal: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_: UITerminalView, context _: Context) {}
+    func updateUIView(_ view: UITerminalView, context _: Context) {
+        (view as? LinkTapView)?.keyBar.agent = agent
+    }
 
     /// Explicit teardown, exactly as `AppState.detach` needs on the Mac:
     /// dropping the view does not free the surface, and here it would also

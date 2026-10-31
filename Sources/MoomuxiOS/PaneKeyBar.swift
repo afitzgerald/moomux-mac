@@ -14,6 +14,11 @@ import UIKit
 /// the system keyboard.
 @MainActor
 final class PaneKeyBar: UIView {
+    /// The attached session's agent, which spells moomux's skills
+    /// (`Snippet.text(for:)`). Read when the menu opens, so a re-agented
+    /// session gets the new spelling.
+    var agent = "claude"
+
     weak var terminal: UITerminalView? {
         didSet {
             terminal?.setStickyModifierChangeHandler { [weak self] in self?.refresh() }
@@ -262,12 +267,17 @@ final class PaneKeyBar: UIView {
     private func snippetMenu() -> UIButton {
         let button = icon("bolt", "Snippets") { _ in }
         button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
+            let agent = self?.agent ?? "claude"
             let items: [UIMenuElement] = Snippet.saved.map { snippet in
-                UIAction(title: snippet.text.trimmingCharacters(in: .whitespaces) + (snippet.submit ? "" : "…")) { [weak self] _ in
+                let title = snippet.text.trimmingCharacters(in: .whitespaces)
+                // "…" marks one that takes an argument (a trailing space), not
+                // every one left unsubmitted: /kill waits for Return but needs
+                // nothing typed.
+                return UIAction(title: title + (snippet.text.hasSuffix(" ") ? "…" : "")) { [weak self] _ in
                     guard let view = self?.terminal else { return }
                     // An armed Ctrl would otherwise turn the Return into Ctrl+Return.
                     view.resetStickyModifiers()
-                    view.paste(text: snippet.text)
+                    view.paste(text: snippet.text(for: agent))
                     if snippet.submit { view.sendKey(.enter) }
                 }
             }

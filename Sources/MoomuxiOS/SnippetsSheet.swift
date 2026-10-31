@@ -20,6 +20,19 @@ struct Snippet: Codable, Hashable, Identifiable {
         .init(text: "y", submit: true), .init(text: "continue", submit: true),
     ]
 
+    /// moomux's own skills, which every agent but codex spells `/tag`.
+    static let skills: Set = ["kill", "tag", "reseed", "spawn"]
+
+    /// What is pasted. Codex names a skill `$tag`, not `/tag`, and Return on a
+    /// pasted `$tag` only accepts its completion popup; the trailing space
+    /// closes the popup so the one Return submits. Measured on codex-cli
+    /// 0.166. Applied here rather than stored, so one list serves both agents.
+    func text(for agent: String) -> String {
+        let name = text.trimmingCharacters(in: .whitespaces).dropFirst()
+        guard agent == "codex", text.hasPrefix("/"), Self.skills.contains(String(name)) else { return text }
+        return "$\(name) "
+    }
+
     /// The user's list, or the defaults until they first save one. An empty
     /// saved list stays empty: deleting every snippet is a choice. A list
     /// this build cannot read is copied aside before the defaults stand in,

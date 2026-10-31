@@ -423,6 +423,7 @@ App/Attachments.swift    first-prompt attachments, both front ends: re-encode, u
                          through `SaveFile`, and the queue each New Session sheet runs
 App/PairingLink.swift    the `moomux://connect` link (tailnet and loopback hosts only) and refused-vs-unreachable
                          for a failed connection
+App/Computers.swift      the phone's saved computers and which one it is on; pure, `Codable`
 App/AppState.swift       the single root store, snapshot loop, config poll
 App/Notifier.swift       the only file allowed to touch UNUserNotificationCenter
 App/MoomuxApp.swift      scenes: main window + MenuBarExtra

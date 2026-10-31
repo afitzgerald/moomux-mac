@@ -11,7 +11,7 @@ import SwiftUI
 /// does not exist yet. Everything the wire already serves works today.
 @main
 struct MoomuxiOSApp: App {
-    @State private var endpoint = EndpointStore()
+    @State private var computers = ComputerStore()
     @State private var app: AppState?
     /// The release notes to show at launch; see `WhatsNew.takeUnseen`.
     @State private var unseenNotes: [WhatsNew.Release]?
@@ -21,6 +21,10 @@ struct MoomuxiOSApp: App {
     /// screen is drawn for that first frame even when a remembered core is
     /// about to replace it, and must not prompt for or start the camera.
     @State private var launching = true
+    /// Add computer: the Connect screen in place of the list, with a Cancel.
+    /// In place rather than as a sheet, so the link alert has a screen to
+    /// show over.
+    @State private var adding = false
     @Environment(\.scenePhase) private var scenePhase
 
     /// In `init`, not a view's `.task`: `BGTaskScheduler` refuses a
@@ -28,31 +32,35 @@ struct MoomuxiOSApp: App {
     /// — refresh then never runs, which looks exactly like iOS throttling it.
     init() {
         BackgroundRefresh.register()
-        Notifier.listenForLaunchTap()
+        Notifier.listenForTaps()
     }
 
     var body: some Scene {
         WindowGroup {
             Group {
-                if let app {
-                    SessionListView(app: app, endpoint: endpoint, disconnect: { self.app = nil })
+                if let app, !adding {
+                    SessionListView(app: app, computers: computers, select: select,
+                                    add: { adding = true }, forget: forget)
                         // A link swaps the store in one step, with no Connect
                         // screen in between to reset the list's navigation.
                         .id(ObjectIdentifier(app))
                 } else {
                     // The camera stops while anything is up over it.
-                    ConnectView(endpoint: endpoint, paused: launching || link != nil || unseenNotes != nil,
-                                scanned: scanned, connect: connect)
+                    ConnectView(paused: launching || link != nil || unseenNotes != nil,
+                                scanned: scanned, connect: connect(host:port:),
+                                cancel: app == nil ? nil : { adding = false })
                 }
             }
             .task {
-                // `app == nil`: a link confirmed before this ran has already
-                // connected, to the core it named.
-                if app == nil, endpoint.remembered { connect() }
+                Notifier.onTap(tapped)
+                // `app == nil`: a link confirmed or a banner tapped before this
+                // ran has already connected, to the computer it named.
+                if app == nil { connect() }
                 let unseen = WhatsNew.takeUnseen()
                 if unseen.show, link == nil { unseenNotes = WhatsNew.releases(after: unseen.seen) }
                 launching = false
             }
+            .onChange(of: computers.saved) { relabel() }
             .onOpenURL { offer($0) }
             // Never connects without asking: Tailscale vouches for the phone
             // to the computer, not the other way round, and a link that
@@ -86,11 +94,72 @@ struct MoomuxiOSApp: App {
         }
     }
 
+    /// To the current computer, if there is one.
     private func connect() {
-        let state = AppState(client: MoomuxClient(endpoint: endpoint.resolved))
+        guard let computer = computers.saved.current else { return }
+        let state = AppState(client: MoomuxClient(endpoint: computer.endpoint))
+        state.notificationKey = computer.id.uuidString
         state.start()
         app = state
         BackgroundRefresh.app = state
+        BackgroundRefresh.others[computer.id] = nil
+        relabel()
+    }
+
+    /// Disconnect, then Connect to whichever computer is current now. The
+    /// store left behind goes to background refresh with its views, so the
+    /// computer just left can banner from the next refresh rather than only
+    /// seeding.
+    private func reconnect() {
+        app?.stop()
+        if let app, let id = UUID(uuidString: app.notificationKey) { BackgroundRefresh.others[id] = app }
+        app = nil
+        adding = false
+        connect()
+    }
+
+    private func select(_ id: UUID) {
+        computers.saved.select(id)
+        reconnect()
+    }
+
+    /// Its banners' share of the badge goes with it. Forgetting the one on
+    /// screen moves to the next, or back to the camera after the last.
+    private func forget(_ id: UUID) {
+        computers.saved.forget(id)
+        BackgroundRefresh.others[id] = nil
+        Notifier.forget(id.uuidString)
+        guard app?.notificationKey == id.uuidString else { return }
+        app?.stop()
+        app = nil
+        connect()
+    }
+
+    /// Enter address manually. A typed address has no name but itself.
+    private func connect(host: String, port: Int) {
+        computers.saved.add(host: host, port: port, name: "")
+        reconnect()
+    }
+
+    /// Banners name the computer once there are two to tell apart.
+    private func relabel() {
+        let stores = [app].compactMap { $0 } + BackgroundRefresh.others.values
+        stores.forEach(computers.saved.label)
+    }
+
+    /// A banner tap: to the computer it came from, then the session. One
+    /// posted before computers had keys has none, and means this one.
+    private func tapped(_ identifier: String) {
+        let tap = Notifier.tapped(identifier)
+        if let id = UUID(uuidString: tap.key), app?.notificationKey != tap.key {
+            // Forgotten since it was posted.
+            guard computers.saved.list.contains(where: { $0.id == id }) else { return }
+            select(id)
+        } else if app == nil {
+            connect()
+        }
+        adding = false
+        app?.selectedSessionID = tap.session
     }
 
     /// Every pairing link lands here, opened from outside or scanned.
@@ -114,16 +183,13 @@ struct MoomuxiOSApp: App {
         offer(url)
     }
 
-    /// Disconnect then Connect, as the ⋯ menu would do it. On a cold launch
-    /// the remembered core may already be connecting; stopping it here is
-    /// what makes the link win.
+    /// A new computer is added; one already saved (same address) is switched
+    /// to, its code name refreshed and any rename kept. On a cold launch the
+    /// remembered core may already be connecting; reconnecting is what makes
+    /// the link win.
     private func connect(to pairing: PairingLink) {
-        endpoint.host = pairing.host
-        endpoint.port = Int(pairing.port)
-        endpoint.name = pairing.name
-        app?.stop()
-        app = nil
-        connect()
+        computers.saved.add(host: pairing.host, port: Int(pairing.port), name: pairing.name)
+        reconnect()
     }
 }
 
@@ -157,20 +223,21 @@ enum BackgroundRefresh {
     static let identifier = "app.moomux.Moomux.refresh"
 
     /// The connected store, if the app was suspended with one — the usual
-    /// case, and the one that can tell a new wait from an old one. nil after
-    /// a cold background launch, where a throwaway store only sets the badge.
+    /// case, and the one that can tell a new wait from an old one.
     @MainActor static weak var app: AppState?
+    /// A store per other computer, kept between refreshes for the same
+    /// reason: one with views can tell a new wait from an old one, a new one
+    /// only seeds and sets the badge. A switch leaves the store it
+    /// disconnected here. Ceiling: gone when iOS ends the app, so the first
+    /// refresh after a cold background launch only seeds.
+    @MainActor static var others: [UUID: AppState] = [:]
 
     static func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { task in
             // Rescheduled first, so a refresh that fails or is cut off cannot
             // end the chain.
             schedule()
-            let work = Task { @MainActor in
-                let store = app ?? cold()
-                let ok = (try? await store?.pollOnce()) != nil
-                task.setTaskCompleted(success: ok)
-            }
+            let work = Task { @MainActor in task.setTaskCompleted(success: await pollAll()) }
             task.expirationHandler = { work.cancel() }
         }
     }
@@ -181,75 +248,98 @@ enum BackgroundRefresh {
         try? BGTaskScheduler.shared.submit(request)
     }
 
-    @MainActor private static func cold() -> AppState? {
-        let endpoint = EndpointStore()
-        guard endpoint.remembered else { return nil }
-        return AppState(client: MoomuxClient(endpoint: endpoint.resolved))
+    /// Every saved computer at once, so one that is asleep does not use up
+    /// the time the others had. A success if any answered.
+    @MainActor private static func pollAll() async -> Bool {
+        let saved = ComputerStore.load()
+        others = others.filter { id, _ in saved.list.contains { $0.id == id } }
+        let stores = saved.list.map { computer -> AppState in
+            if let app, app.notificationKey == computer.id.uuidString { return app }
+            let store = others[computer.id] ?? AppState(client: MoomuxClient(endpoint: computer.endpoint))
+            store.notificationKey = computer.id.uuidString
+            others[computer.id] = store
+            return store
+        }
+        stores.forEach(saved.label)
+        return await withTaskGroup(of: Bool.self) { group in
+            for store in stores {
+                group.addTask { @MainActor in (try? await store.pollOnce()) != nil }
+            }
+            return await group.reduce(false) { $0 || $1 }
+        }
     }
 }
 
-// MARK: - Where the core is
+// MARK: - Where the cores are
 
-/// Host, port and the computer's name, in `UserDefaults`.
+/// The saved computers, in `UserDefaults`.
 ///
 /// Not in the Keychain: a tailnet address is not a secret, and there is no
 /// token to store — the core authorizes by asking Tailscale who the peer is,
 /// so the phone proves itself by being on the tailnet at all.
-@Observable
-final class EndpointStore {
-    var host: String {
-        didSet { UserDefaults.standard.set(host, forKey: "coreHost") }
-    }
-    var port: Int {
-        didSet { UserDefaults.standard.set(port, forKey: "corePort") }
-    }
-    /// The name a pairing link gave the computer, for the failure lines.
-    /// Display only; empty after a manual Connect.
-    var name: String {
-        didSet { UserDefaults.standard.set(name, forKey: "coreName") }
+@MainActor @Observable
+final class ComputerStore {
+    var saved: Computers {
+        didSet { save() }
     }
 
-    /// `ipc.TailnetPort`. The core's tailnet listener is on a fixed port, so
-    /// this is a default rather than something anyone should have to know —
-    /// the field stays editable only for a bridge or a second core.
-    static let defaultPort = MoomuxClient.tailnetPort
+    private static let key = "computers"
 
     init() {
-        host = UserDefaults.standard.string(forKey: "coreHost") ?? ""
-        // `integer(forKey:)`, not `object(forKey:) as? Int`: a value from the
-        // launch-argument domain (`-corePort 8765`, how the screenshot seam
-        // sets it) arrives as a string, so the cast fails and silently takes
-        // the default — which looks exactly like the core being unreachable.
-        // 0 means unset, since no port is 0.
-        let stored = UserDefaults.standard.integer(forKey: "corePort")
-        port = stored > 0 ? stored : EndpointStore.defaultPort
-        name = UserDefaults.standard.string(forKey: "coreName") ?? ""
+        let defaults = UserDefaults.standard
+        saved = Self.load()
+        // The one-computer keys this replaced, once; and the screenshot seam
+        // (`-coreHost 127.0.0.1 -corePort 8765`), which arrives in the
+        // argument domain on every launch and switches to that core.
+        let arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        if saved.list.isEmpty || arguments["coreHost"] != nil,
+           let host = defaults.string(forKey: "coreHost"), !host.trimmed.isEmpty {
+            // `integer(forKey:)`, not `object(forKey:) as? Int`: a launch
+            // argument arrives as a string, so the cast fails and silently
+            // takes the default — which looks exactly like the core being
+            // unreachable. 0 means unset, since no port is 0.
+            let port = defaults.integer(forKey: "corePort")
+            saved.add(host: host, port: port > 0 ? port : MoomuxClient.tailnetPort,
+                      name: defaults.string(forKey: "coreName") ?? "")
+            for old in ["coreHost", "corePort", "coreName"] { defaults.removeObject(forKey: old) }
+            save()
+            // Banners from before computers had keys: a tap could open the
+            // right session id on the wrong computer.
+            Notifier.forget("")
+        }
     }
 
-    var displayName: String { name.isEmpty ? host.trimmed : name }
+    /// The list as saved, without the migration: background refresh reads,
+    /// and only the app writes.
+    static func load() -> Computers {
+        UserDefaults.standard.data(forKey: key)
+            .flatMap { try? JSONDecoder().decode(Computers.self, from: $0) } ?? Computers()
+    }
 
-    /// The port too, not just the host: `UInt16(clamping:)` below turns a
-    /// mistyped 458760 into 65535 and connects *there*, so the only symptom
-    /// of a fat-fingered field is "cannot connect" pointing at the wrong
-    /// thing. Refusing it keeps Connect disabled instead.
-    var remembered: Bool { Self.valid(host: host, port: port) }
+    private func save() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.key)
+    }
+}
 
-    static func valid(host: String, port: Int) -> Bool { !host.trimmed.isEmpty && (1...65535).contains(port) }
-
-    var resolved: MoomuxClient.Endpoint {
-        .tcp(host: host.trimmed, port: UInt16(clamping: port))
+extension Computers {
+    /// Banners name the computer once there are two to tell apart.
+    @MainActor func label(_ store: AppState) {
+        let computer = list.first { $0.id.uuidString == store.notificationKey }
+        store.computerName = list.count > 1 ? computer?.displayName ?? "" : ""
     }
 }
 
 /// The camera, one line, and the address behind a button: pairing is the way
-/// in, typing is the fallback.
+/// in, typing is the fallback. Also what Add computer opens, with a Cancel.
 struct ConnectView: View {
-    @Bindable var endpoint: EndpointStore
     /// Keeps the camera off: at launch, and while an alert or a sheet is up.
     let paused: Bool
     /// What the camera read, unfiltered: the app decides what is a link.
     let scanned: (String) -> Void
-    let connect: () -> Void
+    /// A typed host and port.
+    let connect: (String, Int) -> Void
+    /// Back to the list; nil when there is no computer to go back to.
+    let cancel: (() -> Void)?
     @State private var camera = ScanAvailability.current
     @State private var manual = false
 
@@ -268,27 +358,24 @@ struct ConnectView: View {
             }
             .padding()
             .navigationTitle("Moomux")
-            .sheet(isPresented: $manual) {
-                ManualConnectSheet(endpoint: endpoint, connect: connect)
+            .toolbar {
+                if let cancel {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: cancel) }
+                }
             }
+            .sheet(isPresented: $manual) { ManualConnectSheet(connect: connect) }
         }
     }
 }
 
-/// Host and port, edited as a draft so Cancel leaves the saved ones alone.
+/// A host and port for a computer the phone has no code from. Starts empty:
+/// it adds a computer, and a typed address that matches a saved one simply
+/// switches to it.
 private struct ManualConnectSheet: View {
-    let endpoint: EndpointStore
-    let connect: () -> Void
+    let connect: (String, Int) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var host: String
-    @State private var port: Int
-
-    init(endpoint: EndpointStore, connect: @escaping () -> Void) {
-        self.endpoint = endpoint
-        self.connect = connect
-        _host = State(initialValue: endpoint.host)
-        _port = State(initialValue: endpoint.port)
-    }
+    @State private var host = ""
+    @State private var port = MoomuxClient.tailnetPort
 
     var body: some View {
         NavigationStack {
@@ -304,16 +391,11 @@ private struct ManualConnectSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    // A typed address has no name but itself: the failure
-                    // lines fall back to the host rather than a stale name.
                     Button("Connect") {
-                        endpoint.host = host
-                        endpoint.port = port
-                        endpoint.name = ""
                         dismiss()
-                        connect()
+                        connect(host, port)
                     }
-                    .disabled(!EndpointStore.valid(host: host, port: port))
+                    .disabled(!Computers.valid(host: host, port: port))
                 }
             }
         }

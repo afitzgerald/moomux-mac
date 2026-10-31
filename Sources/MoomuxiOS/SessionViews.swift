@@ -40,8 +40,11 @@ enum Route: Hashable {
 /// about what is in the list or what order it is in.
 struct SessionListView: View {
     @Bindable var app: AppState
-    let endpoint: EndpointStore
-    let disconnect: () -> Void
+    let computers: ComputerStore
+    let select: (UUID) -> Void
+    let add: () -> Void
+    let forget: (UUID) -> Void
+    @State private var showingComputers = false
     /// The folder a Rename… is open for, and the text being typed. An alert
     /// rather than the Mac's sheet: one field, one question.
     @State private var renaming: String?
@@ -265,10 +268,12 @@ struct SessionListView: View {
         }
     }
 
+    private var computerName: String { computers.saved.current?.displayName ?? "" }
+
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if app.connection.isDown { ConnectionRow(app: app, name: endpoint.displayName) }
+                if app.connection.isDown { ConnectionRow(app: app, name: computerName) }
                 if app.folderView { folderFirstRows } else { projectFirstSections }
             }
             .listStyle(.insetGrouped)
@@ -324,13 +329,23 @@ struct SessionListView: View {
                             .disabled(WhatsNew.releases.isEmpty)
                         Button("Acknowledgements") { showingAcknowledgements = true }
                             .disabled(Acknowledgements.text.isEmpty)
-                        Button("Disconnect", role: .destructive) {
-                            app.stop()
-                            disconnect()
-                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
+                }
+                // The computer this list is from; tapping it switches.
+                ToolbarItem(placement: .principal) {
+                    Button { showingComputers = true } label: {
+                        HStack(spacing: 4) {
+                            Text(computerName).font(.headline).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                    .accessibilityLabel("\(computerName), switch computer")
+                    // A create in flight answers on this computer's store; a
+                    // switch would drop a refusal, and the form with it.
+                    .disabled(app.busy != nil)
                 }
                 if app.usage != nil || app.codexUsage != nil {
                     ToolbarItem(placement: .topBarTrailing) { UsageMenu(app: app) }
@@ -365,11 +380,14 @@ struct SessionListView: View {
             // takes tens of seconds, and by then they may be typing in another
             // session's terminal, which a jump would detach.
             .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { path.isEmpty }) }
+            .sheet(isPresented: $showingComputers) {
+                ComputersSheet(computers: computers, select: select, add: add, forget: forget)
+            }
             // A refused create reopens its sheet with the form as it was sent,
             // unless another sheet is up; then the alert says where it went.
             .onChange(of: app.failedCreate) { _, failed in
                 guard let failed else { return }
-                if !creating && !showingNotes && !showingAcknowledgements {
+                if !creating && !showingNotes && !showingAcknowledgements && !showingComputers {
                     creating = true
                 } else {
                     app.actionError = "Creating session failed: \(failed.error)\n\n"
@@ -992,8 +1010,7 @@ private struct UsageMenu: View {
 
     private func usageRings(_ usage: Usage, agent: String, now: Date) -> some View {
         HStack(spacing: 3) {
-            Text(agent == "Claude" ? "C" : "X")
-                .font(.system(size: 10, weight: .semibold))
+            AgentMark(agent, size: 12)
             if usage.status == .signedOut {
                 Image(systemName: "person.crop.circle.badge.exclamationmark")
                     .font(.caption)
@@ -1101,7 +1118,7 @@ struct RowLabel: LabelStyle {
 /// `connection` text is untouched; only this row reads it differently.
 private struct ConnectionRow: View {
     let app: AppState
-    /// `EndpointStore.displayName`: the pairing link's name, else the host.
+    /// `Computers.Computer.displayName`: a rename, else the pairing link's name, else the host.
     let name: String
 
     var body: some View {
