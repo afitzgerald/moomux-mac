@@ -15,7 +15,7 @@ extension PairingLink {
     public struct Refused: LocalizedError, Equatable {
         public let message: String
         public var errorDescription: String? { message }
-        static let outsideTailnet = Refused(message: "This link points outside your tailnet. Use Connect manually if you meant it.")
+        static let outsideTailnet = Refused(message: "This link points outside your tailnet. Enter the address manually if you meant it.")
         static let notALink = Refused(message: "This isn't a moomux pairing link.")
     }
 
