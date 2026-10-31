@@ -182,7 +182,7 @@ UIKit is an `#if` in the file that needs it:
 | theme colours (`SessionTheme`) | `NSColor(name:)` dynamic provider | `UIColor { traits in … }` |
 | foreground banner rule (`Notifier.report`) | none for the selected session in the active app | none for the pane on screen (`paneOnScreen`) |
 | `willPresent` (`Notifier`) | not implemented: the system default | shows the banner in the foreground |
-| notification tap (`Notifier`) | `NSApp.activate()`, order the window front | iOS brings the app forward itself; a tap on a dead or disconnected app is caught by `EarlyTap` and the list retries until the session and its live state are in |
+| notification tap (`Notifier`) | `NSApp.activate()`, order the window front | iOS brings the app forward itself; every tap goes through `TapRouter`, which switches to the banner's computer first (D56); the list retries until the session and its live state are in |
 | What's New sheet | fixed frame | detents |
 | `ToolPath` | the whole file | compiled out (`Process` is unavailable) |
 
@@ -204,11 +204,11 @@ The phone builds a new one per Connect. So the `TerminalController` lives in a `
 
 | | Mac | iPhone |
 |---|---|---|
-| Endpoint | unix socket, `--socket <path>` or `~/.local/share/moomux/moomux.sock` | TCP `host:port` in `UserDefaults`, default port 45876 |
+| Endpoint | unix socket, `--socket <path>` or `~/.local/share/moomux/moomux.sock` | TCP `host:port` per saved computer, in `UserDefaults`, default port 45876 (D56) |
 | Auth | file permissions | the core runs `tailscale whois` on the peer |
 | Connect deadline | none needed; a unix socket fails fast | 5s non-blocking connect |
 | Dead peer | EOF | keepalive, ~30s to `ETIMEDOUT` |
-| Switch cores | Settings → General → Core, or `--socket`; applies on relaunch (D25) | Disconnect in the ⋯ menu, or a pairing link (D55) |
+| Switch cores | Settings → General → Core, or `--socket`; applies on relaunch (D25) | the computer's name over the list, or a pairing link (D55, D56) |
 | Lifecycle hooks | none | schedules background refresh on `.background`; reconnects on leaving it (D51) |
 
 **D20. TCP over the tailnet, with no pairing token or TLS.** WireGuard provides encryption and
@@ -247,7 +247,7 @@ forever. `Watch` and `Attach` are newline-terminated instead, because they keep 
 **D22. A port outside 1–65535 keeps Connect disabled.** `UInt16(clamping:)` would turn a typo
 into 65535 and report "cannot connect" pointing at the wrong thing. The port is read with
 `integer(forKey:)`, because a launch-argument value arrives as a string and `as? Int` silently
-takes the default. *Where:* `EndpointStore`.
+takes the default. *Where:* `ComputerStore`.
 
 **D51. Leaving the background reconnects the list.** iOS suspends the app and often reclaims its
 sockets while it is away, but a half-open stream says nothing until keepalive gives up, about
@@ -272,9 +272,9 @@ Mac's Pair iPhone… show a QR code for `moomux://connect?host=<tailnet IPv4>&na
 machine name>` (`port` optional, default 45876). The phone's connect screen scans it in-app, and
 the iPhone's Camera opens it too, through the scheme the app registers. The Mac's plist does not
 register it: it is the computer being paired, not a client.
-- **It always asks.** An alert, "Connect to `<name>`?", with the host under it. Connect saves
-  host, port and name and reconnects, the same path as Disconnect then Connect. Cancel changes
-  nothing. Tailscale vouches for the phone to the computer, not the other way round, so a link
+- **It always asks.** An alert, "Connect to `<name>`?", with the host under it. Connect adds the
+  computer, or switches to it when that address is already saved (D56), and reconnects. Cancel
+  changes nothing. Tailscale vouches for the phone to the computer, not the other way round, so a link
   that silently repointed the phone would hand someone else's server every prompt, photo and
   keystroke. On a cold launch the remembered core may already be connecting; Connect stops it,
   so the link wins.
@@ -295,8 +295,8 @@ register it: it is the computer being paired, not a client.
   Settings link), or a device or simulator that can't scan, which points at the Camera app. The
   rest of the screen is one line ("Run `moomux pair` on your computer and scan the code."), an
   "Enter address manually" button and a "New to Tailscale?" link — nothing else, because the
-  screen is the first thing a new user sees. The address is a sheet, edited as a draft so Cancel
-  keeps the saved one; the camera stops while it is up. A manual Connect clears the name.
+  screen is the first thing a new user sees. The address is a sheet that starts empty and adds a
+  computer named by its address (D56); the camera stops while it is up.
 - **Two failures, named.** A core that hung up unread (EOF or a reset) is the tailnet listener
   turning away another Tailscale account: "`<name>` refused this iPhone. Sign in to Tailscale here
   with the same account as `<name>`." A connect that failed, timed out or did not resolve, or a
@@ -307,7 +307,42 @@ register it: it is the computer being paired, not a client.
 The name is display only. It is Tailscale's, not the macOS Computer Name, so it matches the device
 list on the phone and exists on Linux. The owner login stays out of the link; `pair` prints it on
 the computer. *Where:* `PairingLink` (`scanned`), `ConnectFailure`, `PairingScanner`,
-`MoomuxiOSApp` (`offer`, `EndpointStore.name`, `ConnectView`), `ConnectionRow`.
+`MoomuxiOSApp` (`offer`, `ConnectView`), `ConnectionRow`.
+
+**D56. The phone keeps a list of computers and is on one at a time; the Mac talks to one core.**
+Scanning a new computer's code, or typing its address, adds it and switches to it; one already
+saved (same host and port) is switched to, its code name refreshed. Matched on the address, not
+the name: two Macs can share a hostname, and a name match would silently repoint one at the
+other. The cost is that a computer whose tailnet address changed comes back as a second entry, to
+Forget. The computer's name sits over the session list; tapping it opens the list of computers —
+tap to switch, hold or swipe for Rename… and Forget (confirmed). A rename survives a rescan, and
+an empty one gives the code's name back. Forgetting the computer on screen moves to the first left, or
+to the camera after the last. Add computer is the Connect screen with a Cancel. Disconnect is
+gone from the ⋯ menu: the list does everything it was for.
+- **One connection, not one per computer.** Switching is Disconnect then Connect, so nothing past
+  the connect screen knows there is more than one. Seeing every computer's sessions at once would
+  touch every screen and collide on session ids (`project:name` repeats across machines).
+- **Every computer is watched from a pocket, none from the foreground.** Background refresh polls
+  every saved computer at once, so one asleep does not use up the others' time. A store per
+  other computer is kept between refreshes, and a switch leaves the one it disconnected there,
+  so a computer just left can banner at once; after iOS ends the app the first refresh of each
+  only seeds and sets the badge (the cold-store ceiling D48 already had). While the app is open,
+  a wait on another computer says nothing until you leave it — the upgrade is a light poll of the
+  others while in the foreground.
+- **Banners carry their computer.** The identifier is `<computer id>|<session id>`, so the same
+  session name on two computers is two banners, and once there are two computers the subtitle
+  names it. A tap switches to that computer and opens the session. The phone has one notification
+  delegate for the app's life (`TapRouter`), because a store per computer would each have claimed
+  the delegate and the last one made would take every tap. The badge is the sum of each
+  computer's count; switching away keeps that computer's share, forgetting it zeroes it.
+- **The one-computer keys migrate once.** `coreHost`/`corePort`/`coreName` become the first
+  entry and are removed, so forgetting every computer does not bring the old one back. The
+  screenshot seam (`-coreHost`/`-corePort`) still works: it arrives in the argument domain on
+  every launch and switches to that core.
+
+*Where:* `Computers` (pure, `demo()`), `ComputerStore`, `ComputersSheet`, `MoomuxiOSApp`
+(`connect`, `reconnect`, `forget`, `tapped`), `BackgroundRefresh.pollAll`, `Notifier`
+(`identifier`, `tapped`, `setBadge(_:for:)`, `TapRouter`).
 
 ---
 
@@ -362,8 +397,8 @@ that can resize a live attach puts a token in that one response line (`"attach":
   the socket. The terminal gets `xterm-ghostty` with its terminfo, and there's no keepalive,
   reconnect or resize debounce to get wrong. So it stays the default.
 - **Choosing a core.** `--socket <path>` first. Then a core on another machine, from `coreHost`
-  and `corePort` (`defaults write`, or `-coreHost` on the launch line; the phone's keys, default
-  port 45876). Then the default socket.
+  and `corePort` (`defaults write`, or `-coreHost` on the launch line; the names the phone used before it
+  kept a list (D56), default port 45876). Then the default socket.
 - **The rule (`AttachRoute`, asserted in `--selftest`).** A unix-socket core is on this machine
   by construction, so the pane attaches locally, or is unavailable with no tmux. A TCP core may
   also be this machine (its own tailnet address), so the pane attaches locally only if this
@@ -765,7 +800,7 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 | project emoji in the list (`showProjectEmoji`) | device | ✅ Settings → Appearance | ✅ ⋯ menu |
 | project emoji in the menu bar (`showMenuBarEmoji`) | device | ✅ Settings → Appearance | n/a (no menu bar) |
 | terminal size (`terminalFontSize`) | device | n/a (D30) | ✅ pane ⋯ menu, and pinch |
-| core address (`coreHost`, `corePort`) | device | n/a (`--socket`) | ✅ connect screen |
+| saved computers (`computers`; `coreHost`/`corePort` migrate once, D56) | device | n/a (`--socket`) | ✅ connect screen, the computer list |
 
 The practical consequence: turning MergeRight links or folder grouping on at the desk does
 nothing on the phone. That is harmless while each one has a control on both sides.

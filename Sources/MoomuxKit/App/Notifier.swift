@@ -22,7 +22,11 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         self.app = app
         center = Bundle.main.bundleIdentifier == nil ? nil : .current()
         super.init()
+        // The phone has one delegate for every store (`TapRouter`): a store
+        // per computer, and the last one made would otherwise take every tap.
+        #if os(macOS)
         center?.delegate = self
+        #endif
         // Asked once at startup rather than at the first banner. `.badge` is the
         // reason it cannot wait: macOS suppresses `NSDockTile.badgeLabel`
         // entirely for an app whose badge permission is off, and a session that
@@ -40,8 +44,50 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// so archiving the one waiting session leaves the views identical and
     /// would strand the badge at 1. Needs the `.badge` authorization `init` asks for, same as the dock tile does.
     public func setBadge(_ count: Int) {
-        guard let center else { return }
-        Task { try? await center.setBadgeCount(count) }
+        Notifier.setBadge(count, for: app?.notificationKey ?? "")
+    }
+
+    /// Each computer's count, keyed by `AppState.notificationKey`; the icon
+    /// shows their sum. Saved, so a relaunch on one computer does not drop
+    /// the others' shares until background refresh gets to them. Ceiling: a
+    /// share is as fresh as the last time that computer was polled.
+    private static var badges = UserDefaults.standard.dictionary(forKey: badgesKey) as? [String: Int] ?? [:]
+    private static let badgesKey = "badgeShares"
+
+    public static func setBadge(_ count: Int, for key: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        badges[key] = count
+        UserDefaults.standard.set(badges, forKey: badgesKey)
+        let total = badges.values.reduce(0, +)
+        Task { try? await UNUserNotificationCenter.current().setBadgeCount(total) }
+    }
+
+    /// A computer is gone: its share of the badge, and its banners, which a
+    /// tap could no longer take anywhere. `""` is the banners posted before
+    /// computers had keys.
+    public static func forget(_ key: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        setBadge(0, for: key)
+        badges[key] = nil
+        UserDefaults.standard.set(badges, forKey: badgesKey)
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+            let ids = delivered.map(\.request.identifier).filter { tapped($0).key == key }
+            if !ids.isEmpty { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
+    /// A banner's identifier: the session id, behind its computer's key when
+    /// the store has one, so the same session name on two computers is two
+    /// banners and a tap knows which computer to switch to.
+    nonisolated static func identifier(key: String, session: Session.ID) -> String {
+        key.isEmpty ? session : "\(key)|\(session)"
+    }
+
+    /// `identifier` backwards. The key is a UUID, which has no `|`, so the
+    /// first one is the split whatever the session id holds.
+    public nonisolated static func tapped(_ identifier: String) -> (key: String, session: Session.ID) {
+        guard let bar = identifier.firstIndex(of: "|") else { return ("", identifier) }
+        return (String(identifier[..<bar]), String(identifier[identifier.index(after: bar)...]))
     }
 
     /// Post for every session that just *became* blocked; clear the banner for
@@ -54,7 +100,9 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // is an XPC round trip per watcher tick — tens a second, and every one
         // of them logged. Nothing to remove is the overwhelmingly common case.
         if !change.ended.isEmpty {
-            center.removeDeliveredNotifications(withIdentifiers: change.ended)
+            center.removeDeliveredNotifications(withIdentifiers: change.ended.map {
+                Notifier.identifier(key: app.notificationKey, session: $0)
+            })
         }
         // A banner for the window you are already looking at is noise. On the
         // phone that is the pane on screen; every other session still banners
@@ -65,7 +113,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let focused = UIApplication.shared.applicationState == .active ? app.paneOnScreen : nil
         #endif
         for session in Notifier.bannered(change.started.compactMap(app.session(id:)), focused: focused) {
-            post(session, to: center)
+            post(session, to: center, app: app)
         }
     }
 
@@ -76,46 +124,31 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         started.filter { !$0.archived && $0.id != focused }
     }
 
-    private func post(_ session: Session, to center: UNUserNotificationCenter) {
+    private func post(_ session: Session, to center: UNUserNotificationCenter, app: AppState) {
         let content = UNMutableNotificationContent()
         // Session name first: macOS truncates a long title, and the project
         // prefix used to be all that survived.
         content.title = session.name
-        content.subtitle = session.project
+        content.subtitle = app.computerName.isEmpty ? session.project : "\(session.project) · \(app.computerName)"
         content.body = "needs input"
         content.sound = .default
-        // Identifier = session id: a re-post replaces rather than stacks, and
-        // it is how a tap finds its way back to a session.
-        let request = UNNotificationRequest(identifier: session.id, content: content, trigger: nil)
+        // Identifier = session id (and computer): a re-post replaces rather
+        // than stacks, and it is how a tap finds its way back to a session.
+        let request = UNNotificationRequest(identifier: Notifier.identifier(key: app.notificationKey, session: session.id),
+                                            content: content, trigger: nil)
         // No authorization check here: `add` returns no error while denied, so
         // there is nothing to learn from asking. `init` did the asking.
         Task { try? await center.add(request) }
     }
 
-    // MARK: Foreground banners
-
-    #if os(iOS)
-    /// Without this iOS drops every banner while the app is in front, and the
-    /// foreground is most of the time the phone is watching at all. `report`
-    /// has already left out the session whose pane is on screen. macOS keeps
-    /// the system's default — a banner there is for when you are elsewhere.
-    public nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        done([.banner, .list, .sound])
-    }
-    #endif
-
     // MARK: Tapping a banner
 
-    /// Come forward with that session selected — which on iOS is what makes
-    /// the list push that session's pane, since nothing there reads a
-    /// selection except the observer `SessionListView` installs on it.
+    /// Come forward with that session selected. Mac only: the phone's taps
+    /// go through `TapRouter`, which knows which computer one came from.
     /// `NSApp.activate()` rather than
     /// `activate(ignoringOtherApps:)`, which is deprecated at the 14.0
     /// deployment target and would cost a warning.
+    #if os(macOS)
     public nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -124,44 +157,30 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let id = response.notification.request.identifier
         Task { @MainActor in
             app?.selectedSessionID = id
-            #if os(macOS)
             NSApp.activate()
             NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
-            #endif
-            // iOS brings the app forward itself when a banner is tapped; there
-            // is no window to order front.
             done()
         }
     }
+    #endif
 
     #if os(iOS)
-    /// iOS wants the delegate set before launch finishes, but the real one
-    /// belongs to an `AppState` that only exists once the user is connected.
-    /// Install this from the app's `init`; `deinit` puts it back whenever a
-    /// store goes away (Disconnect, a throwaway background-refresh store), so
-    /// a tap is never left without a delegate.
-    public static func listenForLaunchTap() {
+    /// The phone's notification delegate, for the life of the app: installed
+    /// in the app's `init`, because iOS wants one before launch finishes and
+    /// a tap that cold-launches the app arrives before any store exists.
+    public static func listenForTaps() {
         guard Bundle.main.bundleIdentifier != nil else { return }
-        UNUserNotificationCenter.current().delegate = EarlyTap.shared
+        UNUserNotificationCenter.current().delegate = TapRouter.shared
     }
 
-    /// Called by the store that owns the UI, not by every `Notifier`: a
-    /// throwaway store would take the tap and free it with itself.
-    public func claimLaunchTap() {
-        EarlyTap.shared.sink = { [weak self] id in self?.app?.selectedSessionID = id }
-        if let id = EarlyTap.shared.pending {
-            EarlyTap.shared.pending = nil
-            app?.selectedSessionID = id
+    /// Where taps go, banner identifier and all (see `tapped`). One that
+    /// landed before this was set is handed over now.
+    public static func onTap(_ sink: @escaping (String) -> Void) {
+        TapRouter.shared.sink = sink
+        if let id = TapRouter.shared.pending {
+            TapRouter.shared.pending = nil
+            sink(id)
         }
-    }
-
-    deinit {
-        guard Bundle.main.bundleIdentifier != nil else { return }
-        let center = UNUserNotificationCenter.current()
-        // A weak delegate that is mid-dealloc reads as nil.
-        if center.delegate == nil || center.delegate === self { center.delegate = EarlyTap.shared }
-        // `deinit` is nonisolated; the sink is only touched on the main actor.
-        Task { @MainActor in EarlyTap.shared.sink = nil }
     }
     #endif
 
@@ -213,14 +232,25 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let started = [session(a), session(b), session("p:c", archived: true)]
         assert(bannered(started, focused: nil).map(\.id) == [a, b])
         assert(bannered(started, focused: a).map(\.id) == [b], "the session in front is not news")
+
+        // A banner carries its computer, and a tap finds both halves again,
+        // whatever the session id holds. No key (the Mac) is the bare id.
+        let key = UUID().uuidString
+        assert(identifier(key: "", session: a) == a)
+        let tap = tapped(identifier(key: key, session: "p|x:y"))
+        assert(tap.key == key && tap.session == "p|x:y", "\(tap)")
+        assert(tapped(a) == ("", a))
     }
 }
 
 #if os(iOS)
-/// Catches a banner tap that lands while no `Notifier` is the delegate — a cold
-/// launch, or after Disconnect — and hands it to the store once one claims it.
-private final class EarlyTap: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
-    static let shared = EarlyTap()
+/// The phone's only notification delegate. A tap goes to the app, which knows
+/// which computer it came from; one that lands before the app is listening (a
+/// cold launch) waits in `pending`. Every banner shows in the foreground too,
+/// since that is most of the time the phone is watching at all; `report` has
+/// already left out the session whose pane is on screen.
+private final class TapRouter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    static let shared = TapRouter()
     // Main actor only; the delegate callbacks hop there before touching them.
     @MainActor var pending: String?
     @MainActor var sink: ((String) -> Void)?
