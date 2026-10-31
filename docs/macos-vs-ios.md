@@ -549,8 +549,9 @@ attached to another one); Changes is the toolbar's own button, always shown. Pho
 ⋯ menu: the bar's paperclip is their only place on the phone.
 Snippets (`PaneKeyBar.snippets`) are pasted and then sent Return as a keystroke, except one marked
 not to submit (`/spawn `, which takes an argument, and `/kill`, which parks the session, so it
-waits for the user's own Return). The list carries moomux's own slash commands: `/spawn`, `/tag`,
-`/reseed`, `/kill`. Paste and Snippets clear an armed Ctrl/Alt first.
+waits for the user's own Return). The list carries moomux's own skills: `/spawn`, `/tag`,
+`/reseed`, `/kill` — spelled `$spawn` and so on in a codex session, with a trailing space so
+the one Return submits rather than only accepting codex's completion popup. Paste and Snippets clear an armed Ctrl/Alt first.
 Ceiling: the punctuation keys the package's bar had (`| ~ /`) are gone.
 
 ## F. Links and files

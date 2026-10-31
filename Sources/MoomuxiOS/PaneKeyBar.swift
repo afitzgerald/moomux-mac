@@ -17,13 +17,24 @@ final class PaneKeyBar: UIView {
     /// Pasted into the pane, then Return unless `submit` is false — a command
     /// that takes an argument is left open, with a trailing space, for the user
     /// to finish. Edit the list to change the menu; nothing else reads it.
-    static let snippets: [(text: String, submit: Bool)] = [
-        ("/clear", true), ("/compact", true), ("/model", true),
-        // Parks the session, so a menu tap alone must not do it.
-        ("/kill", false),
-        ("/tag", true), ("/reseed", true), ("/spawn ", false),
-        ("y", true), ("continue", true),
-    ]
+    ///
+    /// Codex names a skill `$tag`, not `/tag`, and Return on a pasted `$tag`
+    /// only accepts its completion popup; the trailing space closes the popup
+    /// so the one Return submits. Measured on codex-cli 0.166.
+    static func snippets(for agent: String) -> [(text: String, submit: Bool)] {
+        let (sigil, end) = agent == "codex" ? ("$", " ") : ("/", "")
+        return [
+            ("/clear", true), ("/compact", true), ("/model", true),
+            // Parks the session, so a menu tap alone must not do it.
+            ("\(sigil)kill\(end)", false),
+            ("\(sigil)tag\(end)", true), ("\(sigil)reseed\(end)", true), ("\(sigil)spawn ", false),
+            ("y", true), ("continue", true),
+        ]
+    }
+
+    /// The attached session's agent, which picks the snippets. Read when the
+    /// menu opens, so a re-agented session gets the new list.
+    var agent = "claude"
 
     weak var terminal: UITerminalView? {
         didSet {
@@ -270,15 +281,20 @@ final class PaneKeyBar: UIView {
     /// treats pasted newlines as text.
     private func snippetMenu() -> UIButton {
         let button = icon("bolt", "Snippets") { _ in }
-        button.menu = UIMenu(children: Self.snippets.map { snippet in
-            UIAction(title: snippet.text.trimmingCharacters(in: .whitespaces) + (snippet.submit ? "" : "…")) { [weak self] _ in
-                guard let view = self?.terminal else { return }
-                // An armed Ctrl would otherwise turn the Return into Ctrl+Return.
-                view.resetStickyModifiers()
-                view.paste(text: snippet.text)
-                if snippet.submit { view.sendKey(.enter) }
-            }
-        })
+        button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
+            done(Self.snippets(for: self?.agent ?? "claude").map { snippet in
+                let title = snippet.text.trimmingCharacters(in: .whitespaces)
+                // "…" marks the one that takes an argument, not every one left
+                // unsubmitted: /kill waits for Return but needs nothing typed.
+                return UIAction(title: title + (title.hasSuffix("spawn") ? "…" : "")) { [weak self] _ in
+                    guard let view = self?.terminal else { return }
+                    // An armed Ctrl would otherwise turn the Return into Ctrl+Return.
+                    view.resetStickyModifiers()
+                    view.paste(text: snippet.text)
+                    if snippet.submit { view.sendKey(.enter) }
+                }
+            })
+        }])
         button.showsMenuAsPrimaryAction = true
         // The menu opens upward; the default would flip the list.
         button.preferredMenuElementOrder = .fixed
