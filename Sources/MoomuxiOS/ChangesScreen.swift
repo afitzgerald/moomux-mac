@@ -33,37 +33,63 @@ struct ChangesScreen: View {
             ContentUnavailableView("No changes", systemImage: "checkmark.circle",
                                    description: Text("Nothing differs from the base branch."))
         case let .some(.some(diff)):
+            // "HEAD" is the core saying no base branch shares history with
+            // this one — "vs HEAD" would read as a real comparison.
+            let headOnly = diff.base == "HEAD" || diff.base.isEmpty
             List {
+                // The viewed marks are kept against every file, so marking one
+                // section's file does not forget the other's.
+                let viewed = app.viewed(sessionID, in: diff.files)
                 Section {
-                    let viewed = app.viewed(sessionID, in: diff.files)
-                    ForEach(diff.files) { file in
-                        let seen = viewed.wrappedValue.contains(file.id)
-                        NavigationLink(value: Route.fileDiff(sessionID, file.path)) { row(file, viewed: seen) }
-                            .swipeActions(edge: .leading) {
-                                Button(seen ? "Unviewed" : "Viewed",
-                                       systemImage: seen ? "eye.slash" : "checkmark") {
-                                    if seen { viewed.wrappedValue.remove(file.id) }
-                                    else { viewed.wrappedValue.insert(file.id) }
-                                }
-                                .tint(.accentColor)
-                            }
+                    if diff.uncommitted.isEmpty {
+                        Text("No uncommitted changes").foregroundStyle(.secondary)
                     }
+                    rows(diff.uncommitted, viewed: viewed)
                 } header: {
-                    // "HEAD" is the core saying no base branch shares history
-                    // with this one — "vs HEAD" would read as a real comparison.
-                    let against = diff.base == "HEAD" || diff.base.isEmpty
-                        ? "Uncommitted changes only" : "Against \(diff.base)"
-                    let seen = app.viewed(sessionID, in: diff.files).wrappedValue.count
-                    Text(seen == 0 ? against : "\(against) · \(seen) of \(diff.files.count) viewed")
+                    header(headOnly ? "Uncommitted changes only" : "Uncommitted", diff.uncommitted, viewed: viewed)
                 } footer: {
-                    if diff.truncated {
-                        Text(diff.files.isEmpty
-                             ? "Too large to send — the first file alone is over the limit."
-                             : "Too large to send whole — the files after these were left out.")
+                    if diff.committed.isEmpty { truncation(diff) }
+                }
+                if !diff.committed.isEmpty {
+                    Section {
+                        rows(diff.committed, viewed: viewed)
+                    } header: {
+                        header("Committed on this branch · against \(diff.base)", diff.committed, viewed: viewed)
+                    } footer: {
+                        truncation(diff)
                     }
                 }
             }
             .listStyle(.plain)
+        }
+    }
+
+    private func rows(_ files: [FileChange], viewed: Binding<Set<FileChange.ID>>) -> some View {
+        ForEach(files) { file in
+            let seen = viewed.wrappedValue.contains(file.id)
+            NavigationLink(value: Route.fileDiff(sessionID, file.path)) { row(file, viewed: seen) }
+                .swipeActions(edge: .leading) {
+                    Button(seen ? "Unviewed" : "Viewed",
+                           systemImage: seen ? "eye.slash" : "checkmark") {
+                        if seen { viewed.wrappedValue.remove(file.id) }
+                        else { viewed.wrappedValue.insert(file.id) }
+                    }
+                    .tint(.accentColor)
+                }
+        }
+    }
+
+    private func header(_ title: String, _ files: [FileChange], viewed: Binding<Set<FileChange.ID>>) -> some View {
+        let seen = files.filter { viewed.wrappedValue.contains($0.id) }.count
+        return Text(seen == 0 ? title : "\(title) · \(seen) of \(files.count) viewed")
+    }
+
+    @ViewBuilder
+    private func truncation(_ diff: SessionDiff) -> some View {
+        if diff.truncated {
+            Text(diff.files.isEmpty
+                 ? "Too large to send — the first file alone is over the limit."
+                 : "Too large to send whole — the files after these were left out.")
         }
     }
 

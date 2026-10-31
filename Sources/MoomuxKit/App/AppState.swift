@@ -12,13 +12,77 @@ import UniformTypeIdentifiers
 /// One session's changes against its merge base, in `FileTree` order —
 /// directories first, the same order MergeRight lists a PR's files in.
 public struct SessionDiff: Sendable {
-    public var files: [FileChange]
+    /// `uncommitted` first, then `committed`, so the page and its stepper run
+    /// in the order the list shows them.
+    public var files: [FileChange] { uncommitted + committed }
+    /// Files that differ from HEAD: staged, unstaged or untracked.
+    public var uncommitted: [FileChange]
+    /// Files whose only change is the branch's commits. A pushed PR with
+    /// nothing local is all of them — never "local changes".
+    public var committed: [FileChange]
     /// The ref the core diffed against; "HEAD" means uncommitted work only.
     public var base: String
     /// The commit the patch was taken against, for `revisions(of:in:)`.
     public var commit: String
     /// The core cut the patch at a file boundary to stay under its cap.
     public var truncated: Bool
+
+    /// `uncommittedPaths` is the core's list, both names of a move included.
+    /// It is matched against the parsed files, never counted: it can name a
+    /// path the patch has no section for (cut by the cap, or a committed edit
+    /// reverted to the base). Against "HEAD" every file is local whatever it
+    /// says, which also covers a core too old to send the list.
+    public init(patch: String, base: String, commit: String, truncated: Bool, uncommittedPaths: [String]) {
+        let files = FileTree.fileOrder(for: DiffParser.files(fromGitDiff: patch))
+        let local = Set(uncommittedPaths)
+        let allLocal = base == "HEAD" || base.isEmpty
+        let isLocal = { (file: FileChange) in
+            allLocal || local.contains(file.path) || file.previousPath.map(local.contains) == true
+        }
+        uncommitted = files.filter(isLocal)
+        committed = files.filter { !isLocal($0) }
+        self.base = base
+        self.commit = commit
+        self.truncated = truncated
+    }
+
+    public static func demo() {
+        func patch(_ paths: String...) -> String {
+            paths.map { "diff --git a/\($0) b/\($0)\n--- a/\($0)\n+++ b/\($0)\n@@ -1 +1 @@\n-x\n+y\n" }.joined()
+        }
+        // The bug: a pushed PR, clean worktree. The whole patch is committed.
+        let pr = SessionDiff(patch: patch("a.go", "b.go"), base: "origin/release/202645", commit: "c",
+                             truncated: false, uncommittedPaths: [])
+        assert(pr.uncommitted.isEmpty && pr.committed.map(\.path) == ["a.go", "b.go"])
+
+        let mixed = SessionDiff(patch: patch("a.go", "b.go", "c.go"), base: "main", commit: "c",
+                                truncated: false, uncommittedPaths: ["c.go", "a.go"])
+        assert(mixed.uncommitted.map(\.path) == ["a.go", "c.go"] && mixed.committed.map(\.path) == ["b.go"])
+        assert(mixed.files.map(\.path) == ["a.go", "c.go", "b.go"], "the page follows the list's order")
+
+        let renamed = SessionDiff(
+            patch: "diff --git a/old.go b/new.go\nsimilarity index 100%\nrename from old.go\nrename to new.go\n",
+            base: "main", commit: "c", truncated: false, uncommittedPaths: ["new.go"])
+        assert(renamed.uncommitted.map(\.path) == ["new.go"] && renamed.committed.isEmpty,
+               "a rename is listed under its new name")
+        // The core lists both names of a move; the old name alone is enough to mark it.
+        let moved = SessionDiff(
+            patch: "diff --git a/old.go b/new.go\nsimilarity index 100%\nrename from old.go\nrename to new.go\n",
+            base: "main", commit: "c", truncated: false, uncommittedPaths: ["old.go"])
+        assert(moved.uncommitted.map(\.path) == ["new.go"] && moved.committed.isEmpty,
+               "a move is local when either of its names is listed")
+
+        // Names the patch has no section for (cut by the cap, reverted to base)
+        // add no rows: the sections are the parsed files, not the list.
+        let extra = SessionDiff(patch: patch("a.go", "b.go"), base: "main", commit: "c", truncated: true,
+                                uncommittedPaths: ["a.go", "cut.go", "reverted.go"])
+        assert(extra.uncommitted.map(\.path) == ["a.go"] && extra.committed.map(\.path) == ["b.go"]
+               && extra.files.count == 2)
+
+        let fallback = SessionDiff(patch: patch("a.go"), base: "HEAD", commit: "c",
+                                   truncated: false, uncommittedPaths: [])
+        assert(fallback.uncommitted.map(\.path) == ["a.go"] && fallback.committed.isEmpty)
+    }
 }
 
 /// The files of one session's diff already looked at, on the phone. Marked by
@@ -777,8 +841,8 @@ public final class AppState {
         do {
             let diff = try await withoutBlockingTheUI { [client] in
                 try client.diff(id: id).map {
-                    SessionDiff(files: FileTree.fileOrder(for: DiffParser.files(fromGitDiff: $0.patch)),
-                                base: $0.base, commit: $0.commit, truncated: $0.truncated)
+                    SessionDiff(patch: $0.patch, base: $0.base, commit: $0.commit, truncated: $0.truncated,
+                                uncommittedPaths: $0.uncommitted)
                 }
             }
             diffs[id] = .some(diff)

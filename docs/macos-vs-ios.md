@@ -713,7 +713,10 @@ exits.** Both build on `NewSessionForm` and the core's `AgentOptions`.
 - **Native diff, phone only.** At 43–62 columns the tmux pager is the worse half, so the phone
   renders the diff itself with `DiffKit`, and the core grew `Diff`: the merge-base diff as text,
   untracked files included, with no tmux needed. So `canDiff` does not need a live session, and
-  a parked session's diff opens. Every file is on one page, opened at the file tapped: scrolling
+  a parked session's diff opens. The file list has two sections: "Uncommitted" (a file whose
+  name, old or new, is in the core's `uncommitted`: it differs from `HEAD`) and "Committed on this branch ·
+  against <base>". So a pushed PR with nothing local reads "No uncommitted changes", not as local
+  work. The page runs in that order too. Every file is on one page, opened at the file tapped: scrolling
   runs from one file into the next, each under a header with its counts and a viewed tick, and
   the file at the top is the one the title, find and the menu act on. The stepper's Done goes back
   past the file list to wherever Changes was opened from. It is a review loop: the file stepper's Next marks a file viewed
