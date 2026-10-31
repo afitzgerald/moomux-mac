@@ -6,6 +6,13 @@ CONFIG ?= release
 # Extra flags for every `swift build` invocation. Empty by default; a machine
 # with a broken default toolchain sets this in Makefile.local instead of here.
 SWIFT_BUILD_FLAGS ?=
+# The engine is pinned, not inherited — the same lesson as IOS_BUILD_SYSTEM.
+# Only swiftbuild compiles an asset catalog: `native` (the default on the
+# macos-26 runner's Xcode 26) copies `BrandMarks.xcassets` in as a folder, so
+# `Image(_:bundle:)` finds nothing and 0.0.164 shipped with no agent logos
+# while every local build drew them. Before SWIFT_BUILD_FLAGS so a
+# Makefile.local `--build-system native` still wins (and `app` then refuses).
+MAC_BUILD_SYSTEM ?= --build-system swiftbuild
 # With CommandLineTools selected, pin the SDK to macOS 26. CommandLineTools symlinks MacOSX.sdk at the 27.0 SDK
 # while the installed swift-frontend targets macosx26.0, and the 27.0
 # SwiftUICore declares a `State()` *macro* beside the property wrapper:
@@ -100,7 +107,7 @@ APPZIP := .build/Moomux.zip
 # would bake in the release path at parse time. The `eval` memoizes it on first
 # expansion: each `--show-bin-path` is a ~0.7s swift invocation, and `app`
 # expands this seven times, which was 5s of every `make dev` doing nothing.
-BINDIR = $(eval BINDIR := $(shell swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS) --show-bin-path))$(BINDIR)
+BINDIR = $(eval BINDIR := $(shell swift build -c $(CONFIG) $(MAC_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS) --show-bin-path))$(BINDIR)
 BIN = $(BINDIR)/Moomux
 # Where libghostty's resource bundle keeps its payload. The `swiftbuild` engine
 # (Swift 6.4's default) emits a Contents/Resources-style bundle; the older
@@ -113,7 +120,7 @@ GHOSTTY_RES = $(GHOSTTY_BUNDLE)$(if $(wildcard $(GHOSTTY_BUNDLE)/Contents/Resour
 	ios ios-run ios-shot ios-prune-sims ios-archive testflight
 
 build:
-	swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS)
+	swift build -c $(CONFIG) $(MAC_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS)
 
 # Every warning in *our* sources, without the `rm -rf .build` that idiom used
 # to need. swift build only re-emits diagnostics for files it recompiles, so
@@ -123,7 +130,7 @@ build:
 # recompiles exactly the module we care about, and in seconds.
 warnings:
 	@find Sources -name '*.swift' -exec touch {} +
-	@swift build -c $(CONFIG) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS) 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
+	@swift build -c $(CONFIG) $(MAC_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS) 2>&1 | grep "warning:" | sed 's/.*warning: //' | sort -u
 
 # The assert-based checks. Deliberately not part of `build`: they must never be
 # built with -O, which deletes every assert (see Scripts/selfcheck.sh).
@@ -171,6 +178,9 @@ app: build
 	cp -R Resources/ghostty-themes $(GHOSTTY_RES)/Ghostty/themes
 	cp -R $(GHOSTTY_BUNDLE) $(APP)/Contents/Resources/
 	cp -R $(BINDIR)/Moomux_MoomuxKit.bundle $(APP)/Contents/Resources/
+	@# The agent logos load from a compiled catalog; a raw .xcassets draws nothing.
+	@test -f $(APP)/Contents/Resources/Moomux_MoomuxKit.bundle/Contents/Resources/Assets.car \
+		|| { echo "error: MoomuxKit's asset catalog was not compiled (build engine is not swiftbuild?)"; exit 1; }
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP)
 
