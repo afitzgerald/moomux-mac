@@ -962,6 +962,7 @@ public struct Usage: Decodable, Equatable, Sendable {
         }
         let lines = groups.map { group in
             group.windows.map { "\($0.name) \(percent(of: $0, free: free))%" }.joined(separator: ", ")
+                + (free ? " free" : " used")
                 + (group.resets.map { " · \($0)" } ?? "")
         }
         let message = status == .signedOut ? "\(agent) is signed out — run \(agent.lowercased()) login" : problem
@@ -1494,9 +1495,9 @@ public enum Wire {
         assert(usage.windows[1].resets(now: resetNow) == "resets in 1d 18h")
         assert(usage.windows[0].resets(now: parseTimestamp("2026-09-30T22:00:00Z")!) == nil,
                "an elapsed reset drops the countdown rather than going negative")
-        assert(usage.detail(now: resetNow) == ["5h 82% · resets in 2h 26m",
-                                                "Week 53% · resets in 1d 18h",
-                                                "Fable 0%"], "\(usage.detail(now: resetNow))")
+        assert(usage.detail(now: resetNow) == ["5h 82% used · resets in 2h 26m",
+                                                "Week 53% used · resets in 1d 18h",
+                                                "Fable 0% used"], "\(usage.detail(now: resetNow))")
         // Resets a second apart, as the server sends them, share one line.
         let shared = try! decoder.decode(Usage.self, from: Data(#"""
         {"status":"ok","windows":[
@@ -1504,12 +1505,12 @@ public enum Wire {
          {"kind":"weekly_all","name":"Week","percent":12,"resets_at":"2026-10-02T13:59:59Z","headline":true},
          {"kind":"weekly_scoped","name":"Fable","percent":0,"resets_at":"2026-10-02T14:00:00Z"}]}
         """#.utf8))
-        assert(shared.detail(now: resetNow) == ["5h 55% · resets in 2h 26m",
-                                                 "Week 12%, Fable 0% · resets in 1d 18h"],
+        assert(shared.detail(now: resetNow) == ["5h 55% used · resets in 2h 26m",
+                                                 "Week 12%, Fable 0% used · resets in 1d 18h"],
                "\(shared.detail(now: resetNow))")
         assert(usage.percent(of: usage.windows[0], free: false) == 82)
         assert(usage.percent(of: usage.windows[0], free: true) == 18)
-        assert(usage.detail(now: resetNow, free: true).first == "5h 18% · resets in 2h 26m")
+        assert(usage.detail(now: resetNow, free: true).first == "5h 18% free · resets in 2h 26m")
         assert(usage.level(of: usage.windows[0], now: resetNow) == .warn)
         assert(usage.level(of: usage.windows[0], now: parseTimestamp("2026-09-30T22:00:00Z")!) == .ok,
                "a window past its reset is not still at its old level")
