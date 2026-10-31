@@ -798,18 +798,21 @@ private struct SessionList: View {
             // them. A folder header is a plain row for the same reason a
             // project header is — a selectable row would take the List's
             // selection, and there is no session behind it.
-            ForEach(app.sidebarRows(of: group.project, in: group.sessions)) { row in
+            let rows = app.sidebarRows(of: group.project, in: group.sessions)
+            ForEach(rows) { row in
                 switch row {
                 case let .folder(name, collapsed, count):
                     FolderHeader(project: group.project, name: name,
                                  collapsed: collapsed, count: count)
                         .selectionDisabled()
+                        .moveDisabled(true)
                 case let .session(session, folder):
                     // One level in from its header, whichever it is: the
                     // project header, or a folder header one level in itself.
                     SessionRow(session: session, level: folder.isEmpty ? 1 : 2).tag(session.id)
                 }
             }
+            .onMove { app.move(rows.map { $0.slot(in: group.project) }, from: $0, to: $1) }
         }
     }
 
@@ -818,7 +821,8 @@ private struct SessionList: View {
     /// One flat list rather than a `ForEach` per project — the folders are one
     /// global namespace and their members span projects.
     @ViewBuilder private var folderFirst: some View {
-        ForEach(app.folderSidebarRows) { row in
+        let rows = app.folderSidebarRows
+        ForEach(rows) { row in
             switch row {
             case let .folder(name, collapsed, count):
                 // No project: this header is the whole folder, whatever
@@ -827,21 +831,28 @@ private struct SessionList: View {
                 FolderHeader(project: "", name: name, collapsed: collapsed, count: count,
                              level: 0)
                     .selectionDisabled()
+                    .moveDisabled(true)
             case let .project(folder, name, collapsed, hidden):
                 // The loose block's header is the project header proper —
                 // collapse through the core, drop-to-unfile and all. Inside a
                 // folder it is a group of its own, folding only itself.
                 if folder.isEmpty {
                     ProjectHeader(name: name, hidden: hidden).selectionDisabled()
+                        .moveDisabled(true)
                 } else {
                     FolderProjectHeader(folder: folder, name: name, collapsed: collapsed,
                                         hidden: hidden)
                         .selectionDisabled()
+                        .moveDisabled(true)
                 }
             case let .session(session, indent):
                 SessionRow(session: session, level: indent).tag(session.id)
             }
         }
+        // The list's own row drag, the iPhone's too: a line between rows and
+        // a move, where a row `.dropDestination` highlighted the row as if it
+        // were a container and badged the pointer with copy's +.
+        .onMove { app.move(rows.map(\.slot), from: $0, to: $1) }
     }
 }
 
@@ -959,6 +970,33 @@ private struct FocusSearchOnRequest: ViewModifier {
     }
 }
 
+/// A session dropped *onto* a folder or project header files there — the one
+/// container in the sidebar, so it highlights, the way Finder's folders do.
+/// A delegate rather than `.dropDestination`, which proposes a copy and badges
+/// the pointer with a green +; this is a move.
+private struct HeaderDrop: DropDelegate {
+    let app: AppState
+    let folder: String
+    let project: String
+    @Binding var targeted: Bool
+
+    func dropEntered(info: DropInfo) { targeted = true }
+    func dropExited(info: DropInfo) { targeted = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        let providers = info.itemProviders(for: [.plainText])
+        for provider in providers {
+            _ = provider.loadObject(ofClass: NSString.self) { [app, folder, project] value, _ in
+                guard let id = value as? String else { return }
+                Task { @MainActor in _ = app.drop([id], into: folder, project: project) }
+            }
+        }
+        return !providers.isEmpty
+    }
+}
+
 private struct ProjectHeader: View {
     @Environment(AppState.self) private var app
     let name: String
@@ -999,10 +1037,10 @@ private struct ProjectHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setProject(name, expanded: !expanded) }
-        .dropDestination(for: String.self) { ids, _ in
-            app.drop(ids, into: "", project: name)
-        } isTargeted: { targeted = $0 }
-        .listRowBackground(targeted ? AnyView(SessionTheme.dropTarget) : AnyView(band(expanded: expanded, holdsSelection: holdsSelection)))
+        .onDrop(of: [.plainText], delegate: HeaderDrop(app: app, folder: "", project: name,
+                                                       targeted: $targeted))
+        .listRowBackground(targeted ? AnyView(SessionTheme.dropTarget)
+            : AnyView(band(expanded: expanded, holdsSelection: holdsSelection)))
         .contextMenu {
             Button("New Folder…") { app.sheet = .newFolder(assign: nil) }
         }
@@ -1063,9 +1101,8 @@ private struct FolderHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.setFolder(name: name, collapsed: !collapsed) }
-        .dropDestination(for: String.self) { ids, _ in
-            app.drop(ids, into: name, project: project)
-        } isTargeted: { targeted = $0 }
+        .onDrop(of: [.plainText], delegate: HeaderDrop(app: app, folder: name, project: project,
+                                                       targeted: $targeted))
         .listRowBackground(targeted ? SessionTheme.dropTarget : nil)
         .contextMenu {
             Button("Rename…") { app.sheet = .renameFolder(name: name) }
@@ -1130,16 +1167,14 @@ private struct SessionRow: View {
         .padding(.vertical, 2)
         // The system's selection pill is switched off (`NoSelectionHighlight`):
         // it was grey, the same tone as a header band.
-        .listRowBackground(app.selectedSessionID == session.id ? AnyView(selectionEdge) : nil)
+        .listRowBackground(app.selectedSessionID == session.id ? selectionEdge : nil)
         // `level - 1`: the dot sits straight under its header's icon, not a
         // step in from it — the band is what says which header it belongs to.
         .padding(.leading, SidebarGrid.rowIndent(max(0, level - 1), app.listFontSize))
-        // The payload is the session id as a plain string — no custom UTType,
-        // which would need an Info.plist declaration to be worth anything.
-        // The cost is that dragging a row into a text field types its id;
-        // `AppState.drop` ignores any string that is not a session of the
-        // project it landed on.
-        .draggable(session.id)
+        // Not `.draggable`, which would take the drag off the list's
+        // `onMove`: an item provider rides along on the list's own drag,
+        // so a header can still take the row (`HeaderDrop`).
+        .itemProvider { NSItemProvider(object: session.id as NSString) }
         // `DoubleClickCatcher`, not `TapGesture(count: 2)`: SwiftUI's own
         // double-tap gesture uses a fixed internal timeout rather than the
         // system's actual double-click speed (System Settings ›

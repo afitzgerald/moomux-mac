@@ -501,9 +501,7 @@ core new enough to serve them** — there is no fallback to the old local paths.
   `sessionview.FolderOrder` does it (`order` ascending, 0 last, ties by name), which is what the
   "file this session under…" menu offers — unioned with the names the sessions themselves claim,
   since membership and the folder table are two writes and a header you can see but cannot file
-  into is the worse half. Dropping a session onto a folder header files it there whatever project
-  the header is drawn under, for the same reason; `project` still gates a drop on a *project*
-  header, which is the un-file case.
+  into is the worse half.
 - **The sidebar has two lenses, and the core lays out both.** Project-first (`Snapshot.Rows`) is the
   default; the Folders toolbar toggle (⇧⌘F, `AppState.folderFirst`, `UserDefaults`) swaps it for
   `Snapshot.FolderRows` — every folder at the top level with a project subheader under it, then the
@@ -929,9 +927,31 @@ Decisions, not oversights. Don't "fix" these without being asked.
   step itself, and the first prompt is part of the `CreateSession` transaction.) The other TUI-only
   settings (auto-tmux, TUI appearance) are deliberately not here: they change nothing in this app,
   so a control for them is noise. The wire calls and `Config` fields stay for the core's sake.
-  **No drag-to-reorder**, though, for sessions or projects: `MoveSession`/`MoveProject` take a ±1
-  delta, the lists are plain `List`s, and `onMove` wants index sets over a bound array, so ⌃⌘↑/↓ and
-  two chevron buttons are the whole feature for a day less work.
+  **Sessions drag to reorder and refile, in both lenses; projects do not.** A drag moves a session
+  only among its own (folder, project) group, each member keeping a slot the group already held
+  (`Layout.place`), which is why it works in the folder-first lens where Move Up/Down cannot; only
+  last-opened sorting turns it off. Refiling and placing go in one `mutate`, so a session dropped
+  between two folder members lands there. Both apps drag through `ForEach.onMove` (`AppState.move`,
+  `Layout.move`). Straight under a header is inside it, even with a collapsed folder's loose
+  neighbour below; otherwise a sibling on either side reorders, and failing that the row above
+  decides — a folder member files into that folder, a loose session takes it out. A loose block is
+  one project's, so another project's refuses the drop, and so does the top of the folder-first
+  list. Headers are `.moveDisabled` on both.
+  - **The Mac also drops *onto* a header** (`HeaderDrop`, `AppState.drop(_:into:project:)`),
+    highlighting it: the header is the one container, and Finder files into a folder that way. The
+    row carries its id through `.itemProvider`, which rides along on `onMove`'s drag; `.draggable`
+    would take the drag over and lose the line. A `DropDelegate` rather than `.dropDestination`,
+    because the latter proposes a copy and badges the pointer with a green +.
+  - **Why not a row `.dropDestination`:** on the Mac it highlighted the session under the pointer
+    as if it were a container and badged the pointer with copy's green +, where every Apple
+    sidebar draws a line between rows for a move and highlights only a folder to drop *into*.
+    `onMove` draws that line and drags as a move.
+  - **On the iPhone it never worked at all:** an iOS `List` delivers a drag from its own rows only
+    to `onMove`. Measured with `axe drag` in the simulator: a row's `.dropDestination`, a
+    `List`-wide one and `onInsert` all logged nothing while a lifted row hovered over them, and the
+    search field took the same drag.
+  The cost is that a drag carries one session, on both.
+  Projects stay on Settings' chevron buttons — `MoveProject` takes a ±1 delta.
 - **The project sheet follows New Session's shape.** Repo path first, with a Choose… folder
   picker; the name is optional and defaults to the folder's (`ProjectForm.nameToSend` — whitespace
   becomes hyphens, nothing else is touched); base branch, then agent and skip-permissions, on the
