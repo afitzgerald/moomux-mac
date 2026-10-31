@@ -15,7 +15,7 @@ import SwiftUI
 /// out of `done` was meant to end.
 public enum SessionTheme {
 
-    /// A sidebar row a session is being dragged over, on both front ends.
+    /// A Mac sidebar header a session is being dragged onto.
     public static let dropTarget = Color.accentColor.opacity(0.25)
 
     /// The agent-state colors, from the palette the core serves for the

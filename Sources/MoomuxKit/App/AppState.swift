@@ -2315,6 +2315,57 @@ public final class AppState {
         mutate("Move") { try $0.reorderSessions(order); return nil }
     }
 
+    /// A sidebar drag, both apps: `onMove` over the rows the list is drawing,
+    /// which either refiles the session or reorders it among its siblings
+    /// (`Layout.move`).
+    /// `rows` must be the array the `ForEach` drew, not a fresh copy: `from`
+    /// and `to` index that one, and a snapshot can land mid-drag. A drag
+    /// carries one row, so `from` holds one index.
+    public func move(_ rows: [Layout.MoveSlot], from: IndexSet, to: Int) {
+        guard let from = from.first, rows.indices.contains(from), let id = rows[from].session,
+              let session = session(id: id) else { return }
+        switch Layout.move(rows, from: from, to: to) {
+        case let .file(folder, after, before): file(session, into: folder, after: after, before: before)
+        case let .place(after, before): place(session, after: after, before: before)
+        case .none: break
+        }
+    }
+
+    /// Files `session` under `folder` and puts it next to `after` or `before`
+    /// in the same `mutate`, so it lands where it was dropped rather than
+    /// wherever the core files it. With last-opened sorting there is no order
+    /// to write, so it is only filed.
+    private func file(_ session: Session, into folder: String, after: String?, before: String?) {
+        let group = Set(allSessions(of: session.project).filter { $0.folder == folder }.map(\.id))
+            .union([session.id])
+        let order = config?.sortRecentFirst == true ? nil
+            : Layout.place(sessionOrder(of: session.project), group: group, id: session.id,
+                           after: after, before: before)
+        mutate(folder.isEmpty ? "Remove from folder" : "Move to folder") { client in
+            try client.setSessionFolder(id: session.id, folder: folder)
+            if let order { try client.reorderSessions(order) }
+            return nil
+        }
+    }
+
+    /// Reorders `session` among its own folder's sessions of its project
+    /// (`Layout.place`), so it works in the folder-first lens too, where Move
+    /// Up/Down cannot. Only last-opened sorting turns it off.
+    private func place(_ session: Session, after: String?, before: String?) {
+        guard config?.sortRecentFirst != true else { return }
+        let group = Set(allSessions(of: session.project)
+            .filter { $0.folder == session.folder }.map(\.id))
+        guard let order = Layout.place(sessionOrder(of: session.project), group: group,
+                                       id: session.id, after: after, before: before)
+        else { return }
+        mutate("Move") { try $0.reorderSessions(order); return nil }
+    }
+
+    /// Every session of a project in the order the core lays them out.
+    private func sessionOrder(of project: String) -> [String] {
+        layout(of: project, in: allSessions(of: project)).filter { !$0.isFolder }.map(\.id)
+    }
+
     // MARK: Folders
 
     /// Files a session under `folder`, creating it on first use; an empty name
@@ -2326,23 +2377,18 @@ public final class AppState {
         }
     }
 
-    /// A sidebar drop: the payload is a plain session id, so anything that
-    /// carries a string can land here, and a session already in `folder` is
-    /// left alone. Returns whether the drop meant anything, which is what tells
-    /// SwiftUI to accept it.
+    /// The Mac's drop onto a folder or project header: the payload is a plain
+    /// session id, and a session already in `folder` is left alone. Returns
+    /// whether the drop meant anything.
     ///
     /// `project` gates only the un-file case (a drop on a *project* header,
     /// `folder` empty), where another project's session has no business
     /// landing. A folder is global, so filing one of project A's sessions into
-    /// a folder drawn under project B is a real move — refusing it left the row
-    /// highlighting as a valid target and then doing nothing.
+    /// a folder drawn under project B is a real move.
     public func drop(_ ids: [String], into folder: String, project: String) -> Bool {
         let moved = ids.compactMap(session(id:))
             .filter { $0.folder != folder && (!folder.isEmpty || $0.project == project) }
         guard !moved.isEmpty else { return false }
-        // One `mutate` for the lot: one per session would race on `busy` and
-        // on `refresh`. The Mac sidebar drags one row, but iOS lets a drag
-        // pick up more by tapping other rows mid-drag.
         mutate(folder.isEmpty ? "Remove from folder" : "Move to folder") { client in
             for session in moved { try client.setSessionFolder(id: session.id, folder: folder) }
             return nil

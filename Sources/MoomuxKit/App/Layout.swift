@@ -27,6 +27,14 @@ public enum Layout {
             if case let .session(s, _) = self { return s }
             return nil
         }
+
+        /// This row as a drag reads it, under `project`'s header.
+        public func slot(in project: String) -> MoveSlot {
+            switch self {
+            case let .folder(name, _, _): return MoveSlot(folder: name, project: project)
+            case let .session(s, folder): return MoveSlot(session: s.id, folder: folder, project: project)
+            }
+        }
     }
 
     /// The rows to draw for one project: the core's layout, minus the sessions
@@ -89,6 +97,15 @@ public enum Layout {
         public var session: Session? {
             if case let .session(s, _) = self { return s }
             return nil
+        }
+
+        /// This row as a drag reads it.
+        public var slot: MoveSlot {
+            switch self {
+            case let .folder(name, _, _): return MoveSlot(folder: name)
+            case let .project(folder, name, _, _): return MoveSlot(folder: folder, project: name)
+            case let .session(s, _): return MoveSlot(session: s.id, folder: s.folder, project: s.project)
+            }
         }
     }
 
@@ -220,6 +237,89 @@ public enum Layout {
         return nil
     }
 
+    /// A project's whole session order with `id` dragged to just after
+    /// `after`, or else just before `before`, or nil when nothing changes.
+    /// Only the members of `group` (one folder's, or the loose ones, of one
+    /// project) trade places, each in a slot the group already held. So every
+    /// other row stays where it is, and both sidebar lenses draw the same
+    /// result.
+    public static func place(_ order: [String], group: Set<String>, id: String,
+                             after: String? = nil, before: String? = nil) -> [String]? {
+        let slots = order.indices.filter { group.contains(order[$0]) }
+        var ids = slots.map { order[$0] }
+        guard let from = ids.firstIndex(of: id) else { return nil }
+        ids.remove(at: from)
+        guard let at = after.flatMap({ ids.firstIndex(of: $0).map { $0 + 1 } })
+                ?? before.flatMap({ ids.firstIndex(of: $0) }) else { return nil }
+        ids.insert(id, at: at)
+        var out = order
+        for (slot, id) in zip(slots, ids) { out[slot] = id }
+        return out == order ? nil : out
+    }
+
+    /// One row of a sidebar as a drag reads it: a session, or a header (no
+    /// `session`) for a folder, a project, or both. A folder header in the
+    /// folder-first lens spans projects and has `project` empty.
+    public struct MoveSlot: Equatable, Sendable {
+        public var session: String?
+        public var folder: String
+        public var project: String
+        public init(session: String? = nil, folder: String = "", project: String = "") {
+            self.session = session; self.folder = folder; self.project = project
+        }
+    }
+
+    public enum Move: Equatable {
+        /// File the session under `folder` ("" takes it out of one), next to
+        /// whichever of these neighbours is already there.
+        case file(String, after: String?, before: String?)
+        /// Reorder it within its own group, next to one of these sessions.
+        case place(after: String?, before: String?)
+        case none
+    }
+
+    /// What dragging `rows[from]` to list position `to` means (`onMove`'s
+    /// indices: `to` counts the dragged row too). Straight under a header is
+    /// inside it, whatever follows — a collapsed folder's next row is not its
+    /// member. Otherwise landing next to a session of its own folder and
+    /// project reorders it, and failing that the row above decides: a folder
+    /// member files it there, a loose session takes it out. Nothing above is
+    /// the loose level only in one project's own section; at the top of the
+    /// folder-first list it means nothing. A loose level is one project's, so
+    /// another project's is no place to drop a session.
+    public static func move(_ rows: [MoveSlot], from: Int, to: Int) -> Move {
+        guard rows.indices.contains(from), rows[from].session != nil, to != from, to != from + 1
+        else { return .none }
+        let dragged = rows[from]
+        var rest = rows
+        rest.remove(at: from)
+        let at = to > from ? to - 1 : to
+        let above = at > 0 && at - 1 < rest.count ? rest[at - 1] : nil
+        let below = at < rest.count ? rest[at] : nil
+        func member(of folder: String, _ row: MoveSlot?) -> String? {
+            guard let row, row.folder == folder, row.project == dragged.project else { return nil }
+            return row.session
+        }
+        let folder: String
+        if let above, above.session == nil {
+            folder = above.folder
+        } else if member(of: dragged.folder, above) != nil || member(of: dragged.folder, below) != nil {
+            return .place(after: member(of: dragged.folder, above),
+                          before: member(of: dragged.folder, below))
+        } else if let above {
+            folder = above.folder
+        } else {
+            guard rows.allSatisfy({ $0.project == dragged.project }) else { return .none }
+            folder = ""
+        }
+        if folder.isEmpty, let above, above.project != dragged.project { return .none }
+        if folder == dragged.folder {
+            let before = member(of: folder, below)
+            return before == nil ? .none : .place(after: nil, before: before)
+        }
+        return .file(folder, after: member(of: folder, above), before: member(of: folder, below))
+    }
+
     /// One movable unit: a loose session, or a folder with every member it owns.
     struct Block {
         var folder = ""
@@ -314,6 +414,55 @@ public enum Layout {
         // A row the window is filtering out is never the one swapped with.
         assert(reorder([Row(id: "a"), Row(id: "b"), Row(id: "c")], id: "a", delta: 1,
                        skip: { $0 == "b" }) == ["c", "b", "a"])
+
+        // A drag moves within its group, and nothing outside the group
+        // moves: a, [work: b, c], d, e with the loose group a, d, e.
+        let order = ["a", "b", "c", "d", "e"]
+        let loose: Set = ["a", "d", "e"]
+        assert(place(order, group: loose, id: "a", after: "d") == ["d", "b", "c", "a", "e"])
+        assert(place(order, group: loose, id: "e", before: "a") == ["e", "b", "c", "a", "d"])
+        assert(place(order, group: ["b", "c"], id: "c", before: "b") == ["a", "c", "b", "d", "e"])
+        assert(place(order, group: loose, id: "a", before: "d") == nil, "already there")
+        assert(place(order, group: loose, id: "a", after: "b") == nil, "b is not in the group")
+
+        // The same list as `onMove` sees it: a, [work header], b, c, d.
+        let slots = [MoveSlot(session: "a", project: "p"),
+                     MoveSlot(folder: "work", project: "p"),
+                     MoveSlot(session: "b", folder: "work", project: "p"),
+                     MoveSlot(session: "c", folder: "work", project: "p"),
+                     MoveSlot(session: "d", project: "p")]
+        assert(move(slots, from: 0, to: 5) == .place(after: "d", before: nil))
+        assert(move(slots, from: 4, to: 0) == .place(after: nil, before: "a"))
+        assert(move(slots, from: 0, to: 2) == .file("work", after: nil, before: "b"), "under the folder's header")
+        assert(move(slots, from: 0, to: 3) == .file("work", after: "b", before: "c"), "between two members")
+        assert(move(slots, from: 0, to: 4) == .place(after: nil, before: "d"),
+               "after the last member, next to a loose sibling, stays loose")
+        assert(move(slots, from: 3, to: 2) == .place(after: nil, before: "b"))
+        assert(move(slots, from: 2, to: 0) == .file("", after: nil, before: "a"), "the top of the section is loose")
+        assert(move(slots, from: 1, to: 4) == .none, "a header does not move")
+        // Folder-first: a project subheader files into its folder, and the
+        // loose block's header takes a session out.
+        let lens = [MoveSlot(folder: "work"),
+                    MoveSlot(folder: "work", project: "p"),
+                    MoveSlot(session: "b", folder: "work", project: "p"),
+                    MoveSlot(project: "p"),
+                    MoveSlot(session: "a", project: "p")]
+        assert(move(lens, from: 4, to: 2) == .file("work", after: nil, before: "b"))
+        assert(move(lens, from: 2, to: 5) == .file("", after: "a", before: nil), "below a loose session, it leaves the folder")
+        assert(move(lens, from: 4, to: 5) == .none, "dropped where it started")
+        assert(move(lens, from: 2, to: 0) == .none, "above every folder is nowhere")
+        // b is project q's here: p's loose block is no place for it.
+        var other = lens
+        other[1].project = "q"
+        other[2].project = "q"
+        assert(move(other, from: 2, to: 4) == .none, "another project's loose block")
+        assert(move(other, from: 2, to: 5) == .none)
+        // A collapsed folder shows only its header; the loose d after it does
+        // not make the gap under it a reorder.
+        let folded = [MoveSlot(session: "a", project: "p"), MoveSlot(folder: "work", project: "p"),
+                      MoveSlot(session: "d", project: "p")]
+        assert(move(folded, from: 0, to: 2) == .file("work", after: nil, before: nil),
+               "under a collapsed folder's header")
 
         folderDemo()
     }

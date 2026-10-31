@@ -666,13 +666,14 @@ different widths.
 | Details | inspector ⌘I | trailing swipe; ⋯ in the pane |
 | Review | ⌘G, context menu, detail | leading swipe, detail |
 | View changes (native diff) | none (D46) | leading swipe, pane toolbar, detail |
-| File into a folder | context menu → Folder, drag | drag onto a folder header; detail, pane ⋯ → Folder |
+| File into a folder | context menu → Folder, drag onto a folder header, under it or between its members | drag under a folder header or between its members; detail, pane ⋯ → Folder |
 | Rename | Edit… ⇧⌘R (with agent) | detail, pane ⋯ → Rename… (name only) |
 | Tags | ⌘T, context menu | detail, pane ⋯ → Tags… |
 | Delete | ⌘⌫, context menu | detail, pane ⋯ |
 | Kill tmux | ⇧⌘K, context menu (not confirmed) | detail, pane ⋯ (confirmed) |
 | New Folder | project header, row → Folder | detail, pane ⋯ → Folder → New Folder… |
 | Diff tool, Copy Path, Move Up/Down | yes | none, deliberately |
+| Reorder by drag, both lenses | drop between rows (`onMove`) | long press, drop between rows (`onMove`) |
 | Ticket, Pull request, Open in MergeRight | inspector, context menu | detail, pane ⋯ |
 | Folder header menu | Rename, Archive All, Unarchive All, Delete | the same (long press) |
 
@@ -683,9 +684,10 @@ diff tool, Copy Path, Move Up/Down) sit between the last two groups.
 Kill tmux is confirmed on the phone and not on the Mac, because a phone row is a bigger target for
 a mis-tap and this stops an agent mid-thought. On the phone it takes the session's pane out of the
 stack first, so the pane's reconnect cannot stand the session straight back up (D28). The diff
-tool needs `Process`, reordering is a desk task, and a worktree path means nothing on a phone.
+tool needs `Process`, Move Up/Down is a keyboard task (the phone reorders by drag), and a
+worktree path means nothing on a phone.
 
-The long press on a phone row belongs to `.draggable`. Review moved from a context menu to a
+The long press on a phone row belongs to the list's `onMove` drag (no `.draggable`: an iOS `List` never delivers a drag from its own rows to a `.dropDestination`). Review moved from a context menu to a
 swipe because two things on one long press means one of them never fires. Folder headers are row
 content with `onTapGesture`, not a `Button`, on both, because a `Button` swallows the long press
 that `.contextMenu` needs.
