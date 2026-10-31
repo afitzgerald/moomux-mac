@@ -272,7 +272,9 @@ Mac's Pair iPhone… show a QR code for `moomux://connect?host=<tailnet IPv4>&na
 machine name>` (`port` optional, default 45876). The phone's connect screen scans it in-app, and
 the iPhone's Camera opens it too, through the scheme the app registers. The Mac's plist does not
 register it: it is the computer being paired, not a client.
-- **It always asks.** An alert, "Connect to `<name>`?", with the host under it. Connect adds the
+- **It always asks.** An alert, "Connect to `<name>`?", with the host under it and a field holding
+  the name to save it under: the code's name, or a saved computer's own rename. Leaving the code's
+  name (or clearing it) saves no rename, so a rescan still refreshes it. Connect adds the
   computer, or switches to it when that address is already saved (D56), and reconnects. Cancel
   changes nothing. Tailscale vouches for the phone to the computer, not the other way round, so a link
   that silently repointed the phone would hand someone else's server every prompt, photo and
