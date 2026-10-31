@@ -487,7 +487,7 @@ private struct NewSessionSheet: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let error {
+            if let error = form.promptProblem ?? error {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)

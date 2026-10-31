@@ -76,8 +76,23 @@ struct NewSessionSheet: View {
                     }
                 }
                 Section {
-                    TextField("What should the agent do?", text: $form.prompt, axis: .vertical)
-                        .lineLimit(3...8)
+                    // A fixed-height editor, not `TextField(axis: .vertical)`:
+                    // that one sizes itself by laying out the whole text on
+                    // every pass, and a long restored draft held the main
+                    // thread past the watchdog — killed on every open, since
+                    // the draft survives the crash. This one scrolls and lays
+                    // out only what is visible.
+                    TextEditor(text: $form.prompt)
+                        .frame(height: 150)
+                        .overlay(alignment: .topLeading) {
+                            if form.prompt.isEmpty {
+                                Text("What should the agent do?")
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.top, 8).padding(.leading, 5)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .accessibilityLabel("Prompt")
                     // Borderless, or two buttons sharing a Form row both fire
                     // on any tap in it. The pill and Thinking share the row:
                     // both are settings of the prompt above.
@@ -107,7 +122,7 @@ struct NewSessionSheet: View {
                         }
                     }
                 } footer: {
-                    if let error = attachments.error { Text(error).foregroundStyle(.red) }
+                    if let error = form.promptProblem ?? attachments.error { Text(error).foregroundStyle(.red) }
                 }
                 Section {
                     // Labelled rows rather than bare fields: the base branch
