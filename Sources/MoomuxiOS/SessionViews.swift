@@ -82,7 +82,8 @@ struct SessionListView: View {
                 // `group.sessions` instead was what dropped folders on the
                 // floor: it is the flat membership list, and the grouping
                 // lives in the layout.
-                ForEach(app.sidebarRows(of: group.project, in: group.sessions)) { row in
+                let rows = app.sidebarRows(of: group.project, in: group.sessions)
+                ForEach(rows) { row in
                     switch row {
                     case let .folder(name, collapsed, count):
                         FolderHeader(app: app, name: name, collapsed: collapsed,
@@ -94,6 +95,7 @@ struct SessionListView: View {
                         sessionRow(session, indent: folder.isEmpty ? 1 : 2)
                     }
                 }
+                .onMove { app.move(rows.map { $0.slot(in: group.project) }, from: $0, to: $1) }
             }
         }
     }
@@ -166,11 +168,9 @@ struct SessionListView: View {
                 if app.isAlive(session) { showTerminal(session.id) }
                 else { path.append(.detail(session.id)) }
             }
-            // Same payload as the Mac sidebar's row: the id as a plain string,
-            // which `AppState.drop` filters. The long press is the drag's
-            // alone — Review used to be a context menu here, and two things
-            // on one long press means one of them loses.
-            .draggable(session.id)
+            // No `.draggable`: the long press belongs to the list's own
+            // `onMove` drag. Review used to be a context
+            // menu here, and two things on one long press means one loses.
             .swipeActions(edge: .trailing) {
                 Button(session.archived ? "Unarchive" : "Archive") {
                     app.setArchived(session, !session.archived)
@@ -223,7 +223,8 @@ struct SessionListView: View {
     /// disclosure triangle means.
     @ViewBuilder
     private var folderFirstRows: some View {
-        ForEach(app.folderSidebarRows) { row in
+        let rows = app.folderSidebarRows
+        ForEach(rows) { row in
             switch row {
             case let .folder(name, collapsed, count):
                 FolderHeader(app: app, name: name, collapsed: collapsed,
@@ -261,11 +262,18 @@ struct SessionListView: View {
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(collapsed && hidden > 0 ? "\(name), collapsed, \(hidden) sessions" : name)
+                .moveDisabled(true)
                 }
             case let .session(session, indent):
                 sessionRow(session, indent: indent)
             }
         }
+        // A long-press drag in either lens. `onMove` is the only drag a
+        // `List` here delivers from its own rows: measured in the simulator,
+        // a row's `.dropDestination`, a `List`-wide one, `onInsert` and a
+        // header's `.onDrop` all saw nothing while a dragged row hovered over
+        // them, though the search field took the same drag.
+        .onMove { app.move(rows.map(\.slot), from: $0, to: $1) }
     }
 
     private var computerName: String { computers.saved.current?.displayName ?? "" }
@@ -462,7 +470,6 @@ private struct FolderHeader: View {
     /// folder-first lens where a folder *is* the top level.
     var level = 1
     @Binding var renaming: String?
-    @State private var targeted = false
 
     var body: some View {
         // Row content plus `onTapGesture`, **not** a `Button`. A Button's own
@@ -496,12 +503,6 @@ private struct FolderHeader: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { app.setFolder(name: name, collapsed: !collapsed) }
-        // Files the session here whatever project the header is drawn under —
-        // folders are global, same as the Mac's drop.
-        .dropDestination(for: String.self) { ids, _ in
-            app.drop(ids, into: name, project: project)
-        } isTargeted: { targeted = $0 }
-        .listRowBackground(targeted ? SessionTheme.dropTarget : nil)
         // The Mac's folder context menu, minus Rename's sheet — a phone gets
         // an alert with a field, which is the same question with less
         // machinery. Delete is not confirmed for the same reason it is not
@@ -518,6 +519,9 @@ private struct FolderHeader: View {
         // what is drawn at all and to fill this label.
         .accessibilityElement(children: .combine)
         .accessibilityLabel(collapsed && count > 0 ? "\(name), collapsed, \(count) sessions" : name)
+        // A header is where a session lands, never what moves — and its long
+        // press is the context menu's.
+        .moveDisabled(true)
     }
 }
 
@@ -535,9 +539,8 @@ private struct ProjectHeader: View {
     /// never drawn — same rule as `FolderHeader`.
     let count: Int
     /// A list row (the folder-first lens's loose block) rather than a section
-    /// header (project-first), which decides how a drop target is tinted.
+    /// header (project-first), which decides whether it draws a band.
     var isRow = false
-    @State private var targeted = false
 
     var body: some View {
         let expanded = app.projectExpanded(name)
@@ -563,16 +566,10 @@ private struct ProjectHeader: View {
         .buttonStyle(.plain)
         // The band is the divider; a rule above or below it would double it.
         .listRowSeparator(isRow ? .hidden : .automatic)
-        // Dropping on a project un-files the session. A section header has
-        // no row to tint, so it gets a `background`; as a row it tints edge
-        // to edge like the `FolderHeader` beside it.
-        .dropDestination(for: String.self) { ids, _ in
-            app.drop(ids, into: "", project: name)
-        } isTargeted: { targeted = $0 }
-        .background(targeted && !isRow ? SessionTheme.dropTarget : .clear)
-                .listRowBackground(targeted && isRow ? AnyView(SessionTheme.dropTarget) : (isRow ? AnyView(band(expanded: expanded)) : nil))
+        .listRowBackground(isRow ? band(expanded: expanded) : nil)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(expanded || count == 0 ? name : "\(name), collapsed, \(count) sessions")
+        .moveDisabled(true)
     }
 
     /// A tab on its group: rounded top, square bottom while the sessions sit
