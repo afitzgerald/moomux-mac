@@ -254,12 +254,7 @@ private extension View {
         font(.system(size: 14)).frame(minWidth: 48, minHeight: 51).contentShape(Rectangle())
     }
 
-    @ViewBuilder func attachBarPill() -> some View {
-        if #available(iOS 26, *) {
-            glassEffect(.regular.tint(.black.opacity(0.7)).interactive(), in: Capsule())
-        } else {
-            // Dark whatever the system theme, as the key bar is: the icons are white.
-            environment(\.colorScheme, .dark).background(.thickMaterial, in: Capsule())
-        }
+    func attachBarPill() -> some View {
+        glassEffect(.regular.tint(.black.opacity(0.7)).interactive(), in: Capsule())
     }
 }

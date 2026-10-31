@@ -360,7 +360,7 @@ clean:
 # This is invisible once `.build` holds iOS-compiled modules, so it only ever
 # reproduces on a clean checkout — it shipped green locally and failed twice
 # on CI.
-IOS_TRIPLE   ?= arm64-apple-ios18.0-simulator
+IOS_TRIPLE   ?= arm64-apple-ios26.0-simulator
 IOS_SDK       = $(shell xcrun --sdk iphonesimulator --show-sdk-path)
 # Release, like every other target here. Debug would ship the `assert`s that
 # `--selftest` exists to run — an inverted invariant would abort the app on a

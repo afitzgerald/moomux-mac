@@ -110,7 +110,7 @@ enabling work (the tailnet listener, `Attach`, `Capture`, `Review`, `Diff`, `Sav
 
 | | Mac | iPhone |
 |---|---|---|
-| Minimum OS | macOS 14 | iOS 18 |
+| Minimum OS | macOS 14 | iOS 26 |
 | Local build | `swift build` + Makefile bundle (`make app`) | `swift build --triple … --product MoomuxKit`, then one `swiftc` (`make ios`) |
 | Local run | `make dev` / `make run`, bundle id `app.moomux.Moomux.dev` | `make ios-run`, real bundle id, one simulator per worktree |
 | Configuration | release (`make app`), debug (`make dev`, `make selfcheck`) | release on both paths |
@@ -314,8 +314,9 @@ Scanning a new computer's code, or typing its address, adds it and switches to i
 saved (same host and port) is switched to, its code name refreshed. Matched on the address, not
 the name: two Macs can share a hostname, and a name match would silently repoint one at the
 other. The cost is that a computer whose tailnet address changed comes back as a second entry, to
-Forget. The computer's name sits over the session list; tapping it opens the list of computers —
-tap to switch, hold or swipe for Rename… and Forget (confirmed). A rename survives a rescan, and
+Forget. The computer's name is the session list's title, and its title menu lists the saved
+computers to switch between, then Manage Computers…, which opens the list — tap to switch, hold
+or swipe for Rename… and Forget (confirmed). A rename survives a rescan, and
 an empty one gives the code's name back. Forgetting the computer on screen moves to the first left, or
 to the camera after the last. Add computer is the Connect screen with a Cancel. Disconnect is
 gone from the ⋯ menu: the list does everything it was for.
@@ -343,6 +344,17 @@ gone from the ⋯ menu: the list does everything it was for.
 *Where:* `Computers` (pure, `demo()`), `ComputerStore`, `ComputersSheet`, `MoomuxiOSApp`
 (`connect`, `reconnect`, `forget`, `tapped`), `BackgroundRefresh.pollAll`, `Notifier`
 (`identifier`, `tapped`, `setBadge(_:for:)`, `TapRouter`).
+
+**D57. The phone's session list puts search and New Session at the bottom; the Mac keeps both
+up top.** A phone reaches the bottom with a thumb, and the iOS 26 toolbar puts search there, so
+⊕ sits beside it, as Mail and Notes do. That leaves the top bar to three things, so the computer's
+name (D56) is no longer cut off: ⋯ on the left, the title in the middle, and the usage rings
+alone on the right. Show free quota moved from ⋯ into the usage menu, the only place it changes
+anything. No connection icon: a healthy connection says nothing, a lost one has `ConnectionRow`,
+and connecting or a write in flight (`busy`) shows as the title's subtitle, which says *what* is
+slow, where a spinner only said that something was. The Mac's toolbar has the room, and its
+search and ⌘N stay where a Mac app has them. This is why the phone needs iOS 26 (`.bottomBar`
+search, `navigationSubtitle`, `ToolbarSpacer`). *Where:* `SessionListView`'s toolbar, `UsageMenu`.
 
 ---
 

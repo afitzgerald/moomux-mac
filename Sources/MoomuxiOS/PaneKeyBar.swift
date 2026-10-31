@@ -158,15 +158,12 @@ final class PaneKeyBar: UIView {
     }
 
     private static func glass() -> UIVisualEffect {
-        if #available(iOS 26, *) {
-            let effect = UIGlassEffect(style: .regular)
-            effect.isInteractive = true
-            // Glass takes its colour from what is behind it, which here is the
-            // app's light background strip; tint it to the terminal's dark.
-            effect.tintColor = UIColor.black.withAlphaComponent(0.7)
-            return effect
-        }
-        return UIBlurEffect(style: .systemThickMaterial)
+        let effect = UIGlassEffect(style: .regular)
+        effect.isInteractive = true
+        // Glass takes its colour from what is behind it, which here is the
+        // app's light background strip; tint it to the terminal's dark.
+        effect.tintColor = UIColor.black.withAlphaComponent(0.7)
+        return effect
     }
 
     // MARK: Buttons

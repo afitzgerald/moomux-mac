@@ -287,8 +287,7 @@ struct SessionListView: View {
             .listStyle(.insetGrouped)
             .environment(\.defaultMinListHeaderHeight, 0)
             .contentMargins(.top, 0, for: .scrollContent)
-            // No title: "Sessions" named the only screen there is, and on a
-            // phone a large title costs a row of sessions to say nothing.
+            // Inline: on a phone a large title costs a row of sessions.
             .navigationBarTitleDisplayMode(.inline)
             // The destination is unconditional and each screen looks its own
             // session up in its own `body`. Resolving it *here* looked
@@ -331,7 +330,6 @@ struct SessionListView: View {
                         Toggle("Archived Only", isOn: $app.showArchived)
                         Toggle("Show Project Emoji", isOn: $app.showProjectEmoji)
                         Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
-                        Toggle("Show free quota", isOn: $app.showFreeQuota)
                         // Off in a build with no notes baked in (`make ios`).
                         Button("What's New") { showingNotes = true }
                             .disabled(WhatsNew.releases.isEmpty)
@@ -341,30 +339,44 @@ struct SessionListView: View {
                         Image(systemName: "ellipsis.circle")
                     }
                 }
-                // The computer this list is from; tapping it switches.
-                ToolbarItem(placement: .principal) {
-                    Button { showingComputers = true } label: {
-                        HStack(spacing: 4) {
-                            Text(computerName).font(.headline).lineLimit(1)
-                            Image(systemName: "chevron.down").font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(.primary)
-                    }
-                    .accessibilityLabel("\(computerName), switch computer")
-                    // A create in flight answers on this computer's store; a
-                    // switch would drop a refusal, and the form with it.
-                    .disabled(app.busy != nil)
-                }
+                // Alone on the trailing side, so it never pushes the title.
                 if app.usage != nil || app.codexUsage != nil {
                     ToolbarItem(placement: .topBarTrailing) { UsageMenu(app: app) }
                 }
-                ToolbarItem(placement: .topBarTrailing) { StatusBadge(app: app) }
-                ToolbarItem(placement: .topBarTrailing) {
+                // Search and create at the bottom, as Mail and Notes do: in
+                // thumb reach, and off the top bar the title needs.
+                DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                ToolbarSpacer(.fixed, placement: .bottomBar)
+                ToolbarItem(placement: .bottomBar) {
                     Button { creating = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel("New Session")
                         .disabled(app.connection.isDown || app.config?.projects.isEmpty != false)
                 }
             }
+            // The computer this list is from; its menu switches. A create in
+            // flight answers on this computer's store, and a switch would drop
+            // a refusal and the form with it, hence `busy` disabling the list.
+            .navigationTitle(computerName.isEmpty ? "Moomux" : computerName)
+            .toolbarTitleMenu {
+                ForEach(computers.saved.list) { computer in
+                    Button {
+                        if computer.id != computers.saved.currentID { select(computer.id) }
+                    } label: {
+                        if computer.id == computers.saved.currentID {
+                            Label(computer.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(computer.displayName)
+                        }
+                    }
+                    .disabled(app.busy != nil)
+                }
+                Divider()
+                Button("Manage Computers…", systemImage: "desktopcomputer") { showingComputers = true }
+            }
+            // Only what is worth reading: a healthy connection says nothing,
+            // and a lost one has `ConnectionRow` at the top of the list.
+            .navigationSubtitle(app.busy.map { "\($0)…" }
+                                ?? (app.connection == .connecting ? "Connecting…" : ""))
             .alert("Rename folder", isPresented: Binding(
                 get: { renaming != nil },
                 set: { if !$0 { renaming = nil } }
@@ -980,7 +992,7 @@ extension View {
 /// every minute: a menu's items are made when the body runs, not when it
 /// opens, and the snapshot alone may not change for hours.
 private struct UsageMenu: View {
-    let app: AppState
+    @Bindable var app: AppState
     var body: some View {
         TimelineView(.everyMinute) { context in
             Menu {
@@ -994,6 +1006,7 @@ private struct UsageMenu: View {
                         ForEach(Array(usage.detail(now: context.date, agent: "Codex", free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in Text(line) }
                     }
                 }
+                Toggle("Show free quota", isOn: $app.showFreeQuota)
             } label: {
                 HStack(spacing: 8) {
                     if let usage = app.usage { usageRings(usage, agent: "Claude", now: context.date) }
@@ -1055,29 +1068,6 @@ private struct UsageMenu: View {
     }
 }
 
-private struct StatusBadge: View {
-    let app: AppState
-
-    var body: some View {
-        // A write in flight outranks the connection state: `mutate` sets
-        // `busy` for every action, and a worktree create takes tens of
-        // seconds with nothing else on screen to say so.
-        if app.busy != nil {
-            ProgressView().controlSize(.small)
-        } else {
-            connectionState
-        }
-    }
-
-    @ViewBuilder
-    private var connectionState: some View {
-        switch app.connection {
-        case .connecting: ProgressView().controlSize(.small)
-        case .connected: Image(systemName: "checkmark.circle").foregroundStyle(.green)
-        case .down: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-        }
-    }
-}
 
 /// Icon-and-text rows in a `List` or `Form`. A list gives a `Label` a wide
 /// icon column and centres each glyph in it, so the text lines up but the gap

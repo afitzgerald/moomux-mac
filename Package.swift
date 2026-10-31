@@ -6,7 +6,7 @@ import PackageDescription
 // Task.detached. Revisit when there is a reason to.
 let package = Package(
     name: "Moomux",
-    platforms: [.macOS(.v14), .iOS(.v18)],
+    platforms: [.macOS(.v14), .iOS("26.0")],
     products: [
         // The engine is a library so an iOS app can link it. The Mac app stays
         // an executableTarget, so `make build` / `make selfcheck` keep working

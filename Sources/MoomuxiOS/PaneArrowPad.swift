@@ -187,13 +187,10 @@ private final class PadKey: UIView {
     required init?(coder _: NSCoder) { fatalError("not from a nib") }
 
     private static func glass() -> UIVisualEffect {
-        if #available(iOS 26, *) {
-            let effect = UIGlassEffect(style: .regular)
-            effect.isInteractive = true
-            effect.tintColor = UIColor.black.withAlphaComponent(0.55)
-            return effect
-        }
-        return UIBlurEffect(style: .systemThickMaterial)
+        let effect = UIGlassEffect(style: .regular)
+        effect.isInteractive = true
+        effect.tintColor = UIColor.black.withAlphaComponent(0.55)
+        return effect
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
