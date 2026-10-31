@@ -547,10 +547,12 @@ the bar is there before the first tap, and again whenever a picker or sheet over
 is in the toolbar's ⋯ menu and opens the same sheet without jumping to the new session (the user is
 attached to another one); Changes is the toolbar's own button, always shown. Photos and Files left the
 ⋯ menu: the bar's paperclip is their only place on the phone.
-Snippets (`PaneKeyBar.snippets`) are pasted and then sent Return as a keystroke, except one marked
+Snippets (`Snippet`) are pasted and then sent Return as a keystroke, except one marked
 not to submit (`/spawn `, which takes an argument, and `/kill`, which parks the session, so it
-waits for the user's own Return). The list carries moomux's own slash commands: `/spawn`, `/tag`,
-`/reseed`, `/kill`. Paste and Snippets clear an armed Ctrl/Alt first.
+waits for the user's own Return). The default list carries moomux's own slash commands: `/spawn`, `/tag`,
+`/reseed`, `/kill`. The menu's Edit Snippets… adds, removes, reorders and edits them, and the
+⏎ button per row is the submit flag; the list lives in the phone's `UserDefaults`, not the core, so
+it is per device. Paste and Snippets clear an armed Ctrl/Alt first.
 Ceiling: the punctuation keys the package's bar had (`| ~ /`) are gone.
 
 ## F. Links and files
@@ -764,6 +766,7 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 | project emoji in the list (`showProjectEmoji`) | device | ✅ Settings → Appearance | ✅ ⋯ menu |
 | project emoji in the menu bar (`showMenuBarEmoji`) | device | ✅ Settings → Appearance | n/a (no menu bar) |
 | terminal size (`terminalFontSize`) | device | n/a (D30) | ✅ pane ⋯ menu, and pinch |
+| key-bar snippets (`snippets`) | device | n/a (no key bar, D54) | ✅ key bar → Edit Snippets… |
 | core address (`coreHost`, `corePort`) | device | n/a (`--socket`) | ✅ connect screen |
 
 The practical consequence: turning MergeRight links or folder grouping on at the desk does

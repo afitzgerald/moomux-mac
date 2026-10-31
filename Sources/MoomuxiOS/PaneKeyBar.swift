@@ -14,17 +14,6 @@ import UIKit
 /// the system keyboard.
 @MainActor
 final class PaneKeyBar: UIView {
-    /// Pasted into the pane, then Return unless `submit` is false — a command
-    /// that takes an argument is left open, with a trailing space, for the user
-    /// to finish. Edit the list to change the menu; nothing else reads it.
-    static let snippets: [(text: String, submit: Bool)] = [
-        ("/clear", true), ("/compact", true), ("/model", true),
-        // Parks the session, so a menu tap alone must not do it.
-        ("/kill", false),
-        ("/tag", true), ("/reseed", true), ("/spawn ", false),
-        ("y", true), ("continue", true),
-    ]
-
     weak var terminal: UITerminalView? {
         didSet {
             terminal?.setStickyModifierChangeHandler { [weak self] in self?.refresh() }
@@ -33,6 +22,7 @@ final class PaneKeyBar: UIView {
     }
     var onPhotos: () -> Void = {}
     var onFiles: () -> Void = {}
+    var onEditSnippets: () -> Void = {}
 
     /// Hiding the keyboard swaps it for an empty input view rather than
     /// resigning, so the terminal keeps focus and this bar stays docked at the
@@ -267,18 +257,25 @@ final class PaneKeyBar: UIView {
 
     /// A menu rather than a button per snippet: the row is already as wide as
     /// a phone. Return is a keystroke, so it submits even to a program that
-    /// treats pasted newlines as text.
+    /// treats pasted newlines as text. Built each time it opens, so an edit
+    /// in the sheet shows on the next tap.
     private func snippetMenu() -> UIButton {
         let button = icon("bolt", "Snippets") { _ in }
-        button.menu = UIMenu(children: Self.snippets.map { snippet in
-            UIAction(title: snippet.text.trimmingCharacters(in: .whitespaces) + (snippet.submit ? "" : "…")) { [weak self] _ in
-                guard let view = self?.terminal else { return }
-                // An armed Ctrl would otherwise turn the Return into Ctrl+Return.
-                view.resetStickyModifiers()
-                view.paste(text: snippet.text)
-                if snippet.submit { view.sendKey(.enter) }
+        button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
+            let items: [UIMenuElement] = Snippet.saved.map { snippet in
+                UIAction(title: snippet.text.trimmingCharacters(in: .whitespaces) + (snippet.submit ? "" : "…")) { [weak self] _ in
+                    guard let view = self?.terminal else { return }
+                    // An armed Ctrl would otherwise turn the Return into Ctrl+Return.
+                    view.resetStickyModifiers()
+                    view.paste(text: snippet.text)
+                    if snippet.submit { view.sendKey(.enter) }
+                }
             }
-        })
+            let edit = UIAction(title: "Edit Snippets…", image: UIImage(systemName: "pencil")) { [weak self] _ in
+                self?.onEditSnippets()
+            }
+            done(items + [UIMenu(options: .displayInline, children: [edit])])
+        }])
         button.showsMenuAsPrimaryAction = true
         // The menu opens upward; the default would flip the list.
         button.preferredMenuElementOrder = .fixed

@@ -44,6 +44,7 @@ struct TerminalScreen: View {
     /// From the ⋯ menu. `focus` says no: the user is attached to a session and
     /// a create takes tens of seconds, so a jump would detach them from it.
     @State private var creating = false
+    @State private var editingSnippets = false
     /// The pane's own, for the same reason as `deleting`: detail binds its
     /// own copy of these alerts.
     @State private var edit: SessionEdit?
@@ -74,7 +75,8 @@ struct TerminalScreen: View {
                          onPinch: { fontSize = $0 },
                          onSwipe: { app.selectWindow(sessionID, delta: $0) },
                          onPhotos: { pickingPhotos = true },
-                         onFiles: { importingFiles = true })
+                         onFiles: { importingFiles = true },
+                         onEditSnippets: { editingSnippets = true })
             // The core's Ghostty config arriving after this pane was built:
             // a new surface is the only way to apply it (`paneConfigGeneration`).
             .id(app.paneConfigGeneration)
@@ -92,6 +94,7 @@ struct TerminalScreen: View {
             // should be", which is precisely the inset in rows.
             .quickLookPreview($preview)
             .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { false }) }
+            .sheet(isPresented: $editingSnippets) { SnippetsSheet() }
             // Leaving the pane abandons its fetch, or a late refusal raises
             // "Couldn't do that" over whatever screen is next.
             .onDisappear {
@@ -185,6 +188,7 @@ struct TerminalScreen: View {
             .onChange(of: pickingPhotos) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             .onChange(of: importingFiles) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             .onChange(of: creating) { _, open in if !open { pane.view?.becomeFirstResponder() } }
+            .onChange(of: editingSnippets) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             .onChange(of: edit == nil) { _, closed in if closed { pane.view?.becomeFirstResponder() } }
             .onChange(of: killing) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             .onChange(of: deleting) { _, open in if !open { pane.view?.becomeFirstResponder() } }
@@ -295,6 +299,7 @@ struct AttachedTerminal: UIViewRepresentable {
     let onSwipe: (Int) -> Void
     let onPhotos: () -> Void
     let onFiles: () -> Void
+    let onEditSnippets: () -> Void
 
     func makeUIView(context: Context) -> UITerminalView {
         let view = LinkTapView(frame: .init(x: 0, y: 0, width: 390, height: 600))
@@ -303,6 +308,7 @@ struct AttachedTerminal: UIViewRepresentable {
         view.onSwipe = onSwipe
         view.keyBar.onPhotos = onPhotos
         view.keyBar.onFiles = onFiles
+        view.keyBar.onEditSnippets = onEditSnippets
         pane.view = view
         view.delegate = context.coordinator
         view.controller = controller
