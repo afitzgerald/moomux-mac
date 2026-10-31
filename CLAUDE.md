@@ -652,10 +652,18 @@ core new enough to serve them** — there is no fallback to the old local paths.
   **This is invisible on a build machine**, which is why 0.0.38 shipped with it: the second
   candidate, `.build/.../GhosttyKit_GhosttyTerminal.bundle`, is right there on the machine that
   made the binary. Everywhere else it is CI's `/Users/runner/...`, and the app dies the moment a
-  session is selected. So the check is: build the app, **move `.build/<triple>/release/
-  GhosttyKit_GhosttyTerminal.bundle` out of the way**, and run the bundle. Launching at all is the
-  proof — `warm()` touches the same `static let` the terminal does, so it either resolves or takes
-  the process with it.
+  session is selected. So the check is: build the app, **move every `*.bundle` in
+  `$(swift build -c release --show-bin-path)` out of the way**, and run the bundle. Launching at
+  all is the proof — `warm()` touches the same `static let`s the code does, so they either resolve
+  or take the process with it.
+  **It is every `Bundle.module` the Mac app reaches, not just libghostty's.** 0.0.163 shipped the
+  same crash a second time: MoomuxKit gained `resources:` for the agent logos, `AgentMark` read
+  `.module`, and the app died drawing the first logo. So whenever a target gets `resources:`, or
+  code starts reading `.module` in a module that has them: add the bundle's name to
+  `GhosttyResourceBundle.names`, touch that module's accessor in `warm()` (MoomuxKit's is
+  `KitBundle.bundle`, since `.module` is internal), copy the bundle in `make app`, and run the
+  check above. The iPhone is unaffected — `make ios` puts bundles at the app root, where the
+  accessor looks.
 - **Shipping the terminfo is not the same as the child finding it.** The package sets
   `GHOSTTY_RESOURCES_DIR` (shell integration) and *never* `TERMINFO`, which Ghostty.app sets for
   its own children — so on a machine with no Ghostty installed the pane's `tmux attach` exits in

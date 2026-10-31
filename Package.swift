@@ -64,6 +64,9 @@ let package = Package(
                 .product(name: "DiffKit", package: "DiffKit"),
             ],
             path: "Sources/MoomuxKit",
+            // Bundle.module cannot find this inside the Mac .app on its own;
+            // GhosttyResourceBundle.warm() redirects it. A new `resources:`
+            // anywhere needs the same — CLAUDE.md, "The SwiftPM resource bundle".
             resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
