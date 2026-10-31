@@ -170,6 +170,7 @@ app: build
 	rm -rf $(GHOSTTY_RES)/Ghostty/themes
 	cp -R Resources/ghostty-themes $(GHOSTTY_RES)/Ghostty/themes
 	cp -R $(GHOSTTY_BUNDLE) $(APP)/Contents/Resources/
+	cp -R $(BINDIR)/Moomux_MoomuxKit.bundle $(APP)/Contents/Resources/
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP)
 
@@ -383,6 +384,7 @@ IOS_DEVICE_TYPE ?= iPhone 18 Pro
 IOS_DEVICE   ?= Moomux · $(notdir $(CURDIR))
 IOS_SOURCES   = $(shell find Sources/MoomuxiOS -name '*.swift')
 IOS_KIT_SOURCES = $(shell find Sources/MoomuxKit -name '*.swift')
+IOS_KIT_RESOURCES = $(shell find Sources/MoomuxKit/Resources -type f)
 # The icons are rasterized into the bundle, so the SVGs and the script that
 # converts them are inputs too — and Package.resolved because a libghostty bump
 # changes the framework linked in. Left out, `ios-run` installs a stale bundle.
@@ -391,7 +393,7 @@ IOS_ASSETS    = $(wildcard Resources/icons/*.svg) Scripts/rasterize.swift \
 
 ios: $(IOS_APP)
 
-$(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.plist THIRD_PARTY_NOTICES.md LICENSE Makefile
+$(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_KIT_RESOURCES) $(IOS_ASSETS) Resources/iOS-Info.plist THIRD_PARTY_NOTICES.md LICENSE Makefile
 	@# `--product MoomuxKit` only works because that product is declared
 	@# `type: .static` — an automatic one is ignored with a warning and the
 	@# default target set is built instead, which includes the macOS
@@ -439,6 +441,10 @@ $(IOS_APP): $(IOS_SOURCES) $(IOS_KIT_SOURCES) $(IOS_ASSETS) Resources/iOS-Info.p
 	@# root itself; without it every diagram silently falls back to code.
 	rm -rf $(IOS_APP)/DiffKit_DiffKit.bundle
 	cp -R $(IOS_PRODUCTS)/DiffKit_DiffKit.bundle $(IOS_APP)/
+	@# Agent logo assets live in MoomuxKit, so ship its SwiftPM resource bundle
+	@# alongside the hand-built iOS executable.
+	rm -rf $(IOS_APP)/Moomux_MoomuxKit.bundle
+	cp -R $(IOS_PRODUCTS)/Moomux_MoomuxKit.bundle $(IOS_APP)/
 	@# Release notes, as for the Mac bundle: only when WHATS_NEW names them.
 	rm -f $(IOS_APP)/WhatsNew.md
 	if [ -n "$(WHATS_NEW)" ]; then cp "$(WHATS_NEW)" $(IOS_APP)/WhatsNew.md; fi

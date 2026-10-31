@@ -64,6 +64,7 @@ let package = Package(
                 .product(name: "DiffKit", package: "DiffKit"),
             ],
             path: "Sources/MoomuxKit",
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(

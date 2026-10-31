@@ -1010,8 +1010,7 @@ private struct UsageMenu: View {
 
     private func usageRings(_ usage: Usage, agent: String, now: Date) -> some View {
         HStack(spacing: 3) {
-            Text(agent == "Claude" ? "C" : "X")
-                .font(.system(size: 10, weight: .semibold))
+            AgentMark(agent, size: 12)
             if usage.status == .signedOut {
                 Image(systemName: "person.crop.circle.badge.exclamationmark")
                     .font(.caption)
