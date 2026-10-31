@@ -30,6 +30,7 @@ enum SelfTest {
         Layout.demo()
         AppState.demo()
         ViewedFiles.demo()
+        SessionDiff.demo()
         NewSessionForm.demo()
         ProjectForm.demo()
         Notifier.demo()

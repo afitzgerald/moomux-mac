@@ -208,6 +208,9 @@ public final class MoomuxClient: Sendable {
         var base: String?
         /// `Diff`: the commit the patch was taken against, for `ReadBaseFile`.
         var commit: String?
+        /// `Diff`: the patch's paths (b/ side) that differ from HEAD. Every
+        /// other file is committed on the branch; absent is no local work.
+        var uncommitted: [String]?
         /// `GhosttyConfig`: the core machine's Ghostty config, concatenated in
         /// ghostty's own load order, and the files it came from.
         var ghostty: ServedGhostty?
@@ -220,7 +223,7 @@ public final class MoomuxClient: Sendable {
 
         enum CodingKeys: String, CodingKey {
             case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path, data
-            case patch, truncated, base, commit, attach, ghostty, pairing
+            case patch, truncated, base, commit, uncommitted, attach, ghostty, pairing
             case screens
             case projectEmoji = "project_emoji"
         }
@@ -433,7 +436,8 @@ public final class MoomuxClient: Sendable {
     /// The session's changes against its merge base, untracked files included —
     /// what `Review` shows in tmux, as text. Needs no tmux, so a parked session
     /// answers too. nil when the worktree is not a git repo (`ok=false`).
-    public func diff(id: String) throws -> (patch: String, base: String, commit: String, truncated: Bool)? {
+    public func diff(id: String) throws
+        -> (patch: String, base: String, commit: String, truncated: Bool, uncommitted: [String])? {
         let result: CallResult
         do {
             result = try call("Diff", Args(id: id))
@@ -442,7 +446,8 @@ public final class MoomuxClient: Sendable {
         }
         guard result.ok == true else { return nil }
         // Every field is `omitempty`: no `patch` is a clean worktree.
-        return (result.patch ?? "", result.base ?? "", result.commit ?? "", result.truncated ?? false)
+        return (result.patch ?? "", result.base ?? "", result.commit ?? "", result.truncated ?? false,
+                result.uncommitted ?? [])
     }
 
     /// A repo-relative path as it was at `Diff`'s base — the "before" side of
@@ -896,7 +901,11 @@ public final class MoomuxClient: Sendable {
                answer: #"{"result":{"ok":true,"patch":"diff --git","base":"main","commit":"abc"}}"#) {
             let diff = try client.diff(id: "s1")
             assert(diff?.patch == "diff --git" && diff?.base == "main" && diff?.commit == "abc"
-                   && diff?.truncated == false)
+                   && diff?.truncated == false && diff?.uncommitted == [], "no uncommitted key is no local work")
+        }
+        expect(#"{"args":{"id":"s1"},"method":"Diff"}"#,
+               answer: #"{"result":{"ok":true,"patch":"diff --git","base":"main","uncommitted":["a.go","new.go"]}}"#) {
+            check(try client.diff(id: "s1")?.uncommitted == ["a.go", "new.go"])
         }
         expect(#"{"args":{"commit":"abc","id":"s1","path":"a.md"},"method":"ReadBaseFile"}"#,
                answer: #"{"result":{"ok":true,"commit":"abc"}}"#) {
