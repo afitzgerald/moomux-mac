@@ -904,7 +904,7 @@ private struct FolderProjectHeader: View {
 
 /// Stops the sidebar's table drawing its selection pill, which is grey — the
 /// same tone as a header band. Selection itself is untouched (clicks, arrow
-/// keys, `List(selection:)`); the selected row draws its own accent edge.
+/// keys, `List(selection:)`); the selected row draws its own accent background.
 ///
 /// SwiftUI has no switch for this, so it reaches the `NSTableView` behind the
 /// `List`: it walks up from a background view until an ancestor holds one.
@@ -1008,7 +1008,7 @@ private struct ProjectHeader: View {
         // steal the List's selection the way one on a row would.
         let expanded = app.projectExpanded(name)
         // The selected session's row is hidden by this collapse, and its
-        // terminal is still on screen — the header says so with the same edges.
+        // terminal is still on screen — the header says so with the same highlight.
         let holdsSelection = !expanded && app.session(id: app.selectedSessionID).map {
             $0.project == name && (!app.folderView || $0.folder.isEmpty)
         } == true
@@ -1063,7 +1063,7 @@ private struct ProjectHeader: View {
                                    bottomTrailingRadius: r, topTrailingRadius: 12)
                 .fill(Color.primary.opacity(0.1))
                 .padding(.vertical, expanded ? 0 : 1)
-            if holdsSelection { SelectionEdges(height: app.listFontSize * 1.5) }
+            if holdsSelection { SelectionHighlight() }
         }
     }
 }
@@ -1130,11 +1130,9 @@ private struct SessionRow: View {
 
     @Environment(\.controlActiveState) private var activeState
 
-    /// An accent bar on each outer edge of the selected row — the one thing in
-    /// the list that is not grey. Its height follows the list font, and it
-    /// dims with the window: the system's own pill did both.
-    private var selectionEdge: some View {
-        SelectionEdges(height: app.listFontSize * 1.5, dimmed: activeState != .key)
+    /// A brighter accent background marks the selected row and dims with the window.
+    private var selectionHighlight: some View {
+        SelectionHighlight(dimmed: activeState != .key)
     }
 
     var body: some View {
@@ -1167,7 +1165,7 @@ private struct SessionRow: View {
         .padding(.vertical, 2)
         // The system's selection pill is switched off (`NoSelectionHighlight`):
         // it was grey, the same tone as a header band.
-        .listRowBackground(app.selectedSessionID == session.id ? selectionEdge : nil)
+        .listRowBackground(app.selectedSessionID == session.id ? AnyView(selectionHighlight) : nil)
         // `level - 1`: the dot sits straight under its header's icon, not a
         // step in from it — the band is what says which header it belongs to.
         .padding(.leading, SidebarGrid.rowIndent(max(0, level - 1), app.listFontSize))
@@ -1748,21 +1746,11 @@ struct MenuBarContent: View {
     }
 }
 
-/// An accent bar on each outer edge of a row: the selected session's, and the
-/// header that is holding it while collapsed.
-private struct SelectionEdges: View {
-    let height: CGFloat
+/// The selected session's background, shared with its collapsed project header.
+private struct SelectionHighlight: View {
     var dimmed = false
 
     var body: some View {
-        ZStack {
-            Color.accentColor.opacity(dimmed ? 0.05 : 0.1)
-            bar.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 3)
-            bar.frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 3)
-        }
-    }
-
-    private var bar: some View {
-        Capsule().fill(Color.accentColor.opacity(dimmed ? 0.45 : 1)).frame(width: 3, height: height)
+        Color.accentColor.opacity(dimmed ? 0.15 : 0.25)
     }
 }
