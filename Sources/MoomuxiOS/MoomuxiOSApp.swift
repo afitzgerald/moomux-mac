@@ -248,9 +248,10 @@ struct ConnectView: View {
     let scanned: (String) -> Void
     let connect: () -> Void
     @State private var camera: ScanAvailability
-    /// Open from the start when there is an address to show — after a
-    /// Disconnect, say — since hiding the one thing to edit helps nobody.
-    @State private var manual: Bool
+    /// Closed until asked for, even with an address remembered: the fields
+    /// keep it, so opening them after a Disconnect is one tap, and the
+    /// screen stays about the camera.
+    @State private var manual = false
 
     init(endpoint: EndpointStore, paused: Bool, scanned: @escaping (String) -> Void,
          connect: @escaping () -> Void) {
@@ -259,53 +260,42 @@ struct ConnectView: View {
         self.scanned = scanned
         self.connect = connect
         _camera = State(initialValue: .current)
-        _manual = State(initialValue: endpoint.remembered)
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                // Where the code comes from is always said; pointing this
-                // camera at it only when there is a camera to point.
+                // One line under the camera says where the code comes from;
+                // Tailscale is the footnote, since only a first pair needs it.
                 Section {
-                    if !camera.showsViewfinder {
-                        Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings).")
-                    }
                     PairingScanner(camera: $camera, paused: paused, onCode: scanned)
-                }
-
-                Section {
-                    if camera.showsViewfinder {
-                        Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings), and point this camera at the code.")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(camera.showsViewfinder ? "Scan the code from `moomux pair`."
+                                                    : "Run `moomux pair` on your computer.")
+                        Text("Both devices need [Tailscale](https://tailscale.com/download), same account.")
                     }
-                    Text("New here? Install Tailscale on this iPhone and your computer, and sign in to the same account.")
-                    Link("Get Tailscale", destination: URL(string: "https://tailscale.com/download")!)
                 }
 
                 if manual {
                     Section {
-                        TextField("100.71.5.0 or a MagicDNS name", text: $endpoint.host)
+                        TextField("Tailnet address", text: $endpoint.host)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         TextField("Port", value: $endpoint.port, format: .number.grouping(.never))
                             .keyboardType(.numberPad)
-                    } header: {
-                        Text("Core")
-                    } footer: {
-                        Text("The machine running `moomux serve` with `tailnet_listen = true`, "
-                             + "reached over your tailnet. Nothing is stored but the address — the "
-                             + "core authorizes by asking Tailscale who you are.")
+                        // A typed address has no name but itself: the failure
+                        // lines fall back to the host rather than a stale name.
+                        Button("Connect") {
+                            endpoint.name = ""
+                            connect()
+                        }
+                        .disabled(!endpoint.remembered)
                     }
-
-                    // A typed address has no name but itself: the failure
-                    // lines fall back to the host rather than a stale name.
-                    Button("Connect") {
-                        endpoint.name = ""
-                        connect()
-                    }
-                    .disabled(!endpoint.remembered)
                 } else {
-                    Button("Connect manually") { withAnimation { manual = true } }
+                    Section {
+                        Button("Connect manually") { withAnimation { manual = true } }
+                    }
                 }
             }
             .navigationTitle("Moomux")

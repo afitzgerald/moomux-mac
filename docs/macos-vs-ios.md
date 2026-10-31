@@ -292,10 +292,10 @@ register it: it is the computer being paired, not a client.
   neither prompts for access nor starts until launch has decided whether to reconnect: the screen
   is drawn for a frame even when a remembered core is about to replace it. Where it can't run, or
   stops mid-session, the square goes and one line says why: access denied or restricted (with a
-  Settings link), or a device or simulator that can't scan, which points at the Camera app. The
-  `moomux pair` instruction stays either way; only its "point this camera at the code" half
-  follows the camera. Typing an address is under Connect manually, open from the
-  start when one is remembered. A manual Connect clears the name.
+  Settings link), or a device or simulator that can't scan, which points at the Camera app. Under
+  it, two short lines: where the code comes from (`moomux pair`, worded for scanning or not) and
+  that both devices need Tailscale. Typing an address is behind Connect manually, closed even when
+  one is remembered — the fields keep it, so it is one tap away. A manual Connect clears the name.
 - **Two failures, named.** A core that hung up unread (EOF or a reset) is the tailnet listener
   turning away another Tailscale account: "`<name>` refused this iPhone. Sign in to Tailscale here
   with the same account as `<name>`." A connect that failed, timed out or did not resolve, or a
