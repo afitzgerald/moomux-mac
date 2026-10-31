@@ -28,7 +28,7 @@ enum ScanAvailability: Equatable {
 /// It only reports what it read. Whether a code is a pairing link, and asking
 /// before connecting to one, is the app's, on the same path as a link opened
 /// from outside, so a scanned code cannot connect without a tap either. Where
-/// the camera can't run, one line says why instead.
+/// the camera can't run, the square says why instead.
 struct PairingScanner: View {
     @Binding var camera: ScanAvailability
     /// Keeps the camera off, the permission prompt included.
@@ -51,24 +51,25 @@ struct PairingScanner: View {
                     camera = .current
                 }
         case .off:
-            Text("Camera access is off. Allow it in Settings, or connect manually.")
-            Link("Open Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
+            viewfinder(VStack(spacing: 8) {
+                Text("Camera access is off.").foregroundStyle(.secondary)
+                Link("Open Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
+            })
         case .unsupported:
-            Text("This iPhone can't scan here. Scan the code with the Camera app, or connect manually.")
+            viewfinder(Text("Scan the code with the Camera app instead.").foregroundStyle(.secondary))
         }
     }
 
-    /// Square, as wide as the row up to a cap, with no row behind it.
+    /// Square, as wide as the screen up to a cap. The unavailable lines sit
+    /// in it too, so the screen keeps its shape.
     private func viewfinder(_ inside: some View) -> some View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .frame(maxWidth: 320)
-            .overlay { inside }
+            .overlay { inside.multilineTextAlignment(.center).padding() }
             .background(.quaternary)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .frame(maxWidth: .infinity)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
     }
 }
 

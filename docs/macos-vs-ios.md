@@ -280,7 +280,7 @@ register it: it is the computer being paired, not a client.
   so the link wins.
 - **Tailnet hosts only, plus loopback.** `100.64.0.0/10`, `fd7a:115c:a1e0::/48` or `*.ts.net`,
   and loopback so the simulator can be tested through `Scripts/corebridge.py`. Anything else is
-  refused with "This link points outside your tailnet. Use Connect manually if you meant it." A
+  refused with "This link points outside your tailnet. Enter the address manually if you meant it." A
   tailnet with a custom IP pool types the address instead. A port outside 1–65535 refuses rather
   than clamps (D22).
 - **The connect screen leads with a camera.** VisionKit's `DataScannerViewController`, QR only,
@@ -291,11 +291,12 @@ register it: it is the computer being paired, not a client.
   is ignored until it leaves the frame, so Cancel does not bring the alert straight back. It
   neither prompts for access nor starts until launch has decided whether to reconnect: the screen
   is drawn for a frame even when a remembered core is about to replace it. Where it can't run, or
-  stops mid-session, the square goes and one line says why: access denied or restricted (with a
+  stops mid-session, the square stays and says why instead: access denied or restricted (with a
   Settings link), or a device or simulator that can't scan, which points at the Camera app. The
-  `moomux pair` instruction stays either way; only its "point this camera at the code" half
-  follows the camera. Typing an address is under Connect manually, open from the
-  start when one is remembered. A manual Connect clears the name.
+  rest of the screen is one line ("Run `moomux pair` on your computer and scan the code."), an
+  "Enter address manually" button and a "New to Tailscale?" link — nothing else, because the
+  screen is the first thing a new user sees. The address is a sheet, edited as a draft so Cancel
+  keeps the saved one; the camera stops while it is up. A manual Connect clears the name.
 - **Two failures, named.** A core that hung up unread (EOF or a reset) is the tailnet listener
   turning away another Tailscale account: "`<name>` refused this iPhone. Sign in to Tailscale here
   with the same account as `<name>`." A connect that failed, timed out or did not resolve, or a

@@ -232,14 +232,17 @@ final class EndpointStore {
     /// mistyped 458760 into 65535 and connects *there*, so the only symptom
     /// of a fat-fingered field is "cannot connect" pointing at the wrong
     /// thing. Refusing it keeps Connect disabled instead.
-    var remembered: Bool { !host.trimmed.isEmpty && (1...65535).contains(port) }
+    var remembered: Bool { Self.valid(host: host, port: port) }
+
+    static func valid(host: String, port: Int) -> Bool { !host.trimmed.isEmpty && (1...65535).contains(port) }
 
     var resolved: MoomuxClient.Endpoint {
         .tcp(host: host.trimmed, port: UInt16(clamping: port))
     }
 }
 
-/// Leads with the camera; typing an address is the fallback.
+/// The camera, one line, and the address behind a button: pairing is the way
+/// in, typing is the fallback.
 struct ConnectView: View {
     @Bindable var endpoint: EndpointStore
     /// Keeps the camera off: at launch, and while an alert or a sheet is up.
@@ -247,68 +250,73 @@ struct ConnectView: View {
     /// What the camera read, unfiltered: the app decides what is a link.
     let scanned: (String) -> Void
     let connect: () -> Void
-    @State private var camera: ScanAvailability
-    /// Open from the start when there is an address to show — after a
-    /// Disconnect, say — since hiding the one thing to edit helps nobody.
-    @State private var manual: Bool
+    @State private var camera = ScanAvailability.current
+    @State private var manual = false
 
-    init(endpoint: EndpointStore, paused: Bool, scanned: @escaping (String) -> Void,
-         connect: @escaping () -> Void) {
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                PairingScanner(camera: $camera, paused: paused || manual, onCode: scanned)
+                Text("Run `moomux pair` on your computer and scan the code.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Enter address manually") { manual = true }
+                Link("New to Tailscale?", destination: URL(string: "https://tailscale.com/download")!)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding()
+            .navigationTitle("Moomux")
+            .sheet(isPresented: $manual) {
+                ManualConnectSheet(endpoint: endpoint, connect: connect)
+            }
+        }
+    }
+}
+
+/// Host and port, edited as a draft so Cancel leaves the saved ones alone.
+private struct ManualConnectSheet: View {
+    let endpoint: EndpointStore
+    let connect: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var host: String
+    @State private var port: Int
+
+    init(endpoint: EndpointStore, connect: @escaping () -> Void) {
         self.endpoint = endpoint
-        self.paused = paused
-        self.scanned = scanned
         self.connect = connect
-        _camera = State(initialValue: .current)
-        _manual = State(initialValue: endpoint.remembered)
+        _host = State(initialValue: endpoint.host)
+        _port = State(initialValue: endpoint.port)
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                // Where the code comes from is always said; pointing this
-                // camera at it only when there is a camera to point.
-                Section {
-                    if !camera.showsViewfinder {
-                        Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings).")
-                    }
-                    PairingScanner(camera: $camera, paused: paused, onCode: scanned)
-                }
-
-                Section {
-                    if camera.showsViewfinder {
-                        Text("On your computer, run `moomux pair` (or use Pair iPhone in the Mac app's Settings), and point this camera at the code.")
-                    }
-                    Text("New here? Install Tailscale on this iPhone and your computer, and sign in to the same account.")
-                    Link("Get Tailscale", destination: URL(string: "https://tailscale.com/download")!)
-                }
-
-                if manual {
-                    Section {
-                        TextField("100.71.5.0 or a MagicDNS name", text: $endpoint.host)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        TextField("Port", value: $endpoint.port, format: .number.grouping(.never))
-                            .keyboardType(.numberPad)
-                    } header: {
-                        Text("Core")
-                    } footer: {
-                        Text("The machine running `moomux serve` with `tailnet_listen = true`, "
-                             + "reached over your tailnet. Nothing is stored but the address — the "
-                             + "core authorizes by asking Tailscale who you are.")
-                    }
-
+                TextField("100.71.5.0 or a MagicDNS name", text: $host)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Port", value: $port, format: .number.grouping(.never))
+                    .keyboardType(.numberPad)
+            }
+            .navigationTitle("Address")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
                     // A typed address has no name but itself: the failure
                     // lines fall back to the host rather than a stale name.
                     Button("Connect") {
+                        endpoint.host = host
+                        endpoint.port = port
                         endpoint.name = ""
+                        dismiss()
                         connect()
                     }
-                    .disabled(!endpoint.remembered)
-                } else {
-                    Button("Connect manually") { withAnimation { manual = true } }
+                    .disabled(!EndpointStore.valid(host: host, port: port))
                 }
             }
-            .navigationTitle("Moomux")
         }
+        .presentationDetents([.medium])
     }
 }
