@@ -2343,9 +2343,12 @@ public final class AppState {
     private func file(_ session: Session, into folder: String, after: String?, before: String?) {
         let group = Set(allSessions(of: session.project).filter { $0.folder == folder }.map(\.id))
             .union([session.id])
+        let currentOrder = sessionOrder(of: session.project)
         let order = config?.sortRecentFirst == true ? nil
-            : Layout.place(sessionOrder(of: session.project), group: group, id: session.id,
-                           after: after, before: before)
+            : folder.isEmpty
+                ? Layout.insert(currentOrder, id: session.id, after: after, before: before)
+                : Layout.place(currentOrder, group: group, id: session.id,
+                               after: after, before: before)
         mutate(folder.isEmpty ? "Remove from folder" : "Move to folder") { client in
             try client.setSessionFolder(id: session.id, folder: folder)
             if let order { try client.reorderSessions(order) }

@@ -257,6 +257,19 @@ public enum Layout {
         return out == order ? nil : out
     }
 
+    /// Move one session anywhere in the project's full order. Used when a
+    /// session leaves a folder and the drop gap is after that folder's block.
+    public static func insert(_ order: [String], id: String,
+                              after: String? = nil, before: String? = nil) -> [String]? {
+        guard let from = order.firstIndex(of: id) else { return nil }
+        var result = order
+        result.remove(at: from)
+        guard let at = after.flatMap({ result.firstIndex(of: $0).map { $0 + 1 } })
+                ?? before.flatMap({ result.firstIndex(of: $0) }) else { return nil }
+        result.insert(id, at: at)
+        return result == order ? nil : result
+    }
+
     /// One row of a sidebar as a drag reads it: a session, or a header (no
     /// `session`) for a folder, a project, or both. A folder header in the
     /// folder-first lens spans projects and has `project` empty.
@@ -303,7 +316,19 @@ public enum Layout {
         let folder: String
         if let above, above.session == nil {
             folder = above.folder
-        } else if member(of: dragged.folder, above) != nil || member(of: dragged.folder, below) != nil {
+        } else if !dragged.folder.isEmpty,
+                  member(of: dragged.folder, above) != nil,
+                  member(of: dragged.folder, below) == nil {
+            // The gap after the last visible member is outside the folder.
+            // `onMove` reports the previous member as `above`, so treating
+            // that row as the destination would leave the session filed. Find
+            // the next loose session so unfiling also preserves the drop spot.
+            let nextLoose = rest.dropFirst(at).first {
+                $0.folder.isEmpty && $0.project == dragged.project && $0.session != nil
+            }?.session
+            return .file("", after: above?.session, before: nextLoose)
+        } else if dragged.folder.isEmpty,
+                  member(of: dragged.folder, above) != nil || member(of: dragged.folder, below) != nil {
             return .place(after: member(of: dragged.folder, above),
                           before: member(of: dragged.folder, below))
         } else if let above {
@@ -438,6 +463,10 @@ public enum Layout {
         assert(move(slots, from: 0, to: 4) == .place(after: nil, before: "d"),
                "after the last member, next to a loose sibling, stays loose")
         assert(move(slots, from: 3, to: 2) == .place(after: nil, before: "b"))
+        assert(move(slots, from: 2, to: 4) == .file("", after: "c", before: "d"),
+               "below its folder's last member, it leaves the folder")
+        assert(insert(order, id: "b", after: "c") == ["a", "c", "b", "d", "e"])
+        assert(insert(order, id: "b", before: "c") == nil, "already there")
         assert(move(slots, from: 2, to: 0) == .file("", after: nil, before: "a"), "the top of the section is loose")
         assert(move(slots, from: 1, to: 4) == .none, "a header does not move")
         // Folder-first: a project subheader files into its folder, and the
