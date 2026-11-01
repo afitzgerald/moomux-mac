@@ -546,12 +546,16 @@ struct AttachedTerminal: UIViewRepresentable {
 
         @objc func endFloatingCursor() { floatingStart = nil }
 
-        /// Kept past `super`: with inline selection on, a single tap is a
-        /// recognizer that fires only once a double tap has failed, well
-        /// after `touchesEnded` returns. Consumed by the toggle it leads to.
-        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        /// Where the touch began, kept for the toggle it may lead to. Not from
+        /// `touchesEnded`: with inline selection on, the single tap is a
+        /// recognizer with `delaysTouchesEnded`, so the view only ever gets
+        /// `touchesCancelled` for a tap. Only a long press delivered
+        /// `touchesEnded`, which left its point behind for the next tap. That
+        /// is why links opened only after a hold, and every other tap toggled
+        /// the keyboard instead.
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             tap = touches.first?.location(in: self)
-            super.touchesEnded(touches, with: event)
+            super.touchesBegan(touches, with: event)
         }
 
         override func toggleSoftwareKeyboard() {
