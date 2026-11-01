@@ -83,6 +83,13 @@
 	<array>
 		<string>app.moomux.Moomux.refresh</string>
 	</array>
+	<!-- The Browser screen opens the computer's dev servers, which are plain
+	     http. Web content only: the app's own connections keep ATS. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>

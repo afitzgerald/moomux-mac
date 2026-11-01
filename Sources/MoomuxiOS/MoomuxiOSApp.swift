@@ -1,6 +1,7 @@
 import BackgroundTasks
 import MoomuxKit
 import SwiftUI
+import WebKit
 
 /// The iPhone front end.
 ///
@@ -133,6 +134,8 @@ struct MoomuxiOSApp: App {
         computers.saved.forget(id)
         BackgroundRefresh.others[id] = nil
         Notifier.forget(id.uuidString)
+        // The Browser's cookies and logins for it; a re-pair gets a new id.
+        Task { try? await WKWebsiteDataStore.remove(forIdentifier: id) }
         guard app?.notificationKey == id.uuidString else { return }
         app?.stop()
         app = nil

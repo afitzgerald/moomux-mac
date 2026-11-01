@@ -31,6 +31,7 @@ enum Route: Hashable {
     case terminal(Session.ID)
     case changes(Session.ID)
     case fileDiff(Session.ID, String)
+    case browser
 }
 
 // MARK: - List
@@ -61,6 +62,7 @@ struct SessionListView: View {
     /// file list, and `-diffFile <path>` to one file in it.
     @State private var path: [Route] = {
         let defaults = UserDefaults.standard
+        if defaults.bool(forKey: "browser") { return [.browser] }
         guard let id = defaults.string(forKey: "openSession") else { return [] }
         if defaults.bool(forKey: "attach") { return [.detail(id), .terminal(id)] }
         if let file = defaults.string(forKey: "diffFile") {
@@ -307,6 +309,8 @@ struct SessionListView: View {
                 case let .fileDiff(id, file):
                     // Past the Changes list too: at the end of the files it has nothing left to offer.
                     FileDiffScreen(app: app, sessionID: id, path: file) { path.removeLast(min(2, path.count)) }
+                case .browser:
+                    if let computer = computers.saved.current { BrowserScreen(computer: computer) }
                 }
             }
             .searchable(text: $app.searchQuery, prompt: "Search names")
@@ -330,6 +334,8 @@ struct SessionListView: View {
                         Toggle("Show Project Emoji", isOn: $app.showProjectEmoji)
                         Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
                         Toggle("Open New Sessions", isOn: $app.autoFocusNewSession)
+                        Button("Browser", systemImage: "safari") { path.append(.browser) }
+                            .disabled(computers.saved.current == nil)
                         // Off in a build with no notes baked in (`make ios`).
                         Button("What's New") { showingNotes = true }
                             .disabled(WhatsNew.releases.isEmpty)
