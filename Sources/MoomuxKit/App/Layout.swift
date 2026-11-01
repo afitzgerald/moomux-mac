@@ -37,6 +37,30 @@ public enum Layout {
         }
     }
 
+    /// One line of the project-first lens, both apps: a project header, or a
+    /// row under one. The lens is one flat `ForEach` of these, headers
+    /// included, because `onMove` cannot carry a row from one `ForEach` to
+    /// another and a header has to be a row to be dragged among projects.
+    public enum ProjectFirstRow: Identifiable {
+        /// `hidden` is what a collapsed header is hiding: spoken, never drawn.
+        case project(String, hidden: Int)
+        case row(SidebarRow, project: String)
+
+        public var id: String {
+            switch self {
+            case let .project(name, _): "project:\(name)"
+            case let .row(row, _): row.id
+            }
+        }
+
+        public var slot: MoveSlot {
+            switch self {
+            case let .project(name, _): MoveSlot(project: name)
+            case let .row(row, project): row.slot(in: project)
+            }
+        }
+    }
+
     /// The rows to draw for one project: the core's layout, minus the sessions
     /// this window is filtering out.
     ///
@@ -280,6 +304,40 @@ public enum Layout {
         public init(session: String? = nil, folder: String = "", project: String = "") {
             self.session = session; self.folder = folder; self.project = project
         }
+
+        /// A whole project's header — not a folder's, nor a project subheader
+        /// inside a folder.
+        public var isProjectHeader: Bool { session == nil && folder.isEmpty && !project.isEmpty }
+    }
+
+    /// The `MoveProject` delta for dragging the project header at `rows[from]`
+    /// to list position `to`, against `order` (every project, config order),
+    /// or nil when it changes nothing. The project lands after the last
+    /// project header above the drop — dropped among another project's
+    /// sessions it goes after that project — or before the first one when
+    /// none is above. Neighbours rather than counts, so projects this list is
+    /// not drawing keep their places.
+    public static func moveProject(_ rows: [MoveSlot], from: Int, to: Int,
+                                   order: [String]) -> Int? {
+        guard rows.indices.contains(from), rows[from].isProjectHeader else { return nil }
+        let name = rows[from].project
+        var rest = rows
+        rest.remove(at: from)
+        let at = min(to > from ? to - 1 : to, rest.count)
+        guard let old = order.firstIndex(of: name) else { return nil }
+        var others = order
+        others.remove(at: old)
+        let new: Int
+        if let after = rest[..<at].last(where: \.isProjectHeader),
+           let i = others.firstIndex(of: after.project) {
+            new = i + 1
+        } else if let before = rest[at...].first(where: \.isProjectHeader),
+                  let i = others.firstIndex(of: before.project) {
+            new = i
+        } else {
+            return nil
+        }
+        return new == old ? nil : new - old
     }
 
     public enum Move: Equatable {
@@ -309,6 +367,10 @@ public enum Layout {
         let at = to > from ? to - 1 : to
         let above = at > 0 && at - 1 < rest.count ? rest[at - 1] : nil
         let below = at < rest.count ? rest[at] : nil
+        // Under another project's header — the project-first list is one
+        // flat list with every project in it — is no place for this session.
+        if let owner = rest[..<at].last(where: \.isProjectHeader),
+           owner.project != dragged.project { return .none }
         func member(of folder: String, _ row: MoveSlot?) -> String? {
             guard let row, row.folder == folder, row.project == dragged.project else { return nil }
             return row.session
@@ -492,6 +554,23 @@ public enum Layout {
                       MoveSlot(session: "d", project: "p")]
         assert(move(folded, from: 0, to: 2) == .file("work", after: nil, before: nil),
                "under a collapsed folder's header")
+
+        // The flat project-first list, both apps: [p] a, [q] b, [r] c, with
+        // hidden project h between q and r in config order.
+        let flat = [MoveSlot(project: "p"), MoveSlot(session: "a", project: "p"),
+                    MoveSlot(project: "q"), MoveSlot(session: "b", project: "q"),
+                    MoveSlot(project: "r"), MoveSlot(session: "c", project: "r")]
+        let projects = ["p", "q", "h", "r"]
+        assert(move(flat, from: 1, to: 4) == .none, "into another project's section")
+        assert(move(flat, from: 1, to: 3) == .none, "under another project's header")
+        assert(move(flat, from: 1, to: 0) == .none, "above its own header")
+        assert(move(flat, from: 3, to: 3) == .none)
+        assert(moveProject(flat, from: 0, to: 6, order: projects) == 3, "to the end, past h")
+        assert(moveProject(flat, from: 0, to: 4, order: projects) == 1, "among q's sessions: after q")
+        assert(moveProject(flat, from: 4, to: 0, order: projects) == -3, "to the top")
+        assert(moveProject(flat, from: 4, to: 2, order: projects) == -2, "between p and q")
+        assert(moveProject(flat, from: 2, to: 3, order: projects) == nil, "dropped where it was")
+        assert(moveProject(flat, from: 1, to: 6, order: projects) == nil, "a session is not a project")
 
         folderDemo()
     }

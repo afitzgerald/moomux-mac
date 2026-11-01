@@ -939,7 +939,10 @@ Decisions, not oversights. Don't "fix" these without being asked.
   and failing that the row above decides — a folder member files into that folder, a loose session
   takes it out. A loose block is
   one project's, so another project's refuses the drop, and so does the top of the folder-first
-  list. Headers are `.moveDisabled` on both.
+  list. Folder headers are `.moveDisabled` on the Mac (project headers drag there, see below), and
+  no header is on the iPhone: there it also refuses a drop at the header's own index, so a session dragged *down* onto or under a folder header went
+  nowhere, and a collapsed folder could only be filled from below. A lifted header moves nothing
+  (`Layout.move` is `.none`); a folder header's long press is still its context menu.
   - **The Mac also drops *onto* a header** (`HeaderDrop`, `AppState.drop(_:into:project:)`),
     highlighting it: the header is the one container, and Finder files into a folder that way. The
     row carries its id through `.itemProvider`, which rides along on `onMove`'s drag; `.draggable`
@@ -954,7 +957,10 @@ Decisions, not oversights. Don't "fix" these without being asked.
     `List`-wide one and `onInsert` all logged nothing while a lifted row hovered over them, and the
     search field took the same drag.
   The cost is that a drag carries one session, on both.
-  Projects stay on Settings' chevron buttons — `MoveProject` takes a ±1 delta.
+  Both apps drag a project header (`Layout.moveProject`), so the project-first list is one flat
+  `ForEach` of `AppState.projectFirstRows` with the headers as rows, not a `ForEach` or section
+  per project; Settings' chevron buttons still work on the Mac. A drag sends single `MoveProject` steps: the core *swaps* for a larger delta
+  (measured, [a, b, c] by 2 gave [c, b, a]).
 - **The project sheet follows New Session's shape.** Repo path first, with a Choose… folder
   picker; the name is optional and defaults to the folder's (`ProjectForm.nameToSend` — whitespace
   becomes hyphens, nothing else is touched); base branch, then agent and skip-permissions, on the

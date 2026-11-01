@@ -704,7 +704,8 @@ read alike. The quip moved to the pane's title, where it describes the session y
 
 **D43. Plain rows for Mac headers, `Section` headers on the phone.** A Mac sidebar `Section` keeps
 its own hidden disclosure state, which falls out of phase with the core's collapsed flag at
-launch. The phone's `Section` has no such state. The folder-first lens is one flat list on both.
+launch. The phone's `Section` has no such state, but the phone now uses plain rows too, so a
+project header can be dragged (see D44's last paragraph). Both lenses are one flat list on both.
 Both lay rows out on `SidebarGrid`'s columns and rotate one chevron rather than swapping glyphs of
 different widths.
 
@@ -718,7 +719,7 @@ different widths.
 | Details | inspector ⌘I | trailing swipe; ⋯ in the pane |
 | Review | ⌘G, context menu, detail | leading swipe, detail |
 | View changes (native diff) | none (D46) | leading swipe, pane toolbar, detail |
-| File into a folder | context menu → Folder, drag onto a folder header, under it or between its members | drag under a folder header or between its members; detail, pane ⋯ → Folder |
+| File into a folder | context menu → Folder, drag onto a folder header, under it or between its members | drag onto or under a folder header, from above or below, or between its members; detail, pane ⋯ → Folder |
 | Rename | Edit… ⇧⌘R (with agent) | detail, pane ⋯ → Rename… (name only) |
 | Tags | ⌘T, context menu | detail, pane ⋯ → Tags… |
 | Delete | ⌘⌫, context menu | detail, pane ⋯ |
@@ -726,6 +727,7 @@ different widths.
 | New Folder | project header, row → Folder | detail, pane ⋯ → Folder → New Folder… |
 | Diff tool, Copy Path, Move Up/Down | yes | none, deliberately |
 | Reorder by drag, both lenses | drop between rows (`onMove`) | long press, drop between rows (`onMove`) |
+| Reorder projects | drag a project header, or Settings → Projects chevron buttons | long press a project header, drop above or below another project |
 | Ticket, Pull request, Open in MergeRight | inspector, context menu | detail, pane ⋯ |
 | Folder header menu | Rename, Archive All, Unarchive All, Delete | the same (long press) |
 
@@ -743,6 +745,15 @@ The long press on a phone row belongs to the list's `onMove` drag (no `.draggabl
 swipe because two things on one long press means one of them never fires. Folder headers are row
 content with `onTapGesture`, not a `Button`, on both, because a `Button` swallows the long press
 that `.contextMenu` needs.
+
+Project headers are rows in one flat list on both, built once by `AppState.projectFirstRows`: `onMove` carries a row only within one `ForEach`, and only a row can be dragged. So a
+project is reordered by dragging its header, which lands after the last project header above the
+drop (`Layout.moveProject`) and is saved as single `MoveProject` steps, since the core swaps
+rather than moves for a larger delta. The same flat list is why a session dropped under another
+project's header is refused. No header is `.moveDisabled` on the phone: there that also refuses a
+drop at the header's index, which kept a session dragged down from ever landing in a folder.
+The Mac keeps its folder headers `.moveDisabled`, and Settings' chevron buttons as well. This does
+not reopen D3, since it changes only the order the core already serves.
 
 **D45. New Session: the same form and the same single `CreateSession` call; different seeding and
 exits.** Both build on `NewSessionForm` and the core's `AgentOptions`.

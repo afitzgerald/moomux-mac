@@ -1015,6 +1015,17 @@ public final class AppState {
                            shown: shownSessions(of: project, in: sessions), searching: searching)
     }
 
+    /// What the project-first sidebar draws, both apps: each project's header,
+    /// then its `sidebarRows`, in one flat list (see `Layout.ProjectFirstRow`).
+    public var projectFirstRows: [Layout.ProjectFirstRow] {
+        sessionsByProject.flatMap { group in
+            [Layout.ProjectFirstRow.project(group.project, hidden: group.sessions.count
+                - shownSessions(of: group.project, in: group.sessions).count)]
+                + sidebarRows(of: group.project, in: group.sessions)
+                    .map { .row($0, project: group.project) }
+        }
+    }
+
     /// Whether the sidebar is drawing the folder-first layout: the preference,
     /// and a core new enough to have sent one. A stale core would otherwise
     /// switch the sidebar to an empty list.
@@ -2322,11 +2333,26 @@ public final class AppState {
 
     /// A sidebar drag, both apps: `onMove` over the rows the list is drawing,
     /// which either refiles the session or reorders it among its siblings
-    /// (`Layout.move`).
+    /// (`Layout.move`) — or, for a project header, reorders the projects
+    /// (`Layout.moveProject`).
     /// `rows` must be the array the `ForEach` drew, not a fresh copy: `from`
     /// and `to` index that one, and a snapshot can land mid-drag. A drag
     /// carries one row, so `from` holds one index.
     public func move(_ rows: [Layout.MoveSlot], from: IndexSet, to: Int) {
+        if let from = from.first, rows.indices.contains(from), rows[from].isProjectHeader {
+            guard let delta = Layout.moveProject(rows, from: from, to: to,
+                                                 order: config?.orderedProjectNames ?? [])
+            else { return }
+            // One step at a time: the core swaps with the project `delta`
+            // away rather than moving past the ones between (measured, a
+            // delta of 2 on [a, b, c] gave [c, b, a]).
+            let name = rows[from].project
+            mutate("Move project") { client in
+                for _ in 0..<abs(delta) { try client.moveProject(name: name, delta: delta.signum()) }
+                return nil
+            }
+            return
+        }
         guard let from = from.first, rows.indices.contains(from), let id = rows[from].session,
               let session = session(id: id) else { return }
         switch Layout.move(rows, from: from, to: to) {
