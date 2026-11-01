@@ -149,8 +149,17 @@ public enum Layout {
     /// subheader's (this window's, since one project appears under every folder
     /// it has members in and folding them all at once is not what a disclosure
     /// triangle means).
+    ///
+    /// `subheaders: false` drops the project subheaders inside folders and
+    /// draws their sessions one level in, straight under the folder. Their
+    /// local folds go with them — a group folded with no header left to
+    /// unfold it would be sessions gone with no way back. The loose block
+    /// keeps its project headers: they are what tells its projects apart.
     public static func folderRows(_ layout: [FolderRow], shown: [Session], searching: Bool,
-                                  collapsedGroups: Set<String> = []) -> [FolderSidebarRow] {
+                                  collapsedGroups: Set<String> = [],
+                                  subheaders: Bool = true) -> [FolderSidebarRow] {
+        let collapsedGroups = subheaders ? collapsedGroups
+            : collapsedGroups.filter { $0.hasPrefix("\u{0}") }
         let sessions = Dictionary(shown.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // What each header has in *this* view — the core's own counts are of
         // every member, which overstates a filtered or searched list.
@@ -170,7 +179,8 @@ public enum Layout {
                 out.append(.folder(name: row.folder, collapsed: row.collapsed && !searching,
                                    count: count))
             case .project:
-                guard !(row.hidden && !searching), let count = members[group] else { continue }
+                guard subheaders || row.folder.isEmpty,
+                      !(row.hidden && !searching), let count = members[group] else { continue }
                 // `collapsedGroups` and only that — it is all this chevron
                 // writes. The folder header is where the folder's collapse is
                 // undone.
@@ -185,8 +195,8 @@ public enum Layout {
                 else { continue }
                 // Always one level in from whatever header it sits under: a
                 // project subheader inside a folder (two levels), or the loose
-                // block's own project header (one).
-                out.append(.session(session, indent: row.folder.isEmpty ? 1 : 2))
+                // block's own project header or a subheader-less folder (one).
+                out.append(.session(session, indent: row.folder.isEmpty || !subheaders ? 1 : 2))
             }
         }
         return out
@@ -379,8 +389,11 @@ public enum Layout {
         if let above, above.session == nil {
             folder = above.folder
         } else if !dragged.folder.isEmpty,
-                  member(of: dragged.folder, above) != nil,
+                  let after = member(of: dragged.folder, above),
                   member(of: dragged.folder, below) == nil {
+            // Still inside the folder — another project's member or subheader
+            // is next — so this is the end of its own group, not a way out.
+            if below?.folder == dragged.folder { return .place(after: after, before: nil) }
             // The gap after the last visible member is outside the folder.
             // `onMove` reports the previous member as `above`, so treating
             // that row as the destination would leave the session filed. Find
@@ -388,7 +401,7 @@ public enum Layout {
             let nextLoose = rest.dropFirst(at).first {
                 $0.folder.isEmpty && $0.project == dragged.project && $0.session != nil
             }?.session
-            return .file("", after: above?.session, before: nextLoose)
+            return .file("", after: after, before: nextLoose)
         } else if dragged.folder.isEmpty,
                   member(of: dragged.folder, above) != nil || member(of: dragged.folder, below) != nil {
             return .place(after: member(of: dragged.folder, above),
@@ -542,6 +555,14 @@ public enum Layout {
         assert(move(lens, from: 2, to: 5) == .file("", after: "a", before: nil), "below a loose session, it leaves the folder")
         assert(move(lens, from: 4, to: 5) == .none, "dropped where it started")
         assert(move(lens, from: 2, to: 0) == .none, "above every folder is nowhere")
+        // Without subheaders a folder's projects run straight into each
+        // other: the gap after one project's last member is still the folder.
+        let flat = [MoveSlot(folder: "work"),
+                    MoveSlot(session: "a", folder: "work", project: "p"),
+                    MoveSlot(session: "a2", folder: "work", project: "p"),
+                    MoveSlot(session: "b", folder: "work", project: "q")]
+        assert(move(flat, from: 1, to: 3) == .place(after: "a2", before: nil),
+               "the end of its project's run, not out of the folder")
         // b is project q's here: p's loose block is no place for it.
         var other = lens
         other[1].project = "q"
@@ -641,6 +662,17 @@ public enum Layout {
                 assert(hidden == (name == "one" ? 1 : 0), "\(name) \(hidden)")
             }
         }
+        // No subheaders: folder members sit one level in, a subheader's fold
+        // no longer hides anything, and the loose block keeps its headers
+        // and its core-backed fold.
+        let flat = folderRows(layout(collapsed: false), shown: all, searching: false,
+                              collapsedGroups: [groupKey(folder: "work", project: "one"),
+                                                groupKey(folder: "", project: "two")],
+                              subheaders: false)
+        assert(flat.map(\.id) == ["folder:work", "a", "b", "sub:/one", "c", "sub:/two"],
+               "\(flat.map(\.id))")
+        assert(flat.allSatisfy { if case let .session(_, indent) = $0 { return indent == 1 }
+                                 return true })
         // A folder folding hides its subheaders and sessions, and counts all.
         let deep = folderRows(layout(collapsed: true), shown: all, searching: false)
         assert(!deep.map(\.id).contains("a"), "\(deep.map(\.id))")

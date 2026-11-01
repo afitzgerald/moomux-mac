@@ -824,6 +824,7 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 | project collapsed, folder collapsed | core | ✅ | ✅ (both toggle the same flag) |
 | group by folder (`folderFirst`) | device | ✅ toolbar, ⇧⌘F | ✅ ⋯ menu |
 | folder-subheader folding (`folderProjectCollapsed`) | device | ✅ | ✅ |
+| project subheaders in folders (`showFolderProjects`) | device | ✅ Settings → Appearance | ✅ ⋯ menu |
 | open PRs in MergeRight (`mergeRightLinks`) | device | ✅ Settings → General | ✅ ⋯ menu |
 | select a new session when created (`autoFocusNewSession`) | device | ✅ Settings → General | n/a: always on (D45) |
 | diff tool (`diffTool`) | device | ✅ | n/a (no `Process`) |

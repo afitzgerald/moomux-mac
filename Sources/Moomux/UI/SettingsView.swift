@@ -702,12 +702,15 @@ private struct AppearancePane: View {
                 .pickerStyle(.segmented)
                 Toggle("Show project emoji", isOn: Binding(
                     get: { app.showProjectEmoji }, set: { app.showProjectEmoji = $0 }))
+                Toggle("Show projects inside folders", isOn: Binding(
+                    get: { app.showFolderProjects }, set: { app.showFolderProjects = $0 }))
             } header: {
                 Text("Session list")
             } footer: {
                 Text("Font and size set the whole sidebar, headers included; Side puts it on "
                      + "either edge of the window. This app only — the TUI renders in whatever "
-                     + "font your terminal is set to.")
+                     + "font your terminal is set to. Projects inside folders applies when the list is "
+                     + "grouped by folder.")
                 .font(.caption)
             }
 
