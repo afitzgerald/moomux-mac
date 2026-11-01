@@ -333,6 +333,7 @@ struct SessionListView: View {
                         Toggle("Archived Only", isOn: $app.showArchived)
                         Toggle("Show Project Emoji", isOn: $app.showProjectEmoji)
                         Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
+                        Toggle("Open New Sessions", isOn: $app.autoFocusNewSession)
                         Button("Browser", systemImage: "safari") { path.append(.browser) }
                             .disabled(computers.saved.current == nil)
                         // Off in a build with no notes baked in (`make ios`).

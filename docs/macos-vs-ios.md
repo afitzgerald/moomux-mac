@@ -773,11 +773,11 @@ exits.** Both build on `NewSessionForm` and the core's `AgentOptions`.
   and Create waits until one is chosen, because a phone has no selection and defaulting to the
   first project put every session there unless you remembered to change it.
 - **Closing.** Both close on Create and report progress through `busy`.
-- **Focus after create.** The Mac selects the new session while `autoFocusNewSession` is on
-  (§J). The phone always goes to it, with no control to turn that off: on a phone, landing in
-  the session you just made is the point of making it. The one exception is that the user must
-  still be on the list (`focus: { path.isEmpty }`), because a create takes tens of seconds and a
-  jump would detach whatever pane they are typing in.
+- **Focus after create.** Both go to the new session while `autoFocusNewSession` is on (§J):
+  Settings → General on the Mac, the ⋯ menu on the phone. It defaults to on, and each device
+  keeps its own answer. The phone also requires the user to still be on the list
+  (`focus: { path.isEmpty }`), because a create takes tens of seconds and a jump would detach
+  whatever pane they are typing in.
 - **Dismissal.** The phone disables swipe-to-dismiss once anything is typed or uploading.
 - **The prompt's pill.** Both apps put one row under the prompt, the same view (`PromptBar`): a
   glass pill of Attach (a menu of Photos and Files, as on the key bar) and Snippets, then one
@@ -848,7 +848,7 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 | folder-subheader folding (`folderProjectCollapsed`) | device | ✅ | ✅ |
 | project subheaders in folders (`showFolderProjects`) | device | ✅ Settings → Appearance | ✅ ⋯ menu |
 | open PRs in MergeRight (`mergeRightLinks`) | device | ✅ Settings → General | ✅ ⋯ menu |
-| select a new session when created (`autoFocusNewSession`) | device | ✅ Settings → General | n/a: always on (D45) |
+| select a new session when created (`autoFocusNewSession`) | device | ✅ Settings → General | ✅ ⋯ menu (D45) |
 | diff tool (`diffTool`) | device | ✅ | n/a (no `Process`) |
 | sidebar font (`listFontFamily`, `listFontSize`) | device | ✅ Settings → Appearance | n/a |
 | sidebar on the right (`sidebarOnRight`) | device | ✅ Settings → Appearance | n/a (no side-by-side list) |
