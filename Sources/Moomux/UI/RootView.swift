@@ -760,47 +760,39 @@ private struct SessionList: View {
         }
     }
 
+    /// `AppState.projectFirstRows`: one flat list, headers as rows, so a
+    /// project header drags among the others the way the iPhone's does.
     @ViewBuilder private var projectFirst: some View {
-        ForEach(app.sessionsByProject, id: \.project) { group in
-            // Not `Section`: a sidebar section keeps its *own* hidden
-            // disclosure state, a click on the header drives that as well
-            // as ours, and the two fall out of phase the moment a project
-            // is collapsed at launch — SwiftUI starts expanded, so the
-            // first click on a folded project expanded ours and collapsed
-            // its, and the rows stayed away. Plain rows have no such
-            // state. Both measured.
-            ProjectHeader(
-                name: group.project,
-                hidden: group.sessions.count - app.shownSessions(
-                    of: group.project, in: group.sessions
-                ).count
-            )
-            // Untagged, but the List will still "select" it: a click in
-            // the row's leading inset misses the header's own
-            // `contentShape`, falls through, highlights the row and nils
-            // the session selection. Two outcomes for one row, and one of
-            // them threw away state.
-            .selectionDisabled()
-            // The core lays the rows out (`sessionview.Rows`); this walks
-            // them. A folder header is a plain row for the same reason a
-            // project header is — a selectable row would take the List's
-            // selection, and there is no session behind it.
-            let rows = app.sidebarRows(of: group.project, in: group.sessions)
-            ForEach(rows) { row in
-                switch row {
-                case let .folder(name, collapsed, count):
-                    FolderHeader(project: group.project, name: name,
-                                 collapsed: collapsed, count: count)
-                        .selectionDisabled()
-                        .moveDisabled(true)
-                case let .session(session, folder):
-                    // One level in from its header, whichever it is: the
-                    // project header, or a folder header one level in itself.
-                    SessionRow(session: session, level: folder.isEmpty ? 1 : 2).tag(session.id)
-                }
+        // Not `Section`: a sidebar section keeps its *own* hidden disclosure
+        // state, a click on the header drives that as well as ours, and the
+        // two fall out of phase the moment a project is collapsed at launch —
+        // SwiftUI starts expanded, so the first click on a folded project
+        // expanded ours and collapsed its, and the rows stayed away. Plain
+        // rows have no such state. Both measured.
+        let rows = app.projectFirstRows
+        ForEach(rows) { row in
+            switch row {
+            case let .project(name, hidden):
+                // Untagged, but the List will still "select" it: a click in
+                // the row's leading inset misses the header's own
+                // `contentShape`, falls through, highlights the row and nils
+                // the session selection. Two outcomes for one row, and one of
+                // them threw away state.
+                ProjectHeader(name: name, hidden: hidden).selectionDisabled()
+            case let .row(.folder(name, collapsed, count), project):
+                // A plain row for the same reason a project header is — a
+                // selectable row would take the List's selection, and there
+                // is no session behind it.
+                FolderHeader(project: project, name: name, collapsed: collapsed, count: count)
+                    .selectionDisabled()
+                    .moveDisabled(true)
+            case let .row(.session(session, folder), _):
+                // One level in from its header, whichever it is: the project
+                // header, or a folder header one level in itself.
+                SessionRow(session: session, level: folder.isEmpty ? 1 : 2).tag(session.id)
             }
-            .onMove { app.move(rows.map { $0.slot(in: group.project) }, from: $0, to: $1) }
         }
+        .onMove { app.move(rows.map(\.slot), from: $0, to: $1) }
     }
 
     /// `sessionview.FolderRows`: every folder at the top level with a project
@@ -824,8 +816,9 @@ private struct SessionList: View {
                 // collapse through the core, drop-to-unfile and all. Inside a
                 // folder it is a group of its own, folding only itself.
                 if folder.isEmpty {
+                    // Draggable, as in the project-first lens: it reorders
+                    // the projects (`Layout.moveProject`).
                     ProjectHeader(name: name, hidden: hidden).selectionDisabled()
-                        .moveDisabled(true)
                 } else {
                     FolderProjectHeader(folder: folder, name: name, collapsed: collapsed,
                                         hidden: hidden)
@@ -967,6 +960,9 @@ private struct HeaderDrop: DropDelegate {
     let project: String
     @Binding var targeted: Bool
 
+    // Only a session's id: a dragged project header carries none, so it
+    // neither lights this header up nor lands in it, and `onMove` takes it.
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.plainText]) }
     func dropEntered(info: DropInfo) { targeted = true }
     func dropExited(info: DropInfo) { targeted = false }
     func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }

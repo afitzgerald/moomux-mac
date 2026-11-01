@@ -69,35 +69,27 @@ struct SessionListView: View {
         return defaults.bool(forKey: "changes") ? [.detail(id), .changes(id)] : [.detail(id)]
     }()
 
-    /// The default lens: a section per project, with the core's folder
-    /// headers spliced in under each.
+    /// The default lens: `AppState.projectFirstRows`, the Mac's too — one
+    /// flat list with the project headers as rows, so they drag.
     @ViewBuilder
-    private var projectFirstSections: some View {
-        ForEach(app.sessionsByProject, id: \.project) { group in
-            Section(header: ProjectHeader(app: app, name: group.project,
-                                          count: group.sessions.count)) {
-                // `sidebarRows` is the core's own layout for this project —
-                // `sessionview.Rows`, with folder headers spliced in —
-                // filtered to what this window shows. Iterating
-                // `group.sessions` instead was what dropped folders on the
-                // floor: it is the flat membership list, and the grouping
-                // lives in the layout.
-                let rows = app.sidebarRows(of: group.project, in: group.sessions)
-                ForEach(rows) { row in
-                    switch row {
-                    case let .folder(name, collapsed, count):
-                        FolderHeader(app: app, name: name, collapsed: collapsed,
-                                     count: count, project: group.project,
-                                     renaming: $renaming)
-                    case let .session(session, folder):
-                        // A session sits one level in from the header it is
-                        // grouped under: 1 under a project, 2 under a folder.
-                        sessionRow(session, indent: folder.isEmpty ? 1 : 2)
-                    }
-                }
-                .onMove { app.move(rows.map { $0.slot(in: group.project) }, from: $0, to: $1) }
+    private var projectFirstRows: some View {
+        let rows = app.projectFirstRows
+        ForEach(rows) { row in
+            switch row {
+            case let .project(name, hidden):
+                ProjectHeader(app: app, name: name, count: hidden)
+            case let .row(.folder(name, collapsed, count), project):
+                FolderHeader(app: app, name: name, collapsed: collapsed,
+                             count: count, project: project, renaming: $renaming)
+            case let .row(.session(session, folder), _):
+                // A session sits one level in from the header it is grouped
+                // under: 1 under a project, 2 under a folder.
+                sessionRow(session, indent: folder.isEmpty ? 1 : 2)
             }
         }
+        // Dragging a project header reorders the projects; see
+        // `folderFirstRows`' `onMove` for the rest.
+        .onMove { app.move(rows.map(\.slot), from: $0, to: $1) }
     }
 
     /// Go to the session a tapped banner named, once the app knows enough to
@@ -240,7 +232,7 @@ struct SessionListView: View {
                 // core's flag, so a local toggle writes a set that is never
                 // consulted for it and the block can never be expanded again.
                 if folder.isEmpty {
-                    ProjectHeader(app: app, name: name, count: hidden, isRow: true)
+                    ProjectHeader(app: app, name: name, count: hidden)
                 } else {
                 Button {
                     app.setFolderProject(folder: folder, project: name, expanded: collapsed)
@@ -262,7 +254,6 @@ struct SessionListView: View {
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(collapsed && hidden > 0 ? "\(name), collapsed, \(hidden) sessions" : name)
-                .moveDisabled(true)
                 }
             case let .session(session, indent):
                 sessionRow(session, indent: indent)
@@ -273,6 +264,12 @@ struct SessionListView: View {
         // a row's `.dropDestination`, a `List`-wide one, `onInsert` and a
         // header's `.onDrop` all saw nothing while a dragged row hovered over
         // them, though the search field took the same drag.
+        //
+        // No header is `.moveDisabled`, in either lens. On iOS that also
+        // refuses a drop at the header's own index, so a session dragged down
+        // onto or just under a folder header went nowhere, and in this lens a
+        // collapsed folder took no drop at all. A lifted header moves nothing:
+        // `Layout.move` is `.none` for it.
         .onMove { app.move(rows.map(\.slot), from: $0, to: $1) }
     }
 
@@ -282,7 +279,7 @@ struct SessionListView: View {
         NavigationStack(path: $path) {
             List {
                 if app.connection.isDown { ConnectionRow(app: app, name: computerName) }
-                if app.folderView { folderFirstRows } else { projectFirstSections }
+                if app.folderView { folderFirstRows } else { projectFirstRows }
             }
             .listStyle(.insetGrouped)
             .environment(\.defaultMinListHeaderHeight, 0)
@@ -531,9 +528,8 @@ private struct FolderHeader: View {
         // what is drawn at all and to fill this label.
         .accessibilityElement(children: .combine)
         .accessibilityLabel(collapsed && count > 0 ? "\(name), collapsed, \(count) sessions" : name)
-        // A header is where a session lands, never what moves — and its long
-        // press is the context menu's.
-        .moveDisabled(true)
+        // Not `.moveDisabled`, and its long press is still the context menu's:
+        // see `folderFirstRows`' `onMove`.
     }
 }
 
@@ -550,38 +546,35 @@ private struct ProjectHeader: View {
     /// What a collapsed header is hiding. Spoken in the accessibility label,
     /// never drawn — same rule as `FolderHeader`.
     let count: Int
-    /// A list row (the folder-first lens's loose block) rather than a section
-    /// header (project-first), which decides whether it draws a band.
-    var isRow = false
 
     var body: some View {
         let expanded = app.projectExpanded(name)
-        Button {
-            app.setProject(name, expanded: !expanded)
-        } label: {
-            HStack(spacing: SidebarGrid.gap) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .frame(width: SidebarGrid.disclosure(SidebarGrid.phoneFont))
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
-                // An empty emoji draws nothing rather than a computed glyph,
-                // same as the Mac app — `emoji(for:)` returns only what the
-                // core serves as `project_emoji`, and `listEmoji` nothing at all
-                // while the ⋯ menu's Show Project Emoji is off.
-                Text([app.listEmoji(for: name), name].compactMap { $0 }.joined(separator: " "))
-                Spacer(minLength: 6)
-            }
-            .font(.footnote.weight(.semibold))
-            .textCase(.uppercase)
-            .contentShape(Rectangle())
+        HStack(spacing: SidebarGrid.gap) {
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .frame(width: SidebarGrid.disclosure(SidebarGrid.phoneFont))
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+            // An empty emoji draws nothing rather than a computed glyph,
+            // same as the Mac app — `emoji(for:)` returns only what the
+            // core serves as `project_emoji`, and `listEmoji` nothing at all
+            // while the ⋯ menu's Show Project Emoji is off.
+            Text([app.listEmoji(for: name), name].compactMap { $0 }.joined(separator: " "))
+            Spacer(minLength: 6)
         }
-        .buttonStyle(.plain)
+        .font(.footnote.weight(.semibold))
+        .textCase(.uppercase)
+        .contentShape(Rectangle())
+        // `onTapGesture`, not a `Button`: a Button's own gesture recogniser
+        // wins the long press, which dragging the project needs.
+        .onTapGesture { app.setProject(name, expanded: !expanded) }
         // The band is the divider; a rule above or below it would double it.
-        .listRowSeparator(isRow ? .hidden : .automatic)
-        .listRowBackground(isRow ? band(expanded: expanded) : nil)
+        .listRowSeparator(.hidden)
+        .listRowBackground(band(expanded: expanded))
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
         .accessibilityLabel(expanded || count == 0 ? name : "\(name), collapsed, \(count) sessions")
-        .moveDisabled(true)
+        .accessibilityAction { app.setProject(name, expanded: !expanded) }
+        // Not `.moveDisabled`: see `folderFirstRows`' `onMove`.
     }
 
     /// A tab on its group: rounded top, square bottom while the sessions sit
