@@ -608,7 +608,9 @@ struct AttachedTerminal: UIViewRepresentable {
         /// and a TUI tracking the mouse — Claude Code is one — opens the link
         /// itself, in the computer's browser rather than this session's.
         /// Refusing the single-tap recognizer is what keeps that click back;
-        /// UIKit asks only once the tap is complete. A tap that clears a
+        /// UIKit asks only once the tap is complete. Here and not in a touch
+        /// override: that recognizer delays `touchesEnded`, so for a tap the
+        /// view only ever gets `touchesCancelled`. A tap that clears a
         /// selection or stops a fling is left to the package, as before.
         /// Ceiling: the package keeps its edit menu's visibility private, so a
         /// tap closing a menu with nothing selected (long press → Paste) on a

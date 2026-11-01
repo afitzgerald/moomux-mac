@@ -2170,15 +2170,8 @@ public final class AppState {
                 // started another one while this create ran.
                 if promptDraft == form.prompt { promptDraft = "" }
                 await refresh()
-                // Always on the phone, by decision: there is no control for it
-                // there, and a Mac's choice is not the phone's (it is per
-                // device). `focus` still keeps a jump from detaching a pane.
-                #if os(iOS)
-                let autoFocus = true
-                #else
-                let autoFocus = autoFocusNewSession
-                #endif
-                if autoFocus && focus() { selectedSessionID = session.id }
+                // Per device. `focus` still keeps a jump from detaching a pane.
+                if autoFocusNewSession && focus() { selectedSessionID = session.id }
             } catch {
                 // Not `failed`: the front end reopens the sheet with this
                 // instead of an alert, and falls back to one only when it can't.
@@ -2241,10 +2234,10 @@ public final class AppState {
 
     static let diffToolKey = "diffTool"
 
-    /// Whether creating a session selects it in the sidebar right away, rather
-    /// than leaving the current selection alone. `UserDefaults` for the same
-    /// reason as `diffTool` — this app's own front-end behavior, nothing the
-    /// core or the TUI has any use for.
+    /// Whether creating a session goes to it right away — the Mac selects it in
+    /// the sidebar, the phone opens it — rather than staying where you were.
+    /// `UserDefaults` for the same reason as `diffTool` — this app's own
+    /// front-end behavior, nothing the core or the TUI has any use for.
     public var autoFocusNewSession: Bool = UserDefaults.standard.object(forKey: autoFocusNewSessionKey) as? Bool
         ?? true {
         didSet { UserDefaults.standard.set(autoFocusNewSession, forKey: Self.autoFocusNewSessionKey) }
