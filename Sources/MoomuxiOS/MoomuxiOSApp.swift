@@ -1,7 +1,6 @@
 import BackgroundTasks
 import MoomuxKit
 import SwiftUI
-import WebKit
 
 /// The iPhone front end.
 ///
@@ -56,6 +55,7 @@ struct MoomuxiOSApp: App {
             }
             .task {
                 Notifier.onTap(tapped)
+                for computer in computers.saved.list { BrowserStores.removeShared(computer: computer.id) }
                 // `app == nil`: a link confirmed or a banner tapped before this
                 // ran has already connected, to the computer it named.
                 if app == nil { connect() }
@@ -134,8 +134,9 @@ struct MoomuxiOSApp: App {
         computers.saved.forget(id)
         BackgroundRefresh.others[id] = nil
         Notifier.forget(id.uuidString)
-        // The Browser's cookies and logins for it; a re-pair gets a new id.
-        Task { try? await WKWebsiteDataStore.remove(forIdentifier: id) }
+        // The Browser's cookies and logins for it, every session's; a re-pair
+        // gets a new id.
+        BrowserStores.sweep(computer: id, live: nil)
         guard app?.notificationKey == id.uuidString else { return }
         app?.stop()
         app = nil

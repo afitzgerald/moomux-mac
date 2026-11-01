@@ -36,6 +36,7 @@ enum SelfTest {
         Notifier.demo()
         Computers.demo()
         BrowserAddress.demo()
+        BrowserStores.demo()
         TmuxSnapshot.demo()
         TerminalLink.demo()
         WindowSwipe.demo()
