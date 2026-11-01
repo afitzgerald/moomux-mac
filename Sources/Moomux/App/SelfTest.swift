@@ -35,6 +35,7 @@ enum SelfTest {
         ProjectForm.demo()
         Notifier.demo()
         Computers.demo()
+        BrowserAddress.demo()
         TmuxSnapshot.demo()
         TerminalLink.demo()
         WindowSwipe.demo()

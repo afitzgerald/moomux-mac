@@ -652,6 +652,18 @@ bracketed paste lets claude see a file rather than typing (an image becomes `[Im
 shortcut holds only because the Mac and the core share a disk. In a remote pane (D25) the drop
 is uploaded and the core's path pasted, as on the phone.
 
+**D58. The phone has a browser for the computer's dev servers; the Mac has its own browser.**
+⋯ → Browser (`BrowserScreen`) is a `WebView` whose data store sends every connection through the
+core's CONNECT proxy (`ipc.TailnetProxyPort`, 45877, behind the same whois check as the IPC
+port). The computer resolves and dials each name, so `localhost:3000/app` and names
+from its `/etc/hosts` open unchanged, and nothing has to bind beyond loopback.
+`localhost` is proxied too (measured with a logging proxy). Each computer gets its own persistent
+data store, keyed by its id, so logins survive a relaunch and do not cross computers; forgetting
+the computer removes it. The last URL is remembered per computer too. Plain http
+needs `NSAllowsArbitraryLoadsInWebContent`, which covers web content only. The Mac needs no
+browser of its own: it already reaches those servers. One address field, with no tabs and no
+history beyond the last URL.
+
 ---
 
 ## G. Navigation
