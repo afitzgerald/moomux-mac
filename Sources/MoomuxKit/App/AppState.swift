@@ -210,7 +210,9 @@ public final class AppState {
     public private(set) var statuses: [Session.ID: MoomuxClient.SessionStatus] = [:]
     /// When each `statuses` entry was fetched. An entry older than
     /// `statusTTL` stops overriding the snapshot's badges, which keep moving.
-    private var statusFetchedAt: [Session.ID: Date] = [:]
+    /// Unobserved: a refetch that changes nothing would otherwise redraw every
+    /// row every `selectedStatusRefresh`. A changed answer redraws via `statuses`.
+    @ObservationIgnored private var statusFetchedAt: [Session.ID: Date] = [:]
     /// Just past the core's own ~1 minute git cache: long enough to beat the
     /// snapshot after a commit, short enough that a stale answer cannot outlive it.
     static let statusTTL: TimeInterval = 75
@@ -1487,13 +1489,15 @@ public final class AppState {
     private func refreshConfig() async {
         do {
             let answer = try await withoutBlockingTheUI { [client] in try client.config() }
-            config = answer.config
+            // A needless write every 2s rebuilds an open project picker.
+            if answer.config != config { config = answer.config }
             if answer.projectEmoji != projectEmoji { projectEmoji = answer.projectEmoji }
-            connection = .connected
+            if connection != .connected { connection = .connected }
         } catch {
             // Deliberately leaves the last-good config in place; a failed call
             // must never read as "every project was removed".
-            connection = .down(error.localizedDescription)
+            let down = Connection.down(error.localizedDescription)
+            if connection != down { connection = down }
         }
     }
 
@@ -1507,7 +1511,7 @@ public final class AppState {
     }
 
     func setStatus(_ status: MoomuxClient.SessionStatus, for id: Session.ID) {
-        statuses[id] = status
+        if statuses[id] != status { statuses[id] = status }
         statusFetchedAt[id] = Date()
     }
 
