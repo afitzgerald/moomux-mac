@@ -349,15 +349,12 @@ private struct NewSessionSheet: View {
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
-    private var models: [String] { app.models(for: form.agent) }
-    private var thinking: [String] { app.thinking(for: form.agent) }
+    private var models: [String] { form.modelChoices(app.models(for: form.agent)) }
+    private var thinking: [String] { app.thinking(for: form.agent, model: form.model) }
     private var hasModelList: Bool { app.hasModelList(for: form.agent) }
 
     private var agentPicker: some View {
         Picker("Agent", selection: $form.agent) {
-            // Only for a `prompt_agent` project, which starts with no agent
-            // chosen and must not silently pick one.
-            if form.agent.isEmpty { Text("choose one").tag("") }
             ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
         }
     }
@@ -375,17 +372,6 @@ private struct NewSessionSheet: View {
                     Picker("Project", selection: $form.project) {
                         Text("choose one").tag("")
                         ForEach(projects, id: \.self) { Text($0).tag($0) }
-                    }
-                    // Up here only when the project asks every time — and then
-                    // it asks about permissions too, as the TUI does; otherwise
-                    // the project's own agent and flag are right, and
-                    // overriding the agent lives under More options.
-                    if project?.promptAgent == true {
-                        agentPicker
-                        Toggle("Skip permission prompts", isOn: $form.dangerous)
-                            .help(form.agent == "opencode"
-                                  ? "opencode has no permission-skipping flag — this does nothing for it"
-                                  : "claude: --dangerously-skip-permissions, codex: --yolo")
                     }
                 }
                 Section {
@@ -452,12 +438,15 @@ private struct NewSessionSheet: View {
                 }
                 Section {
                     DisclosureGroup(isExpanded: $showMore) {
-                        if project?.promptAgent != true { agentPicker }
+                        // Starts on the last agent used, so it is rarely changed.
+                        agentPicker
                         if hasModelList {
                             Picker("Model", selection: $form.model) {
-                                ForEach(models, id: \.self) { Text($0).tag($0) }
+                                ForEach(models, id: \.self) {
+                                    Text(app.modelLabel($0, agent: form.agent)).tag($0)
+                                }
                             }
-                        } else {
+                        } else if !form.agent.isEmpty {  // no agent chosen: nothing to offer yet
                             TextField("Model", text: $form.modelText, prompt: Text("default"))
                                 .padding(.vertical, 2)  // see ProjectSheet's More options
                                 .help("\(form.agent) has no fixed model list — type one or leave it empty")
@@ -479,14 +468,7 @@ private struct NewSessionSheet: View {
             // An empty `TextField` in a grouped Form draws no box at all, so a
             // blank field reads as a static label. A border is the whole fix.
             .textFieldStyle(.roundedBorder)
-            // Its own line: beside the buttons at this width it truncated,
-            // and it is the only explanation for a disabled Create.
-            if !form.project.isEmpty && project?.promptAgent == true && form.agent.isEmpty {
-                Text("This project asks for an agent every time — pick one.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            // Its own line: beside the buttons at this width it truncated.
             if let error = form.promptProblem ?? error {
                 Text(error)
                     .font(.caption)
@@ -528,7 +510,12 @@ private struct NewSessionSheet: View {
         // The agent, and with it every list below it, belongs to the project.
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
-        .onChange(of: app.agentNames) { _, _ in app.agentNamesChanged(in: &form) }
+        .onChange(of: form.model) { _, _ in app.clampChoices(of: &form) }
+        .onChange(of: app.agentNames) { _, _ in app.presetAgent(in: &form) }
+        .onChange(of: app.config?.lastAgent) { _, _ in app.presetAgent(in: &form) }
+        // A new table or a newly hidden model: keep the choices by value.
+        .onChange(of: app.agentOptions) { _, _ in app.keepChoices(of: &form) }
+        .onChange(of: app.config?.excludedModels) { _, _ in app.keepChoices(of: &form) }
         .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item],
                       allowsMultipleSelection: true) { result in
             switch result {

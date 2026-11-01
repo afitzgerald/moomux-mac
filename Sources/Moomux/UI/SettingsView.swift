@@ -272,11 +272,6 @@ private struct ProjectRow: View {
                 Text(project?.repo ?? "").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            // Not just the agent name: a `prompt_agent` project has one stored
-            // and deliberately ignores it, so showing it would be a lie.
-            Text(project?.promptAgent == true ? "asks each time" : (project?.agentName ?? ""))
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 }
@@ -295,17 +290,6 @@ struct ProjectSheet: View {
     @State private var choosingFolder = false
 
     private var isPlain: Bool { app.config?.projects[editing ?? ""]?.isPlain == true }
-
-    /// "Ask every time" as an entry in the agent menu rather than a toggle
-    /// beside it: they are one question, and the toggle greyed the picker out.
-    private static let askTag = "\u{0}ask"
-    private var agentChoice: Binding<String> {
-        Binding(get: { form.askAgent ? Self.askTag : form.agent },
-                set: {
-                    form.askAgent = $0 == Self.askTag
-                    if !form.askAgent { form.agent = $0 }
-                })
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -327,18 +311,10 @@ struct ProjectSheet: View {
                     }
                 }
                 Section {
-                    Picker("Agent", selection: agentChoice) {
-                        ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
-                        Divider()
-                        Text("Ask every time").tag(Self.askTag)
-                    }
-                    .help("“Ask every time” starts each new session with no agent chosen")
-                    // "Ask every time" asks this per session too, so the project's
-                    // own value would never be used.
+                    // No agent here: the core keeps one global agent, the last
+                    // one a session was created with.
                     Toggle("Skip permission prompts", isOn: $form.dangerous)
-                        .disabled(form.askAgent)
-                        .help(form.askAgent ? "Asked for each session, with the agent"
-                              : "claude: --dangerously-skip-permissions, codex: --yolo")
+                        .help("claude: --dangerously-skip-permissions, codex: --yolo")
                 }
                 Section {
                     DisclosureGroup(isExpanded: $showMore) {
@@ -408,9 +384,6 @@ struct ProjectSheet: View {
             if let editing, let p = app.config?.projects[editing] {
                 form = ProjectForm(editing: editing, p)
             }
-            // The picker needs a valid selection even for a project whose
-            // agent is unset — "" is not one of `agentNames`.
-            if form.agent.isEmpty { form.agent = app.agentNames.first ?? "claude" }
         }
     }
 }
@@ -528,6 +501,7 @@ private struct CoreSection: View {
 
 private struct GeneralPane: View {
     @Environment(AppState.self) private var app
+    @State private var choosingModels = false
 
     private var cfg: Config? { app.config }
 
@@ -557,6 +531,12 @@ private struct GeneralPane: View {
                         set: { app.setTerminalPane($0) }))
                         .help("New sessions open with a shell beside the agent. Turn off for "
                               + "the agent alone. A project's .moomux-panes.toml still wins.")
+                    LabeledContent("Hidden models") {
+                        let n = app.modelRows.filter(\.hidden).count
+                        Text(n == 0 ? "none" : "\(n)").foregroundStyle(.secondary)
+                        Button("Choose…") { choosingModels = true }
+                    }
+                    .help("Models left out of the model pickers, here and in the TUI")
                 }
                 // This app's own (`UserDefaults`), so it stays usable with no
                 // core — which is why the gate above is per row and not over
@@ -609,6 +589,50 @@ private struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $choosingModels) { HiddenModelsSheet() }
+    }
+}
+
+/// Every named model the core serves, by agent, each with a toggle that saves
+/// at once — the TUI's hidden-models screen. On means shown.
+private struct HiddenModelsSheet: View {
+    @Environment(AppState.self) private var app
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let rows = app.modelRows
+        VStack(alignment: .trailing, spacing: 12) {
+            Form {
+                if rows.isEmpty {
+                    Text("No model lists yet. They come from agent-usage.").foregroundStyle(.secondary)
+                }
+                ForEach(app.agentNames.filter { a in rows.contains { $0.agent == a } }, id: \.self) { agent in
+                    Section(agent) {
+                        ForEach(rows.filter { $0.agent == agent }, id: \.key) { row in
+                            Toggle(row.label, isOn: Binding(
+                                get: { !row.hidden },
+                                set: { app.setModelExcluded(agent: row.agent, model: row.id, hidden: !$0) }))
+                        }
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .frame(maxHeight: 520)
+            .fixedSize(horizontal: false, vertical: true)
+            // Here, because this sheet covers Settings' own error row and
+            // `RootView`'s alert alike. A refused toggle snaps back; this says why.
+            if let error = app.actionError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Button("Done") { dismiss() }
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(20)
+        .frame(width: 400)
     }
 }
 

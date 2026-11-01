@@ -137,10 +137,13 @@ public struct Project: Codable, Hashable, Sendable {
     public var repo: String
     public var branchPrefix: String?
     public var baseBranch: String?
+    /// `agent` and `promptAgent` are gone from a current core (the agent is
+    /// global, `Config.lastAgent`), which neither sends nor reads them. Kept
+    /// for the same version-skew reason as `folders`: against an older core,
+    /// dropping them would delete them on the first project edit. Nothing in
+    /// this app reads either.
     public var agent: String?
     public var dangerous: Bool
-    /// Forces the new-session form to ask for an agent every time instead of
-    /// preselecting `agent`. The Mac app honours it the way the TUI does.
     public var promptAgent: Bool
     public var noWorktree: Bool
     public var emoji: String?
@@ -163,8 +166,6 @@ public struct Project: Codable, Hashable, Sendable {
 
     public var isPlain: Bool { kind == "plain" }
     public var usesWorktree: Bool { !isPlain && !noWorktree }
-    /// Mirrors `config.Project.AgentName`: an empty agent means claude.
-    public var agentName: String { (agent?.isEmpty == false) ? agent! : "claude" }
 
     public init(kind: String? = nil, repo: String = "", branchPrefix: String? = nil,
                 baseBranch: String? = nil, agent: String? = nil, dangerous: Bool = false,
@@ -268,21 +269,36 @@ public struct AgentOption: Decodable, Hashable, Sendable {
     /// Empty for an agent with no fixed list worth hardcoding (opencode) — a
     /// free-text field is the honest control there.
     public var models: [String]
+    /// Model ID → the label a picker shows. An ID with no entry shows as itself;
+    /// what is sent is always the ID.
+    public var modelNames: [String: String]
+    /// The thinking choices for model `"default"`. A model with its own entry in
+    /// `modelThinking` offers that list instead.
     public var thinking: [String]
+    public var modelThinking: [String: [String]]
 
-    enum CodingKeys: String, CodingKey { case name, models, thinking }
+    enum CodingKeys: String, CodingKey {
+        case name, models, thinking
+        case modelNames = "model_names"
+        case modelThinking = "model_thinking"
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
         models = try c.decodeIfPresent([String].self, forKey: .models) ?? []
+        modelNames = try c.decodeIfPresent([String: String].self, forKey: .modelNames) ?? [:]
         thinking = try c.decodeIfPresent([String].self, forKey: .thinking) ?? []
+        modelThinking = try c.decodeIfPresent([String: [String]].self, forKey: .modelThinking) ?? [:]
     }
 
-    public init(name: String, models: [String] = [], thinking: [String] = []) {
+    public init(name: String, models: [String] = [], modelNames: [String: String] = [:],
+                thinking: [String] = [], modelThinking: [String: [String]] = [:]) {
         self.name = name
         self.models = models
+        self.modelNames = modelNames
         self.thinking = thinking
+        self.modelThinking = modelThinking
     }
 }
 
@@ -407,9 +423,22 @@ public struct Config: Decodable, Sendable {
     /// Stored negated so absent means today's split; a project's
     /// `.moomux-panes.toml` still wins, and running sessions keep their layout.
     public var noTerminalPane: Bool
+    /// Agent → the model IDs its pickers leave out (`SetModelExcluded`).
+    /// `"default"` is never among them.
+    public var excludedModels: [String: [String]]
+    /// The agent the last non-spawned session was created with, which the
+    /// core writes on every create. New Session starts on it.
+    public var lastAgent: String
+
+    /// Unset is claude, as `config.AgentName` reads it. The core stores the
+    /// name already resolved (its create and its migration both go through
+    /// `AgentName`), so no alias table is copied here.
+    public var lastAgentName: String { lastAgent.isEmpty ? "claude" : lastAgent }
 
     enum CodingKeys: String, CodingKey {
         case projects, folders, order, theme, appearance
+        case lastAgent = "last_agent"
+        case excludedModels = "excluded_models"
         case autoTmux = "auto_tmux"
         case autoSubmitDefault = "auto_submit_default"
         case sortRecentFirst = "sort_recent_first"
@@ -427,6 +456,8 @@ public struct Config: Decodable, Sendable {
         autoSubmitDefault = try c.decodeIfPresent(Bool.self, forKey: .autoSubmitDefault) ?? false
         sortRecentFirst = try c.decodeIfPresent(Bool.self, forKey: .sortRecentFirst) ?? false
         noTerminalPane = try c.decodeIfPresent(Bool.self, forKey: .noTerminalPane) ?? false
+        excludedModels = try c.decodeIfPresent([String: [String]].self, forKey: .excludedModels) ?? [:]
+        lastAgent = try c.decodeIfPresent(String.self, forKey: .lastAgent) ?? ""
     }
 
     public var orderedProjectNames: [String] {
@@ -734,9 +765,12 @@ public struct Snapshot: Decodable, Sendable {
     /// The core's own release notes, newest first. Absent from a dev build, a
     /// build without notes, or a core older than the key.
     public var whatsNew: CoreWhatsNew?
+    /// `AgentOptions`' answer as of `pollTime`. Nil means no answer (an older
+    /// core, the error-only snapshot): keep the table already held.
+    public var agents: [AgentOption]?
 
     enum CodingKeys: String, CodingKey {
-        case sessions, views, rows, err, usage
+        case sessions, views, rows, err, usage, agents
         case whatsNew = "whats_new"
         case updateAvailable = "update_available"
         case codexUsage = "codex_usage"
@@ -760,6 +794,9 @@ public struct Snapshot: Decodable, Sendable {
         usageSetup = try? c.decodeIfPresent(String.self, forKey: .usageSetup)
         updateAvailable = try? c.decodeIfPresent(CoreUpdate.self, forKey: .updateAvailable)
         whatsNew = try? c.decodeIfPresent(CoreWhatsNew.self, forKey: .whatsNew)
+        // Like usage: a table this build cannot read must not take the session
+        // list down with it. Nil keeps the last table.
+        agents = try? c.decodeIfPresent([AgentOption].self, forKey: .agents)
         // Present-but-null counts: a core with no sessions at all sends
         // `"views": null`, and that is an answer.
         derived = c.contains(.views)
@@ -1270,9 +1307,8 @@ public enum Wire {
         assert(flags.noTerminalPane)
         assert(flags.appearance == "dark")
 
-        // prompt_agent is the one Project field the app has to honour rather
-        // than merely display: it means "ask for an agent every time" and the
-        // new-session form must not preselect one.
+        // prompt_agent and agent are only carried through now (see `Project`),
+        // so an older core's values must still decode.
         let askJSON = """
         {"projects":{"p":{"repo":"/p","prompt_agent":true,"dangerous":true,"no_worktree":true}}}
         """
@@ -1280,9 +1316,12 @@ public enum Wire {
         assert(ask.projects["p"]?.promptAgent == true)
         assert(ask.projects["p"]?.dangerous == true)
         assert(ask.projects["p"]?.usesWorktree == false, "no_worktree means sessions run in the repo")
-        assert(cfg.projects["moomux"]?.promptAgent == false, "absent means preselect the default")
-        assert(cfg.projects["moomux"]?.agentName == "codex")
-        assert(cfg.projects["site"]?.agentName == "claude", "an unset agent is claude")
+        assert(cfg.projects["moomux"]?.agent == "codex")
+
+        // The global agent. Unset is claude.
+        assert(cfg.lastAgentName == "claude")
+        assert(try! decoder.decode(Config.self, from: Data(#"{"last_agent":"codex"}"#.utf8))
+            .lastAgentName == "codex")
 
         // A Project goes back out as `ipc.Args.proj`, so its encoding is a wire
         // contract too: unset optionals must vanish rather than cross as null
@@ -1321,6 +1360,25 @@ public enum Wire {
         assert(agents[0].models == ["default", "sonnet"])
         assert(agents[1].models.isEmpty, "an absent model list must be empty, not a crash")
         assert(agents[1].thinking == ["default"])
+        assert(agents[1].modelNames.isEmpty && agents[1].modelThinking.isEmpty, "both are optional")
+        let named = try! decoder.decode(AgentOption.self, from: Data("""
+        {"name":"claude","models":["default","claude-opus-5-5"],
+         "model_names":{"claude-opus-5-5":"Opus 5.5"},"thinking":["default","high"],
+         "model_thinking":{"claude-opus-5-5":["default","high","max"]}}
+        """.utf8))
+        assert(named.modelNames["claude-opus-5-5"] == "Opus 5.5")
+        assert(named.modelThinking["claude-opus-5-5"] == ["default", "high", "max"])
+
+        // The snapshot's table: absent is "no answer", which must not read as
+        // an empty table.
+        let withAgents = try! decoder.decode(Snapshot.self, from: Data(#"{"agents":[{"name":"codex"}]}"#.utf8))
+        assert(withAgents.agents?.map(\.name) == ["codex"])
+        assert(try! decoder.decode(Snapshot.self, from: Data("{}".utf8)).agents == nil)
+        assert(try! decoder.decode(Snapshot.self, from: Data(#"{"agents":null}"#.utf8)).agents == nil)
+
+        let hidden = try! decoder.decode(Config.self, from: Data(
+            #"{"excluded_models":{"claude":["claude-haiku-4-5"]}}"#.utf8))
+        assert(hidden.excludedModels == ["claude": ["claude-haiku-4-5"]])
 
         // The served palettes. `needs_input` is snake_case on the wire, the
         // ANSI theme must resolve to default rather than trying to read "12"

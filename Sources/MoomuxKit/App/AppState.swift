@@ -192,9 +192,9 @@ public final class AppState {
     public private(set) var coreWhatsNew: CoreWhatsNew?
     public private(set) var config: Config?
     /// Which agents the core can launch, and what to offer in a model or
-    /// thinking-level picker for each. Fetched once — it is a static table in
-    /// `internal/app`, served over the socket precisely so a front end never
-    /// keeps its own copy to drift.
+    /// thinking-level picker for each. Fetched at connect, then replaced by
+    /// every snapshot that carries `agents`: the model lists come from
+    /// agent-usage's `models.json` and change under a running core.
     public private(set) var agentOptions: [AgentOption] = []
     /// The core's color palettes, fetched once for the same reason. Empty
     /// until `Themes` answers — `palette` is nil then, and the views fall
@@ -1171,9 +1171,11 @@ public final class AppState {
 
     // MARK: Agent table
     //
-    // These three mirror `internal/tui`'s `agentNames` / `modelNamesFor` /
-    // `thinkingNamesFor` exactly, fallbacks included, over the same table the
-    // TUI reads. The point is that neither side owns a copy of the *contents*.
+    // Every list here is the core's (`AgentOptions`, then each snapshot's
+    // `agents`), filtered by the config's `excluded_models` the way
+    // `internal/tui`'s `shownModels` does. No list is spelled out on this side,
+    // and an agent the table does not mention gets none: no fallback to
+    // another agent's.
 
     public var agentNames: [String] {
         // A core that answered with nothing at all would otherwise leave every
@@ -1181,39 +1183,71 @@ public final class AppState {
         agentOptions.isEmpty ? ["claude"] : agentOptions.map(\.name)
     }
 
-    /// The model choices for `agent`, falling back to claude's list. Empty
-    /// means the agent has no fixed list worth offering (opencode) and the
-    /// control should be a free-text field instead of a picker.
+    private func option(_ agent: String) -> AgentOption? {
+        agentOptions.first { $0.name == agent }
+    }
+
+    /// The model IDs `agent`'s picker offers: the core's full list minus the
+    /// hidden ones, "default" always kept. Empty means the agent has no fixed
+    /// list (opencode) and the control is a free-text field.
     public func models(for agent: String) -> [String] {
-        if let own = agentOptions.first(where: { $0.name == agent })?.models, !own.isEmpty {
-            return own
+        let hidden = config?.excludedModels[agent] ?? []
+        return (option(agent)?.models ?? []).filter {
+            $0 == NewSessionForm.defaultChoice || !hidden.contains($0)
         }
-        return agentOptions.first { $0.name == "claude" }?.models ?? []
     }
 
-    /// The thinking-level choices for `agent`, falling back to claude's.
-    public func thinking(for agent: String) -> [String] {
-        agentOptions.first { $0.name == agent }?.thinking
-            ?? agentOptions.first { $0.name == "claude" }?.thinking
-            ?? []
+    /// What a picker shows for `id`: the core's display name, else the ID.
+    public func modelLabel(_ id: String, agent: String) -> String {
+        option(agent)?.modelNames[id] ?? id
     }
 
-    /// Whether `agent`'s model control is a picker or a free-text field.
-    /// opencode by name, because `models(for:)` falls back to claude's list
-    /// for it the way the TUI's helper does; this is the TUI's own swap
-    /// (`agent != "opencode"` in `internal/tui/update.go`).
+    /// The thinking-level choices for `model` on `agent`: the model's own list
+    /// when the core serves one, else the agent's (which is model "default"'s).
+    public func thinking(for agent: String, model: String) -> [String] {
+        guard let o = option(agent) else { return [] }
+        return o.modelThinking[model] ?? o.thinking
+    }
+
+    /// Whether `agent`'s model control is a picker or a free-text field —
+    /// `agentUsesFreeTextModel`, keyed off the served list being empty.
     public func hasModelList(for agent: String) -> Bool {
-        !models(for: agent).isEmpty && agent != "opencode"
+        !(option(agent)?.models.isEmpty ?? true)
+    }
+
+    /// One row of Settings' Hidden models list.
+    public struct ModelRow: Identifiable, Hashable, Sendable {
+        public var agent: String
+        public var id: String
+        public var label: String
+        public var hidden: Bool
+        public var key: String { agent + "\u{0}" + id }
+    }
+
+    /// Every named model the core serves, agent by agent in its own order,
+    /// "default" skipped: the TUI's `modelFilterRows`.
+    public var modelRows: [ModelRow] {
+        agentOptions.flatMap { o in
+            o.models.filter { $0 != NewSessionForm.defaultChoice }.map {
+                ModelRow(agent: o.name, id: $0, label: o.modelNames[$0] ?? $0,
+                         hidden: config?.excludedModels[o.name]?.contains($0) == true)
+            }
+        }
+    }
+
+    public func setModelExcluded(agent: String, model: String, hidden: Bool) {
+        mutate("Save setting") { try $0.setModelExcluded(agent: agent, model: model, on: hidden); return nil }
     }
 
     // MARK: New-session form
 
     /// A form seeded the way both front ends open it: `project`, the stored
-    /// auto-submit default, and that project's agent defaults.
+    /// auto-submit default, and the last agent used.
     public func newSessionForm(project: String) -> NewSessionForm {
         var form = NewSessionForm()
         form.project = project
         form.autoSubmit = config?.autoSubmitDefault ?? false
+        presetAgent(in: &form)
         applyProject(to: &form)
         return form
     }
@@ -1251,23 +1285,35 @@ public final class AppState {
 
     static let promptDraftKey = "newSessionPromptDraft"
 
-    /// The project changed: its agent defaults and base branch replace the form's.
+    /// The project changed: its base branch replaces the form's. The agent is
+    /// global, so a project switch leaves it alone.
     public func applyProject(to form: inout NewSessionForm) {
-        let project = config?.projects[form.project]
-        form.seedBaseBranch(project)
-        form.applyProjectDefaults(project, agentNames: agentNames)
+        form.seedBaseBranch(config?.projects[form.project])
         clampChoices(of: &form)
     }
 
-    /// The agent table arrived or changed under an open form.
-    public func agentNamesChanged(in form: inout NewSessionForm) {
-        form.agentNamesChanged(config?.projects[form.project], agentNames: agentNames)
-        clampChoices(of: &form)
+    /// Presets the agent from `last_agent` — at open, and again when the agent
+    /// names or `last_agent` arrive under an open form (see `presetAgent`).
+    /// An unchanged agent keeps its model by value, as a table change does.
+    public func presetAgent(in form: inout NewSessionForm) {
+        let before = form.agent
+        form.presetAgent(config?.lastAgentName, agentNames: agentNames)
+        if form.agent == before { keepChoices(of: &form) } else { clampChoices(of: &form) }
     }
 
-    /// The agent changed: keep model and thinking on values it offers.
+    /// The agent or the model changed: keep model and thinking on values that
+    /// are still offered, by value.
     public func clampChoices(of form: inout NewSessionForm) {
-        form.clampChoices(models: models(for: form.agent), thinking: thinking(for: form.agent))
+        let agent = form.agent
+        form.clampChoices(models: models(for: agent), thinking: { self.thinking(for: agent, model: $0) })
+    }
+
+    /// The table or the hidden list changed under an open form: the same, but
+    /// a chosen model that left the list stays chosen as the extra entry.
+    public func keepChoices(of form: inout NewSessionForm) {
+        let agent = form.agent
+        form.clampChoices(models: models(for: agent), thinking: { self.thinking(for: agent, model: $0) },
+                          keep: true)
     }
 
     /// The palette to draw with: the config's theme, resolved against the
@@ -1346,15 +1392,17 @@ public final class AppState {
     }
 
     /// Retries until it lands: the app can start before `moomux serve` does,
-    /// and without the table the new-session form has no pickers at all. Once
-    /// fetched it is never refetched — the Go side's table is a `var` in the
-    /// binary, so it cannot change without a restart of the core.
+    /// and without the table the new-session form has no pickers at all. Only
+    /// a seed: each snapshot's `agents` replaces it, since the core rebuilds
+    /// the model lists as agent-usage rewrites them. It stays for a core too
+    /// old to put the table on the stream.
     private func loadAgentOptions() async {
         while !Task.isCancelled, agentOptions.isEmpty {
             if let options = try? await withoutBlockingTheUI({ [client] in
                 try client.agentOptions()
             }), !options.isEmpty {
-                agentOptions = options
+                // A snapshot may have landed during the call, and is newer.
+                if agentOptions.isEmpty { agentOptions = options }
                 return
             }
             try? await Task.sleep(for: .seconds(2))
@@ -1585,6 +1633,7 @@ public final class AppState {
         if snapshot.usageSetup != usageSetup { usageSetup = snapshot.usageSetup }
         if snapshot.updateAvailable != coreUpdate { coreUpdate = snapshot.updateAvailable }
         if snapshot.whatsNew != coreWhatsNew { coreWhatsNew = snapshot.whatsNew }
+        if let agents = snapshot.agents, agents != agentOptions { agentOptions = agents }
         adopt(sessions: snapshot.sessions)
         // The detail pane's counts and the row badge for what is on screen:
         // loadStatus is a no-op until the entry is `selectedStatusRefresh` old.
@@ -1751,13 +1800,68 @@ public final class AppState {
             ]
             assert(app.agentNames == ["claude", "codex", "opencode"])
             assert(app.models(for: "codex") == ["default", "gpt"])
-            // opencode has no list of its own, so it falls back to claude's —
-            // which is why its model control is a free-text field in the form
-            // rather than this picker.
-            assert(app.models(for: "opencode") == ["default", "opus"])
-            assert(app.models(for: "nonesuch") == ["default", "opus"], "unknown agents fall back")
-            assert(app.thinking(for: "codex") == ["default", "high"])
-            assert(app.thinking(for: "nonesuch") == ["default", "ultrathink"])
+            // opencode has no list, which is what makes its control a text
+            // field; nothing falls back to another agent's.
+            assert(app.models(for: "opencode").isEmpty && !app.hasModelList(for: "opencode"))
+            assert(app.models(for: "nonesuch").isEmpty, "no fallback list")
+            assert(app.thinking(for: "codex", model: "gpt") == ["default", "high"])
+            assert(app.thinking(for: "nonesuch", model: "default").isEmpty, "no fallback list")
+
+            // New Session opens on the last agent used, whatever the project,
+            // and a project switch leaves it alone.
+            app.config = try! Wire.decoder.decode(Config.self, from: Data(#"""
+            {"last_agent":"codex","projects":{"p":{"repo":"/p","agent":"opencode"}}}
+            """#.utf8))
+            var preset = app.newSessionForm(project: "p")
+            assert(preset.agent == "codex", "last_agent, not the project's stale agent")
+            assert(preset.model == "default" && preset.thinking == "default")
+            preset.project = ""
+            app.applyProject(to: &preset)
+            assert(preset.agent == "codex")
+            assert(app.dangerousToSend(project: "p") == nil, "the project's flag applies")
+            app.config = try! Wire.decoder.decode(Config.self, from: Data(
+                #"{"projects":{"old":{"repo":"/o","prompt_agent":true,"dangerous":true}}}"#.utf8))
+            assert(app.dangerousToSend(project: "old") == false,
+                   "an older core's prompt_agent project never inherits skip-permissions")
+            app.config = nil
+            assert(app.newSessionForm(project: "p").agent == "claude", "no config yet: unset is claude")
+
+            // Display names, per-model thinking, hidden models — off a snapshot,
+            // which replaces the table; one without `agents` keeps it.
+            app.apply(try! Wire.decoder.decode(Snapshot.self, from: Data(#"""
+            {"views":{},"agents":[{"name":"claude","models":["default","opus-5","haiku-4"],
+              "model_names":{"opus-5":"Opus 5"},"thinking":["default","high","max"],
+              "model_thinking":{"opus-5":["default","high","max"],"haiku-4":["default"]}}]}
+            """#.utf8)))
+            assert(app.agentNames == ["claude"], "a new table replaces the old one")
+            app.apply(try! Wire.decoder.decode(Snapshot.self, from: Data(#"{"views":{}}"#.utf8)))
+            assert(app.agentNames == ["claude"] && app.hasModelList(for: "claude"), "absent keeps it")
+            assert(app.modelLabel("opus-5", agent: "claude") == "Opus 5")
+            assert(app.modelLabel("haiku-4", agent: "claude") == "haiku-4", "no name shows the ID")
+            assert(app.thinking(for: "claude", model: "haiku-4") == ["default"])
+            assert(app.thinking(for: "claude", model: "default") == ["default", "high", "max"])
+            app.config = try! Wire.decoder.decode(Config.self, from: Data(
+                #"{"excluded_models":{"claude":["haiku-4","default"]}}"#.utf8))
+            assert(app.models(for: "claude") == ["default", "opus-5"], "hidden dropped, default kept")
+            assert(app.modelRows.map(\.id) == ["opus-5", "haiku-4"], "every named model, default skipped")
+            assert(app.modelRows.map(\.hidden) == [false, true])
+            var open = app.newSessionForm(project: "")
+            open.agent = "claude"
+            open.model = "opus-5"
+            open.thinking = "max"
+            app.clampChoices(of: &open)
+            assert(open.model == "opus-5" && open.thinking == "max")
+            open.model = "haiku-4"  // hidden under an open form: stays, as the extra entry
+            app.keepChoices(of: &open)
+            assert(open.model == "haiku-4" && open.modelChoices(app.models(for: "claude"))
+                   == ["default", "haiku-4", "opus-5"])
+            assert(open.thinking == "default", "haiku-4 offers only default")
+            // A preset that leaves the agent alone keeps the model too, even
+            // when the same tick dropped it from the list.
+            open.model = "dropped"
+            app.presetAgent(in: &open)
+            assert(open.agent == "claude" && open.model == "dropped")
+            app.config = nil
 
             // Manual reordering is off while the core sorts by last-opened.
             assert(app.canReorder, "no config yet must not disable reordering")
@@ -2013,16 +2117,19 @@ public final class AppState {
     /// remembering a changed auto-submit toggle, which is a config write and
     /// not part of the transaction.
     ///
-    /// `dangerous` is the caller's to compute rather than left nil, because the
-    /// form shows a real toggle: nil would mean "the project's default", which
-    /// is a different answer from the one the user just looked at.
-    ///
     /// `focus` is asked when the create *finishes*, tens of seconds later, so a
     /// front end can decline to move a user who has since gone elsewhere.
-    /// The permission flag is the project's (`nil`) unless the project asks
-    /// for an agent every time — then the sheet asks this too, as the TUI
-    /// does, and its answer is sent. The send toggle is never written back to
-    /// the config: it overrides `auto_submit_default` for this session only.
+    /// The permission flag is the project's (`dangerous` unset), with one
+    /// exception for an older core that still serves `prompt_agent`: it never
+    /// inherited the project's flag for such a project, so it gets an explicit
+    /// false rather than a skip-permissions nobody was asked about. The core
+    /// remembers the agent as `last_agent`. The send toggle is never written
+    /// back to the config: it overrides `auto_submit_default` for this session
+    /// only.
+    func dangerousToSend(project: String) -> Bool? {
+        config?.projects[project]?.promptAgent == true ? false : nil
+    }
+
     public func create(_ form: NewSessionForm, focus: @escaping @MainActor () -> Bool = { true }) {
         let req = CreateRequest(project: form.project, name: form.name.trimmed, agent: form.agent,
                                 branch: form.existingBranch, baseBranch: form.baseBranchToSend,
@@ -2030,7 +2137,7 @@ public final class AppState {
                                 model: form.modelToSend(hasModelList: hasModelList(for: form.agent)),
                                 thinking: form.thinking, prompt: form.prompt,
                                 autoSubmit: form.autoSubmit,
-                                dangerous: config?.projects[form.project]?.promptAgent == true ? form.dangerous : nil)
+                                dangerous: dangerousToSend(project: form.project))
         // Before the call, not after: a core that hangs never answers at all.
         promptDraft = form.prompt
         // Not `mutate`: that discards the created `Session`, and selecting it

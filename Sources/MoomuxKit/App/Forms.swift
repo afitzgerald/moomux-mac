@@ -22,10 +22,10 @@ public struct NewSessionForm: Equatable, Sendable {
     public var existingBranch = ""
     /// Empty means the project's own base branch.
     public var baseBranch = ""
-    /// Empty means "not chosen yet", which only happens for a project with
-    /// `prompt_agent` set — and blocks Create until the user picks one.
+    /// Starts on the config's `last_agent`, the agent the last session was
+    /// created with — one global value, not the project's. Empty only until
+    /// that preset runs, and it blocks Create.
     public var agent = ""
-    public var dangerous = false
     /// The selected entry from the agent's model list. "default" passes no
     /// `--model` flag at all.
     public var model = defaultChoice
@@ -33,6 +33,11 @@ public struct NewSessionForm: Equatable, Sendable {
     /// (opencode). Kept apart from `model` so switching agents back and forth
     /// does not lose either one.
     public var modelText = ""
+    /// A chosen model that a new table or a hidden-models change dropped from
+    /// the shown list. Offered right after "default" for `extraAgent` only,
+    /// and sent as-is.
+    public private(set) var extraModel = ""
+    private var extraAgent = ""
     public var thinking = defaultChoice
     public var ticket = ""
     public var pr = ""
@@ -41,10 +46,11 @@ public struct NewSessionForm: Equatable, Sendable {
     /// `auto_submit_default` and is changed per session under More options —
     /// never written back, so one session's choice is not the next one's.
     public var autoSubmit = false
-    /// What `applyProjectDefaults` last chose, so `agentNamesChanged` can tell
-    /// a value the user picked from one it seeded.
+    /// What `presetAgent` last chose, so a re-run can tell a value the user
+    /// picked from one it seeded — and whether that was the agent it was
+    /// asked for or only a fallback.
     private var seededAgent = ""
-    private var seededDangerous = false
+    private var seedSettled = false
     /// The project's base branch as last filled in, so switching project
     /// replaces it only while the user has not typed over it.
     private var seededBaseBranch = ""
@@ -55,52 +61,26 @@ public struct NewSessionForm: Equatable, Sendable {
 
     public init() {}
 
-    /// Seeds the agent controls from the chosen project, exactly as
-    /// `newFormApplyProjectDefaults` does.
-    ///
-    /// The `prompt_agent` branch is the subtle one: a project that insists on
-    /// an explicit agent every time gets *no* preselection **and no inherited
-    /// `dangerous`** — the TUI only copies `p.Dangerous` in the else branch.
-    /// Inheriting it there would arm `--dangerously-skip-permissions` for an
-    /// agent the user has not chosen yet.
-    public mutating func applyProjectDefaults(_ p: Project?, agentNames: [String]) {
-        guard let p else {
-            agent = ""
-            dangerous = false
-            return
-        }
-        if p.promptAgent {
-            agent = ""
-            dangerous = false
-        } else {
-            // An agent the core no longer offers would leave the picker with no
-            // valid selection; claude is the TUI's fallback too.
-            agent = agentNames.contains(p.agentName) ? p.agentName : (agentNames.first ?? "claude")
-            dangerous = p.dangerous
-        }
+    /// Presets the agent from `lastAgent` (the config's `last_agent`; nil
+    /// while no config has arrived), as `internal/tui` opens its form. Re-run
+    /// when the table or the config arrives late, it moves the agent only
+    /// while the first preset was a fallback and the user has not picked one,
+    /// or when the table no longer offers it. A `last_agent` written by a
+    /// create elsewhere must not flip a sheet someone is typing into. Model
+    /// and thinking are never remembered: a fresh form starts both on
+    /// "default".
+    public mutating func presetAgent(_ lastAgent: String?, agentNames: [String]) {
+        let retry = agent.isEmpty || (agent == seededAgent && !seedSettled)
+        guard retry || !agentNames.contains(agent) else { return }
+        let want = lastAgent ?? ""
+        agent = agentNames.contains(want) ? want : (agentNames.first ?? want)
         seededAgent = agent
-        seededDangerous = dangerous
-    }
-
-    /// The core's agent table arrived or changed under an open form — it lands
-    /// one round trip after the window, so a form opened in that gap was
-    /// seeded against the fallback table. Re-seed only if the user has not
-    /// touched the agent controls: a late table must never flip a choice they
-    /// made, least of all the dangerous flag. A chosen agent the table no
-    /// longer offers is cleared rather than replaced, which blocks Create until
-    /// they pick again instead of silently choosing for them.
-    public mutating func agentNamesChanged(_ p: Project?, agentNames: [String]) {
-        if agent == seededAgent && dangerous == seededDangerous {
-            applyProjectDefaults(p, agentNames: agentNames)
-        } else if !agent.isEmpty && !agentNames.contains(agent) {
-            agent = ""
-        }
+        seedSettled = lastAgent != nil && agent == want
     }
 
     /// Fills the base branch in with the project's own, so it can be edited
     /// rather than guessed at from a placeholder — unless the user has already
-    /// typed one, which a project switch must not silently undo. Not part of
-    /// `applyProjectDefaults`, which a late agent table re-runs.
+    /// typed one, which a project switch must not silently undo.
     public mutating func seedBaseBranch(_ p: Project?) {
         let value = p?.isPlain == false ? p?.baseBranch ?? "" : ""
         if baseBranch == seededBaseBranch { baseBranch = value }
@@ -129,14 +109,33 @@ public struct NewSessionForm: Equatable, Sendable {
     /// to fix the project's settings rather than this field.
     public var baseBranchToSend: String { existingBranch.isEmpty && baseBranchEdited ? baseBranch : "" }
 
-    /// Keeps the model and thinking selections valid after the agent changes:
-    /// the lists differ per agent, and a stale selection would be sent as a
-    /// flag value the new agent has never heard of.
-    public mutating func clampChoices(models: [String], thinking: [String]) {
-        if !models.isEmpty, !models.contains(model) { model = models.first ?? Self.defaultChoice }
-        if !thinking.isEmpty, !thinking.contains(self.thinking) {
-            self.thinking = thinking.first ?? Self.defaultChoice
+    /// The model picker's entries: `shown` (the agent's list minus hidden
+    /// models) with the extra model right after "default" —
+    /// `newFormModelChoices`.
+    public func modelChoices(_ shown: [String]) -> [String] {
+        guard !extraModel.isEmpty, extraAgent == agent, !shown.isEmpty, !shown.contains(extraModel)
+        else { return shown }
+        return [shown[0], extraModel] + shown.dropFirst()
+    }
+
+    /// Keeps the model and thinking selections valid by value, never by index.
+    /// After the agent or the model changes (`keep` false), a model the
+    /// choices lack becomes "default". After the table or the hidden list
+    /// changes (`keep` true), it stays chosen as the extra entry instead —
+    /// `restoreFormSelection`. Thinking is per model: a level the model's list
+    /// lacks becomes "default".
+    public mutating func clampChoices(models shown: [String], thinking: (String) -> [String],
+                                      keep: Bool = false) {
+        if !shown.isEmpty, !modelChoices(shown).contains(model) {
+            if keep && model != Self.defaultChoice {
+                extraModel = model
+                extraAgent = agent
+            } else {
+                model = Self.defaultChoice
+            }
         }
+        let levels = thinking(model)
+        if !levels.isEmpty, !levels.contains(self.thinking) { self.thinking = Self.defaultChoice }
     }
 
     /// What to send as the model: the free-text field for an agent with no
@@ -155,8 +154,7 @@ public struct NewSessionForm: Equatable, Sendable {
     }
 
     /// Every field but the project is optional: an empty name is the core's
-    /// to fill — from the branch, else the prompt, else an assigned one — so
-    /// only a `prompt_agent` project blocks, until an agent is chosen.
+    /// to fill — from the branch, else the prompt, else an assigned one.
     public var canCreate: Bool {
         !project.isEmpty && !agent.isEmpty && promptProblem == nil
     }
@@ -176,20 +174,14 @@ public struct NewSessionForm: Equatable, Sendable {
         var form = NewSessionForm()
         form.project = "moomux"
 
-        // An ordinary project preselects its agent and inherits its dangerous flag.
-        form.applyProjectDefaults(
-            Project(repo: "/src", agent: "codex", dangerous: true), agentNames: names)
+        // The agent is the last one used, whatever the project.
+        assert(!form.canCreate, "no agent until the preset runs")
+        form.presetAgent("codex", agentNames: names)
         assert(form.agent == "codex")
-        assert(form.dangerous, "a dangerous project's sessions are dangerous by default")
-
-        // prompt_agent forces a choice — and must not carry the flag over with
-        // no agent chosen to apply it to.
-        form.applyProjectDefaults(
-            Project(repo: "/src", agent: "codex", dangerous: true, promptAgent: true),
-            agentNames: names)
-        assert(form.agent.isEmpty, "prompt_agent means no preselection")
-        assert(!form.dangerous, "dangerous must not be inherited without an agent")
-        assert(!form.canCreate, "no agent chosen yet")
+        // An agent the core no longer offers falls back to the table's first.
+        var gone = NewSessionForm()
+        gone.presetAgent("agy", agentNames: names)
+        assert(gone.agent == "claude")
         form.agent = "claude"
         form.name = "x"
         assert(form.canCreate)
@@ -198,14 +190,6 @@ public struct NewSessionForm: Equatable, Sendable {
         form.prompt += "a"
         assert(!form.canCreate && form.promptProblem != nil, "one over refuses")
         form.prompt = ""
-
-        // An unset agent is claude, and an agent the core dropped falls back
-        // rather than leaving the picker on a value that cannot be selected.
-        form.applyProjectDefaults(Project(repo: "/src"), agentNames: names)
-        assert(form.agent == "claude")
-        form.applyProjectDefaults(Project(repo: "/src", agent: "gone"), agentNames: names)
-        assert(form.agent == "claude")
-
 
         // No name is fine: the core names it, and the placeholder says from what.
         var unnamed = NewSessionForm()
@@ -252,38 +236,72 @@ public struct NewSessionForm: Equatable, Sendable {
         var switching = NewSessionForm()
         switching.model = "opus"
         switching.thinking = "ultrathink"
-        switching.clampChoices(models: ["default", "gpt"], thinking: ["default", "high"])
+        switching.clampChoices(models: ["default", "gpt"], thinking: { _ in ["default", "high"] })
         assert(switching.model == "default" && switching.thinking == "default")
         // A valid selection survives.
         switching.model = "gpt"
-        switching.clampChoices(models: ["default", "gpt"], thinking: ["default", "high"])
+        switching.clampChoices(models: ["default", "gpt"], thinking: { _ in ["default", "high"] })
         assert(switching.model == "gpt")
+        // A model dropped from the list (hidden, or gone from a new table)
+        // falls back to "default", not to whatever sat at its index.
+        switching.clampChoices(models: ["default", "o3", "o4"], thinking: { _ in ["default"] })
+        assert(switching.model == "default")
+        // Thinking follows the model: a level the new model has is kept, one it
+        // lacks resets to "default".
+        let perModel: (String) -> [String] = {
+            ["big": ["default", "high", "max"], "small": ["default"]][$0] ?? ["default", "high"]
+        }
+        switching.model = "big"
+        switching.thinking = "high"
+        switching.clampChoices(models: ["default", "big", "small"], thinking: perModel)
+        assert(switching.thinking == "high")
+        switching.model = "default"
+        switching.clampChoices(models: ["default", "big", "small"], thinking: perModel)
+        assert(switching.thinking == "high", "the default model's list has it too")
+        switching.model = "small"
+        switching.clampChoices(models: ["default", "big", "small"], thinking: perModel)
+        assert(switching.thinking == "default")
         // An agent with no model list keeps whatever the picker had — its
         // control is the text field, and that is what gets sent.
-        switching.clampChoices(models: [], thinking: ["default"])
+        switching.model = "gpt"
+        switching.clampChoices(models: [], thinking: { _ in ["default"] })
         assert(switching.model == "gpt")
         switching.modelText = "anthropic/claude-x"
         assert(switching.modelToSend(hasModelList: false) == "anthropic/claude-x")
         assert(switching.modelToSend(hasModelList: true) == "gpt")
 
-        // A table arriving late re-seeds an untouched form: seeded against the
-        // fallback ["claude"], a codex project gets codex once the real one lands.
-        let codexProject = Project(repo: "/src", agent: "codex", dangerous: true)
+        // A table or hidden-list change keeps a chosen model that left the
+        // list, as the extra entry, and keeps thinking by value.
+        var kept = NewSessionForm()
+        kept.agent = "claude"
+        kept.model = "opus"
+        kept.thinking = "high"
+        kept.clampChoices(models: ["default", "sonnet"], thinking: { _ in ["default", "high"] }, keep: true)
+        assert(kept.model == "opus" && kept.thinking == "high")
+        assert(kept.modelChoices(["default", "sonnet"]) == ["default", "opus", "sonnet"])
+
+        // A table or config arriving late re-presets a form whose first preset
+        // was a fallback...
         var late = NewSessionForm()
-        late.applyProjectDefaults(codexProject, agentNames: ["claude"])
+        late.presetAgent("codex", agentNames: ["claude"])
         assert(late.agent == "claude")
-        late.agentNamesChanged(codexProject, agentNames: names)
-        assert(late.agent == "codex" && late.dangerous)
-        // ...but never overrides a choice, and never re-arms dangerous.
+        late.presetAgent("codex", agentNames: names)
+        assert(late.agent == "codex")
+        var noConfig = NewSessionForm()
+        noConfig.presetAgent(nil, agentNames: names)
+        assert(noConfig.agent == "claude")
+        noConfig.presetAgent("codex", agentNames: names)
+        assert(noConfig.agent == "codex", "the config's first answer still lands")
+        // ...but a settled preset stays put when a create elsewhere moves
+        // last_agent: the sheet is someone's half-typed session.
+        noConfig.presetAgent("opencode", agentNames: names)
+        assert(noConfig.agent == "codex", "a later last_agent must not flip an open sheet")
+        // ...but never overrides a choice the table still offers.
         late.agent = "opencode"
-        late.dangerous = false
-        late.agentNamesChanged(codexProject, agentNames: names)
-        assert(late.agent == "opencode" && !late.dangerous, "a late table must not undo the user")
-        // A chosen agent the table dropped is cleared, which blocks Create.
-        late.name = "x"
-        late.project = "moomux"
-        late.agentNamesChanged(codexProject, agentNames: ["claude", "codex"])
-        assert(late.agent.isEmpty && !late.canCreate && !late.dangerous)
+        late.presetAgent("claude", agentNames: names)
+        assert(late.agent == "opencode", "a late preset must not undo the user")
+        late.presetAgent("claude", agentNames: ["claude", "codex"])
+        assert(late.agent == "claude", "a picked agent the table dropped is re-preset")
     }
 }
 
@@ -301,11 +319,12 @@ public struct ProjectForm: Equatable, Sendable {
     public var repo = ""
     public var baseBranch = ""
     public var branchPrefix = ""
-    /// Empty means claude (the core's own default at rest).
-    public var agent = ""
-    /// The TUI's "ask each time" agent entry: `prompt_agent`, which makes the
-    /// agent row of every new-session form start unset.
-    public var askAgent = false
+    /// Not edited here any more: the core keeps one global agent
+    /// (`last_agent`) and a current core neither sends nor reads these. Carried
+    /// through only so a save against an older core does not delete them —
+    /// `UpdateProject` replaces the whole record. Delete with `Project.agent`.
+    var agent = ""
+    var askAgent = false
     public var dangerous = false
     public var noWorktree = false
     /// Empty means "auto" — the core picks a deterministic glyph.
