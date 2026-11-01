@@ -53,7 +53,7 @@ final class PaneArrowPad: UIView {
         place(2, 1, "arrowtriangle.right.fill", "Right Arrow", repeating: true) { $0.sendKey(.arrowRight) }
         place(1, 2, "arrowtriangle.down.fill", "Down Arrow", repeating: true) { $0.sendKey(.arrowDown) }
 
-        let grip = UIView()
+        let grip = PadSurface()
         grip.translatesAutoresizingMaskIntoConstraints = false
         grip.accessibilityLabel = "Move Arrow Pad"
         let bar = UIView()
@@ -139,10 +139,23 @@ final class PaneArrowPad: UIView {
     }
 }
 
+/// A part of the pad that keeps its touches from the terminal underneath.
+/// The pad is the terminal's subview, so the terminal's own recognizers see
+/// every press: a lone tap clicked the pane under the key and toggled the
+/// keyboard away, and a quick second press selected a word. UIKit asks the
+/// touched view before a recognizer on an ancestor begins, the way a slider
+/// keeps a swipe from its superview.
+@MainActor
+private class PadSurface: UIView {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer.view === self
+    }
+}
+
 /// One glass tile. Fires on touch-down so a tap feels immediate, then repeats
 /// while held if it is a key that should.
 @MainActor
-private final class PadKey: UIView {
+private final class PadKey: PadSurface {
     private let handler: () -> Void
     private let repeating: Bool
     private var delay: Timer?
