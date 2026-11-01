@@ -339,9 +339,7 @@ private struct NewSessionSheet: View {
     /// reopened over it.
     @State private var error: String?
     @FocusState private var baseBranchFocused: Bool
-    @State private var showMore = false
     @State private var attachments = AttachQueue()
-    @State private var importingFiles = false
 
     private func upload(name: String, type: UTType?, data: Data) async throws -> String {
         try await app.attach(name: name, type: type, data: data)
@@ -349,20 +347,24 @@ private struct NewSessionSheet: View {
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
-    private var models: [String] { form.modelChoices(app.models(for: form.agent)) }
-    private var thinking: [String] { app.thinking(for: form.agent, model: form.model) }
     private var hasModelList: Bool { app.hasModelList(for: form.agent) }
 
-    private var agentPicker: some View {
-        Picker("Agent", selection: $form.agent) {
-            ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
+    private func attach(_ jobs: [AttachJob]) {
+        attachments.run(jobs) { form.appendPath($0) }
+    }
+
+    /// Through the drop path, so a picked file is treated as a dropped one.
+    private func fileJobs(_ picked: Result<[URL], Error>) -> [AttachJob] {
+        switch picked {
+        case .success(let urls): urls.map { PromptDrop.item(for: $0).job(upload: upload) }
+        // Shown where an upload's failure would be.
+        case .failure(let error): [{ throw error }]
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // What gets typed on every session first; what almost never
-            // changes (model, base branch) folded away under More options.
+            // What gets typed on every session first.
             Form {
                 Section {
                     // No `.focused()` here — a menu-style Picker
@@ -391,9 +393,13 @@ private struct NewSessionSheet: View {
                             }
                         }
                         .help("Drop or paste a file to add its path. Leave it empty to start the agent idle.")
-                    HStack {
-                        Button("Attach Files…", systemImage: "paperclip") { importingFiles = true }
-                        if attachments.pending > 0 { ProgressView().controlSize(.small) }
+                    PromptBar(app: app, form: $form, uploading: attachments.pending > 0,
+                              attach: attach, fileJobs: fileJobs)
+                    // Under the agent it belongs to, only for one with no
+                    // model list (opencode); the rest pick theirs in the menu.
+                    if !hasModelList && !form.agent.isEmpty {
+                        TextField("Model", text: $form.modelText, prompt: Text("default"))
+                            .help("\(form.agent) has no fixed model list — type one or leave it empty")
                     }
                     // Here and not in an alert: the sheet is still open, and
                     // the paths that did land are right above it.
@@ -402,16 +408,6 @@ private struct NewSessionSheet: View {
                             .font(.caption)
                             .foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if !thinking.isEmpty {
-                        Picker("Thinking", selection: $form.thinking) {
-                            ForEach(thinking, id: \.self) { Text($0).tag($0) }
-                        }
-                        // The core decides which; opencode is the one agent
-                        // with no launch flag for it (`reasoningEffortFlag`).
-                        .help(form.agent == "opencode"
-                              ? "Prepended to the first prompt — opencode has no flag for it"
-                              : "Passed to \(form.agent) as its reasoning-effort flag")
                     }
                 }
                 Section {
@@ -436,31 +432,10 @@ private struct NewSessionSheet: View {
                     TextField("Ticket", text: $form.ticket)
                     TextField("PR", text: $form.pr)
                 }
-                Section {
-                    DisclosureGroup(isExpanded: $showMore) {
-                        // Starts on the last agent used, so it is rarely changed.
-                        agentPicker
-                        if hasModelList {
-                            Picker("Model", selection: $form.model) {
-                                ForEach(models, id: \.self) {
-                                    Text(app.modelLabel($0, agent: form.agent)).tag($0)
-                                }
-                            }
-                        } else if !form.agent.isEmpty {  // no agent chosen: nothing to offer yet
-                            TextField("Model", text: $form.modelText, prompt: Text("default"))
-                                .padding(.vertical, 2)  // see ProjectSheet's More options
-                                .help("\(form.agent) has no fixed model list — type one or leave it empty")
-                        }
-                        Toggle("Send the prompt (press Enter)", isOn: $form.autoSubmit)
-                            .help("Starts at Settings → Sessions' default; this session only")
-                    } label: {
-                        MoreOptionsLabel(isExpanded: $showMore)
-                    }
-                }
             }
             .formStyle(.grouped)
-            // Its ideal height is its content's, so the sheet grows when More
-            // options opens instead of scrolling the new rows out of sight — a
+            // Its ideal height is its content's, so the sheet grows when the
+            // Model field appears instead of scrolling it out of sight — a
             // sheet otherwise keeps the size it opened at. Capped so a short
             // window scrolls rather than pushing Create off the bottom.
             .frame(maxHeight: 660)
@@ -516,16 +491,6 @@ private struct NewSessionSheet: View {
         // A new table or a newly hidden model: keep the choices by value.
         .onChange(of: app.agentOptions) { _, _ in app.keepChoices(of: &form) }
         .onChange(of: app.config?.excludedModels) { _, _ in app.keepChoices(of: &form) }
-        .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item],
-                      allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls):
-                attachments.run(urls.map { PromptDrop.item(for: $0).job(upload: upload) }) { form.appendPath($0) }
-            case .failure(let error):
-                // Shown where an upload's failure would be.
-                attachments.run([{ throw error }]) { _ in }
-            }
-        }
         .onDisappear { attachments.cancelAll() }
     }
 }

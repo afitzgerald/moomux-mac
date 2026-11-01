@@ -1,4 +1,5 @@
 import GhosttyTerminal
+import MoomuxKit
 import UIKit
 
 /// The bar over the phone's keyboard in an attached pane.
@@ -265,7 +266,7 @@ final class PaneKeyBar: UIView {
         let button = icon("bolt", "Snippets") { _ in }
         button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
             let agent = self?.agent ?? "claude"
-            let items: [UIMenuElement] = Snippet.saved.map { snippet in
+            let items: [UIMenuElement] = Snippet.saved().map { snippet in
                 let title = snippet.text.trimmingCharacters(in: .whitespaces)
                 // "…" marks one that takes an argument (a trailing space), not
                 // every one left unsubmitted: /kill waits for Return but needs
