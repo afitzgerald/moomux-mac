@@ -22,8 +22,8 @@ struct NewSessionSheet: View {
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
-    private var models: [String] { app.models(for: form.agent) }
-    private var thinking: [String] { app.thinking(for: form.agent) }
+    private var models: [String] { form.modelChoices(app.models(for: form.agent)) }
+    private var thinking: [String] { app.thinking(for: form.agent, model: form.model) }
     private var hasModelList: Bool { app.hasModelList(for: form.agent) }
     /// Anything typed. Pickers are cheap to redo; a half-written prompt is not.
     /// The base branch counts once it differs from the project's, which it
@@ -37,8 +37,6 @@ struct NewSessionSheet: View {
 
     private var agentPicker: some View {
         Picker("Agent", selection: $form.agent) {
-            // Only for a `prompt_agent` project, which must not silently pick one.
-            if form.agent.isEmpty { Text("choose one").tag("") }
             ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
         }
     }
@@ -62,17 +60,9 @@ struct NewSessionSheet: View {
                         Text("choose one").tag("")
                         ForEach(projects, id: \.self) { Text($0).tag($0) }
                     }
-                    // Up here only when the project asks every time — and then
-                    // it asks about permissions too, as the TUI does.
-                    if project?.promptAgent == true {
-                        agentPicker
-                        Toggle("Skip permission prompts", isOn: $form.dangerous)
-                    }
                 } footer: {
                     if form.project.isEmpty {
                         Text("Choose the project to start the session in.")
-                    } else if project?.promptAgent == true && form.agent.isEmpty {
-                        Text("This project asks for an agent every time — pick one.")
                     }
                 }
                 Section {
@@ -142,12 +132,14 @@ struct NewSessionSheet: View {
                 }
                 Section {
                     DisclosureGroup("More options") {
-                        if project?.promptAgent != true { agentPicker }
+                        agentPicker
                         if hasModelList {
                             Picker("Model", selection: $form.model) {
-                                ForEach(models, id: \.self) { Text($0).tag($0) }
+                                ForEach(models, id: \.self) {
+                                    Text(app.modelLabel($0, agent: form.agent)).tag($0)
+                                }
                             }
-                        } else {
+                        } else if !form.agent.isEmpty {
                             field("Model", $form.modelText, prompt: "default")
                         }
                         // Starts at the config's default; this session only.
@@ -205,7 +197,11 @@ struct NewSessionSheet: View {
                       allowsMultipleSelection: true) { attach(app.attachJobs($0)) }
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
-        .onChange(of: app.agentNames) { _, _ in app.agentNamesChanged(in: &form) }
+        .onChange(of: form.model) { _, _ in app.clampChoices(of: &form) }
+        .onChange(of: app.agentNames) { _, _ in app.presetAgent(in: &form) }
+        .onChange(of: app.config?.lastAgent) { _, _ in app.presetAgent(in: &form) }
+        .onChange(of: app.agentOptions) { _, _ in app.keepChoices(of: &form) }
+        .onChange(of: app.config?.excludedModels) { _, _ in app.keepChoices(of: &form) }
     }
 
     // MARK: - Attachments

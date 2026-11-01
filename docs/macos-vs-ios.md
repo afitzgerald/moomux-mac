@@ -805,7 +805,9 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 
 | Setting | Where it lives | Mac | iPhone |
 |---|---|---|---|
-| projects, agent, skip-permissions, base branch, branch prefix, emoji | core | ✅ Settings → Projects | applies, not editable |
+| projects, skip-permissions, base branch, branch prefix, emoji | core | ✅ Settings → Projects | applies, not editable |
+| last agent (`last_agent`) | core | written by every create, presets New Session | the same |
+| hidden models (`excluded_models`) | core | ✅ Settings → General → Hidden models | applies to the pickers, not editable |
 | sort by last opened, send first prompt by default, terminal pane in new sessions | core | ✅ Settings → General | applies, not editable |
 | theme | core | ✅ Settings → Appearance | theme colours apply to the rows |
 | project collapsed, folder collapsed | core | ✅ | ✅ (both toggle the same flag) |

@@ -957,10 +957,10 @@ Decisions, not oversights. Don't "fix" these without being asked.
   Projects stay on Settings' chevron buttons — `MoveProject` takes a ±1 delta.
 - **The project sheet follows New Session's shape.** Repo path first, with a Choose… folder
   picker; the name is optional and defaults to the folder's (`ProjectForm.nameToSend` — whitespace
-  becomes hyphens, nothing else is touched); base branch, then agent and skip-permissions, on the
-  face; branch prefix, no-worktrees and emoji under More options. "Ask every time" is an entry in
-  the agent menu, not a toggle; choosing it greys out skip-permissions, since New Session then asks
-  that per session and the project's value would never be used.
+  becomes hyphens, nothing else is touched); base branch and skip-permissions on the face; branch
+  prefix, no-worktrees and emoji under More options. There is no agent: the core keeps one global
+  agent, `last_agent` (moomux 1be7c3c). `Project.agent` / `promptAgent` are still decoded and
+  sent back unedited, only so an older core does not lose them on save.
 - **No client-side validation beyond `ProjectForm.problem`.** No `sanitizeName`, no `~` expansion,
   no duplicate-name check, no `IsRepo`, no worktree-mode-flip check: the core does all of it and its
   refusal is the message the user reads. Two validators are two rules to drift, and `problem`'s
@@ -1010,10 +1010,11 @@ Decisions, not oversights. Don't "fix" these without being asked.
   `done` precisely because `done` is now green everywhere.
 - **The New Session sheet asks only what changes per session**, on the Mac and the iPhone alike.
   Project, first prompt, thinking level, name, existing branch, base branch, ticket and PR are on
-  the face; the agent override, model and the send toggle sit under a collapsed "More options". A
-  `prompt_agent` project moves the agent up onto the face, required, **with a skip-permissions
-  toggle beside it** — the TUI asks both for such a project and inherits neither, and so does
-  this. Any other project sends `Dangerous: nil`, so its own flag applies. The send toggle starts
+  the face; the agent, model and the send toggle sit under a collapsed "More options". The agent
+  starts on `Config.last_agent`, the agent the last session was created with, which the core
+  writes on every create; a project switch leaves it alone, and model and thinking always start on
+  "default" (`NewSessionForm.presetAgent`). There is no per-session skip-permissions: every
+  create sends `Dangerous: nil`, so the project's flag applies. The send toggle starts
   at `auto_submit_default` and is this session's only: nothing writes it back (Settings owns the
   default). The base branch arrives filled in with the project's (`seedBaseBranch`), follows a
   project switch until the user types over it, and is not sent for a resumed branch. The name is
@@ -1025,18 +1026,25 @@ Decisions, not oversights. Don't "fix" these without being asked.
   as its own message in the error alert. Neither sheet has a title.
   **The rule for growing this form is unchanged: the core must be able to hand over the list it
   validates against.** That is now true of the picker-shaped fields — `AgentOptions` serves
-  `internal/app`'s own table, and `AppState.agentNames`/`models(for:)`/`thinking(for:)` mirror
-  `internal/tui`'s three lookup helpers *including their fallbacks*, over the same data. A field the
-  app can fill from `Config`, from that table, or from free text is fair game; one that needs a
-  hardcoded table is still not.
+  `internal/app`'s own table at connect, and every snapshot's `agents` replaces it, because the
+  model lists come from agent-usage's `models.json` and change under a running core.
+  `AppState.models(for:)` is that list minus `Config.excluded_models` ("default" always kept),
+  labelled by `modelLabel` (the core's `model_names`), and `thinking(for:model:)` is the model's
+  `model_thinking` list, else the agent's. An agent the table does not mention gets no list: no
+  fallback to claude's. A chosen model that a new table or a hidden-models change drops stays
+  chosen, as the extra entry after "default" (`NewSessionForm.extraModel`, `keepChoices`). The
+  rules are the models contract owned by the core session; `internal/tui`'s
+  `restoreFormSelection` is the reference. A field the app can fill from
+  `Config`, from that table, or from free text is fair game; one that needs a hardcoded table is
+  still not.
   **Creating a session is one call.** `CreateSession` takes a whole `session.CreateRequest` and the
   core runs the sequence — worktree and branch, tmux pane and agent, PR tag, composed first prompt
   (thinking-level prefix for the agents with no launch flag for it, then the ticket and PR lines),
   typed into the pane. This app replayed all of it step by step until the core owned it, and
   drifting from the TUI's copy of the same sequence is exactly how `moomux spawn` ended up storing
   no prompt at all. Do not reintroduce any of those steps here.
-  What is still on this side is the three rules in the bullet above: `AutoSubmit` from the form,
-  `Dangerous` only for a `prompt_agent` project, and no base branch for a resume. `OpenTerminal`
+  What is still on this side is the two rules in the bullet above: `AutoSubmit` from the form,
+  and no base branch for a resume. `OpenTerminal`
   stays unset, so a new session lands in the sidebar rather than in iTerm.
 - **A slow write reports in the toolbar, not in its sheet.** `AppState.busy` is set by `mutate` for
   every action and rendered by `ConnectionBadge`, so the New Session sheet closes on Create rather

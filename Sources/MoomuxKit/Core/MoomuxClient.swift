@@ -112,6 +112,8 @@ public final class MoomuxClient: Sendable {
         /// refuse it.
         var project: String?
         var agent: String?
+        /// `SetModelExcluded`'s model ID.
+        var model: String?
         var ticket: String?
         var pr: String?
         var theme: String?
@@ -148,7 +150,7 @@ public final class MoomuxClient: Sendable {
         // name. A missing entry here would be invisible in both directions —
         // Go ignores the unknown key and uses the zero value.
         enum CodingKeys: String, CodingKey {
-            case id, ids, name, agent, ticket, pr, delta, dangerous, on, theme, appearance, req, proj
+            case id, ids, name, agent, model, ticket, pr, delta, dangerous, on, theme, appearance, req, proj
             case newName = "new_name"
             case project
             case cols, rows
@@ -690,6 +692,11 @@ public final class MoomuxClient: Sendable {
         try call("SetTerminalPane", Args(on: on))
     }
 
+    /// `on` hides `model` from `agent`'s pickers.
+    public func setModelExcluded(agent: String, model: String, on: Bool) throws {
+        try call("SetModelExcluded", Args(agent: agent, model: model, on: on))
+    }
+
     // MARK: - Status stream
 
     /// Yields a snapshot per tick until the connection drops, then finishes
@@ -1001,6 +1008,9 @@ public final class MoomuxClient: Sendable {
         expect(#"{"args":{"on":false},"method":"SetSortRecentFirst"}"#) { try client.setSortRecentFirst(false) }
         expect(#"{"args":{"on":true},"method":"SetAutoTmux"}"#) { try client.setAutoTmux(true) }
         expect(#"{"args":{"on":false},"method":"SetTerminalPane"}"#) { try client.setTerminalPane(false) }
+        expect(#"{"args":{"agent":"claude","model":"claude-haiku-4-5","on":false},"method":"SetModelExcluded"}"#) {
+            try client.setModelExcluded(agent: "claude", model: "claude-haiku-4-5", on: false)
+        }
 
         // MARK: Failures
 
