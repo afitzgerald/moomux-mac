@@ -1,10 +1,18 @@
 name: Test
 
+# A change to nothing but these builds nothing new, so it runs nothing — and
+# since Deploy follows this workflow, a docs-only merge cuts no release.
+# Named rather than `**/*.md`: THIRD_PARTY_NOTICES.md ships inside both apps.
 on:
   pull_request:
+    paths-ignore: &docs
+      - "docs/**"
+      - README.md
+      - CLAUDE.md
   push:
     branches:
       - main
+    paths-ignore: *docs
 
 concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
@@ -12,11 +20,15 @@ concurrency:
 
 jobs:
   # One debug build (selfcheck, which doubles as the warnings gate), one
-  # release build (`make app`) and the iOS bundle. No macOS version matrix —
+  # release build (`make app`) and the iOS bundle, each on its own runner. The
+  # three share no build output — debug, release and the iOS triple each
+  # compile every dependency from scratch — so one job ran them back to back
+  # for ~7 minutes, and three run side by side in the time of the slowest.
+  # macOS runners cost nothing on a public repo. No macOS version matrix —
   # SwiftUI/AppKit APIs used here (Package.swift pins .macOS(.v14)) aren't
   # available on older runners, and there's only one platform this app ships
   # for.
-  test:
+  selfcheck:
     runs-on: macos-26
     timeout-minutes: 20
     steps:
@@ -35,20 +47,32 @@ jobs:
       - name: Selfcheck, warnings as errors
         run: make selfcheck SWIFT_BUILD_FLAGS="-Xswiftc -warnings-as-errors"
 
+  app:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       # Confirms a release build still produces a working, ad-hoc-signed
-      # bundle — the shape release.yml ships. Not a substitute for selfcheck
-      # above, which needs the debug build to keep its asserts.
+      # bundle — the shape release.yml ships. Not a substitute for selfcheck,
+      # which needs the debug build to keep its asserts.
       - name: Release build + app bundle
         run: make app
 
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       # `Sources/MoomuxiOS` is not a SwiftPM target — it is compiled by a bare
-      # `swiftc` in `make ios` — so nothing above type-checks a line of it.
+      # `swiftc` in `make ios` — so neither macOS job type-checks a line of it.
       # Without this a phone-only file can break and every other check stays
       # green.
       #
-      # The one step that needs an iOS SDK, so it pins the toolchain rather
+      # The one job that needs an iOS SDK, so it pins the toolchain rather
       # than inheriting whichever Xcode the image defaults to — `make ios`
-      # reads the SDK path out of `xcrun`, and the macOS steps above stay on
+      # reads the SDK path out of `xcrun`, and the macOS jobs stay on
       # the CommandLineTools toolchain the dev machine uses. The `xcrun` line
       # is there so an image without that SDK says so in one line rather than
       # as forty "unable to load standard library" errors.
