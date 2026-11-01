@@ -1024,7 +1024,8 @@ public final class AppState {
     /// filtered to this window's view.
     public var folderSidebarRows: [Layout.FolderSidebarRow] {
         let rows = Layout.folderRows(folderRows, shown: listedSessions, searching: searching,
-                                     collapsedGroups: collapsedGroups)
+                                     collapsedGroups: collapsedGroups,
+                                     subheaders: showFolderProjects)
         // Whole-store membership decides "empty", so a folder whose members are
         // merely filtered out of this window is not mistaken for one.
         let used = Set(sessions.map(\.folder))
@@ -2271,6 +2272,15 @@ public final class AppState {
     }
 
     static let folderFirstKey = "folderFirst"
+
+    /// In the folder-first lens, a project subheader under each folder. Off,
+    /// a folder lists its sessions straight under it, still grouped by
+    /// project. `UserDefaults` like `folderFirst`.
+    public var showFolderProjects: Bool = UserDefaults.standard.bool(forKey: showFolderProjectsKey) {
+        didSet { UserDefaults.standard.set(showFolderProjects, forKey: Self.showFolderProjectsKey) }
+    }
+
+    static let showFolderProjectsKey = "showFolderProjects"
 
     /// Draw the session list on the window's right edge. Mac only; the phone
     /// has no side-by-side sidebar. `UserDefaults` for the same reason as

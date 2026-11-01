@@ -327,6 +327,8 @@ struct SessionListView: View {
                             set: { app.folderFirst = $0 }
                         ))
                         .disabled(app.folderRows.isEmpty)
+                        Toggle("Projects in Folders", isOn: $app.showFolderProjects)
+                            .disabled(!app.folderView)
                         Toggle("Archived Only", isOn: $app.showArchived)
                         Toggle("Show Project Emoji", isOn: $app.showProjectEmoji)
                         Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
