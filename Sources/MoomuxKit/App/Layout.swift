@@ -557,11 +557,11 @@ public enum Layout {
         assert(move(lens, from: 2, to: 0) == .none, "above every folder is nowhere")
         // Without subheaders a folder's projects run straight into each
         // other: the gap after one project's last member is still the folder.
-        let flat = [MoveSlot(folder: "work"),
-                    MoveSlot(session: "a", folder: "work", project: "p"),
-                    MoveSlot(session: "a2", folder: "work", project: "p"),
-                    MoveSlot(session: "b", folder: "work", project: "q")]
-        assert(move(flat, from: 1, to: 3) == .place(after: "a2", before: nil),
+        let unheaded = [MoveSlot(folder: "work"),
+                        MoveSlot(session: "a", folder: "work", project: "p"),
+                        MoveSlot(session: "a2", folder: "work", project: "p"),
+                        MoveSlot(session: "b", folder: "work", project: "q")]
+        assert(move(unheaded, from: 1, to: 3) == .place(after: "a2", before: nil),
                "the end of its project's run, not out of the folder")
         // b is project q's here: p's loose block is no place for it.
         var other = lens
