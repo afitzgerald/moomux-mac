@@ -187,7 +187,8 @@ struct TerminalScreen: View {
             }
     }
 
-    var body: some View {
+    // Split from `body` for the same reason as `terminal`.
+    private var pickers: some View {
         terminal
             // The New Session sheet's pickers, with the path pasted into the
             // pane rather than appended to a form: the agent is already
@@ -215,6 +216,10 @@ struct TerminalScreen: View {
             .onChange(of: edit == nil) { _, closed in if closed { pane.view?.becomeFirstResponder() } }
             .onChange(of: killing) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             .onChange(of: deleting) { _, open in if !open { pane.view?.becomeFirstResponder() } }
+    }
+
+    var body: some View {
+        pickers
             // No form to put it under, and the pane is the program's screen.
             .alert("Couldn't attach",
                    isPresented: Binding(get: { attachments.error != nil },
