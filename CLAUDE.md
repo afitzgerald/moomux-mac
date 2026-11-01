@@ -1009,14 +1009,15 @@ Decisions, not oversights. Don't "fix" these without being asked.
   "default" for it; and `warn` — the ± / ↑ git badges — is amber in every theme, split out of
   `done` precisely because `done` is now green everywhere.
 - **The New Session sheet asks only what changes per session**, on the Mac and the iPhone alike.
-  Project, first prompt, thinking level, name, existing branch, base branch, ticket and PR are on
-  the face; the agent, model and the send toggle sit under a collapsed "More options". The agent
+  Project, first prompt, name, existing branch, base branch, ticket and PR are on the face, with
+  one row under the prompt shared by both apps (`MoomuxKit/App/PromptBar.swift`): Attach and
+  Snippets in a pill, agent and model as one choice, and thinking level. There is no "More
+  options": a free-text model for an agent with no list appears right under that row. The agent
   starts on `Config.last_agent`, the agent the last session was created with, which the core
   writes on every create; a project switch leaves it alone, and model and thinking always start on
   "default" (`NewSessionForm.presetAgent`). There is no per-session skip-permissions: every
-  create sends `Dangerous: nil`, so the project's flag applies. The send toggle starts
-  at `auto_submit_default` and is this session's only: nothing writes it back (Settings owns the
-  default). The base branch arrives filled in with the project's (`seedBaseBranch`), follows a
+  create sends `Dangerous: nil`, so the project's flag applies. Nor is there a per-session send
+  toggle: `AutoSubmit` is always `auto_submit_default`, which Settings owns. The base branch arrives filled in with the project's (`seedBaseBranch`), follows a
   project switch until the user types over it, and is not sent for a resumed branch. The name is
   optional and **sent empty**: the core names the session after the existing branch, else the
   prompt, else assigns one, de-duplicating all three — only it can see which names are taken. The
@@ -1043,7 +1044,8 @@ Decisions, not oversights. Don't "fix" these without being asked.
   typed into the pane. This app replayed all of it step by step until the core owned it, and
   drifting from the TUI's copy of the same sequence is exactly how `moomux spawn` ended up storing
   no prompt at all. Do not reintroduce any of those steps here.
-  What is still on this side is the two rules in the bullet above: `AutoSubmit` from the form,
+  What is still on this side is the two rules in the bullet above: `AutoSubmit` from the form (seeded
+  from `auto_submit_default`, with no control to change it),
   and no base branch for a resume. `OpenTerminal`
   stays unset, so a new session lands in the sidebar rather than in iTerm.
 - **A slow write reports in the toolbar, not in its sheet.** `AppState.busy` is set by `mutate` for

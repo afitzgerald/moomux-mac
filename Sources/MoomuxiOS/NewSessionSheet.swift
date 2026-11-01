@@ -1,5 +1,4 @@
 import MoomuxKit
-import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -16,14 +15,10 @@ struct NewSessionSheet: View {
     /// reopened over it.
     @State private var error: String?
     @FocusState private var baseBranchFocused: Bool
-    @State private var photos: [PhotosPickerItem] = []
-    @State private var importingFiles = false
     @State private var attachments = AttachQueue()
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
-    private var models: [String] { form.modelChoices(app.models(for: form.agent)) }
-    private var thinking: [String] { app.thinking(for: form.agent, model: form.model) }
     private var hasModelList: Bool { app.hasModelList(for: form.agent) }
     /// Anything typed. Pickers are cheap to redo; a half-written prompt is not.
     /// The base branch counts once it differs from the project's, which it
@@ -34,12 +29,6 @@ struct NewSessionSheet: View {
             || ![form.name, form.prompt, form.existingBranch, form.ticket, form.pr].allSatisfy(\.isEmpty)
     }
     private var blamesBaseBranch: Bool { error.map(NewSessionForm.blamesBaseBranchField) == true }
-
-    private var agentPicker: some View {
-        Picker("Agent", selection: $form.agent) {
-            ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
-        }
-    }
 
     private func field(_ label: String, _ text: Binding<String>, prompt: String) -> some View {
         LabeledContent(label) {
@@ -52,8 +41,7 @@ struct NewSessionSheet: View {
 
     var body: some View {
         NavigationStack {
-            // The Mac's layout: what changes per session on the face, the
-            // agent override and model folded under More options.
+            // The Mac's layout, in sections.
             Form {
                 Section {
                     Picker("Project", selection: $form.project) {
@@ -83,33 +71,12 @@ struct NewSessionSheet: View {
                             }
                         }
                         .accessibilityLabel("Prompt")
-                    // Borderless, or two buttons sharing a Form row both fire
-                    // on any tap in it. The pill and Thinking share the row:
-                    // both are settings of the prompt above.
-                    HStack(spacing: 8) {
-                        HStack(spacing: 0) {
-                            PhotosPicker(selection: $photos, matching: .images) {
-                                Image(systemName: "photo.on.rectangle").attachBarIcon()
-                            }
-                            .accessibilityLabel("Photos")
-                            Button { importingFiles = true } label: {
-                                Image(systemName: "paperclip").attachBarIcon()
-                            }
-                            .accessibilityLabel("Files")
-                        }
-                        .buttonStyle(.borderless)
-                        .tint(.white)
-                        .attachBarPill()
-                        if attachments.pending > 0 { ProgressView().accessibilityLabel("Uploading") }
-                        Spacer(minLength: 8)
-                        if !thinking.isEmpty {
-                            Picker("Thinking", selection: $form.thinking) {
-                                ForEach(thinking, id: \.self) { Text($0).tag($0) }
-                            }
-                            .pickerStyle(.menu)
-                            .tint(.secondary)
-                            .fixedSize()
-                        }
+                    PromptBar(app: app, form: $form, uploading: attachments.pending > 0,
+                              attach: attach, fileJobs: app.attachJobs)
+                    // Under the agent it belongs to, only for one with no
+                    // model list (opencode); the rest pick theirs in the menu.
+                    if !hasModelList && !form.agent.isEmpty {
+                        field("Model", $form.modelText, prompt: "default")
                     }
                 } footer: {
                     if let error = form.promptProblem ?? attachments.error { Text(error).foregroundStyle(.red) }
@@ -129,22 +96,6 @@ struct NewSessionSheet: View {
                 Section {
                     field("Ticket", $form.ticket, prompt: "")
                     field("PR", $form.pr, prompt: "")
-                }
-                Section {
-                    DisclosureGroup("More options") {
-                        agentPicker
-                        if hasModelList {
-                            Picker("Model", selection: $form.model) {
-                                ForEach(models, id: \.self) {
-                                    Text(app.modelLabel($0, agent: form.agent)).tag($0)
-                                }
-                            }
-                        } else if !form.agent.isEmpty {
-                            field("Model", $form.modelText, prompt: "default")
-                        }
-                        // Starts at the config's default; this session only.
-                        Toggle("Send the prompt", isOn: $form.autoSubmit)
-                    }
                 }
             }
             .toolbar {
@@ -188,13 +139,6 @@ struct NewSessionSheet: View {
                 form.prompt = prompt
             }
         }
-        .onChange(of: photos) { _, items in
-            guard !items.isEmpty else { return }
-            photos = []
-            attach(app.attachJobs(items))
-        }
-        .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item],
-                      allowsMultipleSelection: true) { attach(app.attachJobs($0)) }
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
         .onChange(of: form.model) { _, _ in app.clampChoices(of: &form) }
@@ -216,17 +160,6 @@ struct NewSessionSheet: View {
 /// One upload job per picked photo or file, shared by the New Session sheet and
 /// the terminal screen — they differ only in where the returned path lands.
 extension AppState {
-    func attachJobs(_ items: [PhotosPickerItem]) -> [AttachJob] {
-        items.map { item in {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                throw CocoaError(.fileReadUnknown)
-            }
-            let type = item.supportedContentTypes.first
-            return try await self.attach(name: "photo.\(type?.preferredFilenameExtension ?? "jpg")",
-                                         type: type, data: data)
-        } }
-    }
-
     /// A picker that failed becomes a job that fails, so its reason is shown
     /// where an upload's failure would be.
     func attachJobs(_ picked: Result<[URL], Error>) -> [AttachJob] {
@@ -243,14 +176,3 @@ extension AppState {
     }
 }
 
-/// The key bar's look (`PaneKeyBar`): icon-only buttons, 14pt glyphs, 51pt
-/// tall, in one dark glass pill.
-private extension View {
-    func attachBarIcon() -> some View {
-        font(.system(size: 14)).frame(minWidth: 48, minHeight: 51).contentShape(Rectangle())
-    }
-
-    func attachBarPill() -> some View {
-        glassEffect(.regular.tint(.black.opacity(0.7)).interactive(), in: Capsule())
-    }
-}

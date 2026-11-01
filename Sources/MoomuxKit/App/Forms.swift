@@ -42,9 +42,8 @@ public struct NewSessionForm: Equatable, Sendable {
     public var ticket = ""
     public var pr = ""
     public var prompt = ""
-    /// Press Enter after typing the prompt. Starts at the config's
-    /// `auto_submit_default` and is changed per session under More options —
-    /// never written back, so one session's choice is not the next one's.
+    /// Press Enter after typing the prompt: the config's `auto_submit_default`.
+    /// Neither sheet offers a per-session override.
     public var autoSubmit = false
     /// What `presetAgent` last chose, so a re-run can tell a value the user
     /// picked from one it seeded — and whether that was the agent it was

@@ -756,6 +756,16 @@ exits.** Both build on `NewSessionForm` and the core's `AgentOptions`.
   still be on the list (`focus: { path.isEmpty }`), because a create takes tens of seconds and a
   jump would detach whatever pane they are typing in.
 - **Dismissal.** The phone disables swipe-to-dismiss once anything is typed or uploading.
+- **The prompt's pill.** Both apps put one row under the prompt, the same view (`PromptBar`): a
+  glass pill of Attach (a menu of Photos and Files, as on the key bar) and Snippets, then one
+  single-choice list of agent and model, each agent's models under its name (the button shows only
+  the agent's logo; the menu's checkmark says which model), then Thinking, since the three change
+  together. Neither sheet has More options or a send toggle any more (sending follows Settings'
+  default); an agent with no model list (opencode) gets its free-text Model field right under
+  that row. Prompt snippets are their own list
+  (`Snippet.promptKey`), starting empty, appended to the prompt, with no Return flag; the key
+  bar's list is untouched. What differs is size: the phone's pill is the key bar's, the Mac's is
+  sized to its own controls, and the Mac still takes drag and paste into the prompt as well.
 
 ---
 
@@ -822,6 +832,7 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 | project emoji in the menu bar (`showMenuBarEmoji`) | device | ✅ Settings → Appearance | n/a (no menu bar) |
 | terminal size (`terminalFontSize`) | device | n/a (D30) | ✅ pane ⋯ menu, and pinch |
 | key-bar snippets (`snippets`) | device | n/a (no key bar, D54) | ✅ key bar → Edit Snippets… |
+| first-prompt snippets (`promptSnippets`) | device | ✅ New Session → bolt → Edit Snippets… | ✅ New Session → bolt → Edit Snippets… |
 | saved computers (`computers`; `coreHost`/`corePort` migrate once, D56) | device | n/a (`--socket`) | ✅ connect screen, the computer list |
 
 The practical consequence: turning MergeRight links or folder grouping on at the desk does

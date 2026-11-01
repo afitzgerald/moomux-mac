@@ -11,9 +11,20 @@ public struct AgentMark: View {
         self.size = size
     }
 
+    /// The mark for an agent we have one for, by its name in any case
+    /// (`claude` off the wire, `Claude` in the usage line); nil for the rest.
+    public static func image(_ agent: String) -> Image? {
+        switch agent.lowercased() {
+        case "claude": Image("AnthropicMark", bundle: .module).renderingMode(.template)
+        case "codex": Image("OpenAIMark", bundle: .module).renderingMode(.template)
+        case "opencode": Image("OpencodeMark", bundle: .module).renderingMode(.template)
+        case "antigravity": Image("AntigravityMark", bundle: .module).renderingMode(.template)
+        default: nil
+        }
+    }
+
     public var body: some View {
-        Image(agent == "Claude" ? "AnthropicMark" : "OpenAIMark", bundle: .module)
-            .renderingMode(.template)
+        (Self.image(agent) ?? Image("OpenAIMark", bundle: .module).renderingMode(.template))
             .resizable()
             .scaledToFit()
             .frame(width: size, height: size)
