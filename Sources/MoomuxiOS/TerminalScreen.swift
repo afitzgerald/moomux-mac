@@ -20,6 +20,8 @@ import UIKit
 struct TerminalScreen: View {
     let app: AppState
     let sessionID: Session.ID
+    /// Whose servers the Browser reaches; nil only between computers.
+    let computer: Computers.Computer?
     /// Pushes onto the list's stack. The ⋯ menu's Details needs it: a
     /// `NavigationLink` inside a `Menu` is not reliably a link.
     let push: (Route) -> Void
@@ -45,6 +47,11 @@ struct TerminalScreen: View {
     /// a create takes tens of seconds, so a jump would detach them from it.
     @State private var creating = false
     @State private var editingSnippets = false
+    /// This session's Browser, as a sheet so a swipe down puts the pane back.
+    /// `-browser YES` is the screenshot seam.
+    @State private var browsing = UserDefaults.standard.bool(forKey: "browser")
+    /// A dev-server link tapped in the pane, opened instead of the last URL.
+    @State private var browserURL: URL?
     /// The pane's own, for the same reason as `deleting`: detail binds its
     /// own copy of these alerts.
     @State private var edit: SessionEdit?
@@ -96,6 +103,12 @@ struct TerminalScreen: View {
             .quickLookPreview($preview)
             .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { false }) }
             .sheet(isPresented: $editingSnippets) { SnippetsSheet() }
+            .sheet(isPresented: $browsing, onDismiss: { browserURL = nil }) {
+                if let computer {
+                    BrowserScreen(computer: computer, sessionID: sessionID, url: browserURL)
+                        .presentationDragIndicator(.visible)
+                }
+            }
             // Leaving the pane abandons its fetch, or a late refusal raises
             // "Couldn't do that" over whatever screen is next.
             .onDisappear {
@@ -130,6 +143,10 @@ struct TerminalScreen: View {
                         Button { creating = true } label: {
                             Label("New Session", systemImage: "plus.bubble")
                         }
+                        Button { browsing = true } label: {
+                            Label("Browser", systemImage: "safari")
+                        }
+                        .disabled(computer == nil)
                         if let session = app.session(id: sessionID) {
                             SessionActions(app: app, session: session, edit: $edit, inMenu: true,
                                            kill: { killing = true },
@@ -190,6 +207,11 @@ struct TerminalScreen: View {
             .onChange(of: importingFiles) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             .onChange(of: creating) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             .onChange(of: editingSnippets) { _, open in if !open { pane.view?.becomeFirstResponder() } }
+            // The key bar is the pane's input accessory: it floats over the
+            // sheet until the pane lets go of first responder.
+            .onChange(of: browsing) { _, open in
+                if open { pane.view?.resignFirstResponder() } else { pane.view?.becomeFirstResponder() }
+            }
             .onChange(of: edit == nil) { _, closed in if closed { pane.view?.becomeFirstResponder() } }
             .onChange(of: killing) { _, open in if !open { pane.view?.becomeFirstResponder() } }
             .onChange(of: deleting) { _, open in if !open { pane.view?.becomeFirstResponder() } }
@@ -231,12 +253,16 @@ struct TerminalScreen: View {
             // still land on the core, and its temp sweep takes them.
     }
 
-    /// A PR or Asana task link goes to MergeRight while that setting is on and
-    /// the app is installed, the same rule as the Mac pane. Anything else goes
-    /// to `UIApplication.open`, which hands an https link to the app that
-    /// claims it (GitHub, Asana) before Safari.
+    /// A dev server's link opens in this session's Browser, since only the
+    /// computer can reach it. A PR or Asana task link goes to MergeRight while
+    /// that setting is on and the app is installed, the same rule as the Mac
+    /// pane. Anything else goes to `UIApplication.open`, which hands an https
+    /// link to the app that claims it (GitHub, Asana) before Safari.
     private func open(url: URL) {
-        if let mr = app.mergeRightLink(url.absoluteString), UIApplication.shared.canOpenURL(mr) {
+        if computer != nil, BrowserAddress.isDevServer(url) {
+            browserURL = url
+            browsing = true
+        } else if let mr = app.mergeRightLink(url.absoluteString), UIApplication.shared.canOpenURL(mr) {
             UIApplication.shared.open(mr)
         } else {
             UIApplication.shared.open(url)
@@ -357,8 +383,9 @@ struct AttachedTerminal: UIViewRepresentable {
     /// are `ctrlOrSuper`, and the `link` config that would change that "can't
     /// currently be set" — and a finger tap carries no modifiers, so no link
     /// ever opened on the phone. So a clean tap (the one the package would
-    /// spend toggling the keyboard) first asks ghostty what is under it as if
-    /// ⌘ were held. `mouse_over_link` answers synchronously on the main thread.
+    /// spend clicking and toggling the keyboard) first asks ghostty what is
+    /// under it as if ⌘ were held. Inline selection must stay on (the
+    /// package's default): the single-tap recognizer is where that is asked. `mouse_over_link` answers synchronously on the main thread.
     ///
     /// Shift as well while the program captures the mouse, which tmux with
     /// `mouse on` does: ghostty only refreshes links under capture when shift
@@ -369,7 +396,6 @@ struct AttachedTerminal: UIViewRepresentable {
     /// config suppresses `mouse_over_link` for plain URLs, so taps stop finding
     /// them; the upgrade is a ⌘-click through `open_url` instead.
     final class LinkTapView: UITerminalView {
-        private var tap: CGPoint?
 
         /// The size the surface is drawing at now. The package tracks its own
         /// pinch counter privately (starting at 14, whatever the surface was
@@ -425,6 +451,10 @@ struct AttachedTerminal: UIViewRepresentable {
             case .changed:
                 swipeVertical += abs(point.y - swipeLast.y)
             case .ended:
+                // The package's fling runs on after this; a tap during it
+                // stops it rather than following a link.
+                let fling = gesture.velocity(in: self)
+                if hypot(fling.x, fling.y) > 200 { flingUntil = Date().addingTimeInterval(1) }
                 swipeVertical += abs(point.y - swipeLast.y)
                 guard let start = swipeStart, start.x > 30 else { break }
                 let v = gesture.velocity(in: self)
@@ -546,25 +576,75 @@ struct AttachedTerminal: UIViewRepresentable {
 
         @objc func endFloatingCursor() { floatingStart = nil }
 
-        /// Kept past `super`: with inline selection on, a single tap is a
-        /// recognizer that fires only once a double tap has failed, well
-        /// after `touchesEnded` returns. Consumed by the toggle it leads to.
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-            tap = touches.first?.location(in: self)
+            if swallowingClick { swallowingClick = false; return }
             super.touchesEnded(touches, with: event)
         }
 
-        override func toggleSoftwareKeyboard() {
-            defer { tap = nil }
-            guard let tap, let coordinator = delegate as? Coordinator else {
-                return toggleKeyboard()
-            }
+        override func toggleSoftwareKeyboard() { toggleKeyboard() }
+
+        /// Approximately when the package's fling stops: it keeps the real
+        /// end to itself. Ceiling: a slow fling can outlast this, and a tap
+        /// then opens a link where it meant to stop the scroll.
+        private var flingUntil = Date.distantPast
+        /// Read when the tap begins: by the time the recognizer asks, the
+        /// package has already stopped the fling.
+        private var tapStopsFling = false
+
+        /// Opens the link under `point`, if there is one.
+        private func follow(at point: CGPoint) -> Bool {
+            guard let coordinator = delegate as? Coordinator else { return false }
             sendMousePos(x: -1, y: -1)
             coordinator.hoverLink = nil
-            sendMousePos(x: tap.x, y: tap.y, modifiers: isMouseCaptured ? [.super_, .shift] : .super_)
+            sendMousePos(x: point.x, y: point.y, modifiers: isMouseCaptured ? [.super_, .shift] : .super_)
             let link = coordinator.hoverLink
             sendMousePos(x: -1, y: -1)
-            guard let link, coordinator.follow(link) else { return toggleKeyboard() }
+            guard let link else { return false }
+            return coordinator.follow(link)
+        }
+
+        /// A tap on a link opens it and goes no further. The package reports
+        /// the tap to the program as a click before `toggleSoftwareKeyboard`,
+        /// and a TUI tracking the mouse — Claude Code is one — opens the link
+        /// itself, in the computer's browser rather than this session's.
+        /// Refusing the single-tap recognizer is what keeps that click back;
+        /// UIKit asks only once the tap is complete. A tap that clears a
+        /// selection or stops a fling is left to the package, as before.
+        /// Ceiling: the package keeps its edit menu's visibility private, so a
+        /// tap closing a menu with nothing selected (long press → Paste) on a
+        /// link opens it.
+        override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            if let tap = recognizer as? UITapGestureRecognizer,
+               tap.numberOfTapsRequired == 1, tap.numberOfTouchesRequired == 1,
+               !tapStopsFling, surface?.hasSelection() != true,
+               follow(at: tap.location(in: self)) {
+                return false
+            }
+            return super.gestureRecognizerShouldBegin(recognizer)
+        }
+
+        /// The same for a mouse or trackpad click (and DeviceHub's pointer),
+        /// which the package sends straight to the program from
+        /// `touchesBegan`, bypassing every recognizer: a primary press on a
+        /// link opens it, and the rest of that click is swallowed.
+        private var swallowingClick = false
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            tapStopsFling = Date() < flingUntil
+            if let touch = touches.first, touch.type == .indirectPointer,
+               event?.buttonMask == .primary, follow(at: touch.location(in: self)) {
+                swallowingClick = true
+                return
+            }
+            super.touchesBegan(touches, with: event)
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+            if !swallowingClick { super.touchesMoved(touches, with: event) }
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            if swallowingClick { swallowingClick = false } else { super.touchesCancelled(touches, with: event) }
         }
     }
 

@@ -205,8 +205,8 @@ xcrun simctl launch booted app.moomux.Moomux -coreHost 127.0.0.1 -corePort 8765 
 ```
 
 `-newSession YES` opens the New Session sheet at launch — the screenshot seam; `make ios-run`
-does not pass it, so launch by hand for that screen. `-browser YES -browserURL <url>` does the
-same for the Browser screen. That screen needs the core's proxy on `<host>:45877` (D58).
+does not pass it, so launch by hand for that screen. `-openSession <id> -attach YES -browser YES
+-browserURL <url>` does the same for a pane's Browser. That screen needs the core's proxy on `<host>:45877` (D58).
 
 **Reaching a scratch core takes a bridge.** The phone talks TCP, and the core only listens on TCP at
 this machine's tailnet address (`ipc.TailnetPort`), which the real core already holds.

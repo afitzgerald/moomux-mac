@@ -31,7 +31,6 @@ enum Route: Hashable {
     case terminal(Session.ID)
     case changes(Session.ID)
     case fileDiff(Session.ID, String)
-    case browser
 }
 
 // MARK: - List
@@ -59,10 +58,10 @@ struct SessionListView: View {
     /// `-openSession <id>` opens one straight away and `make ios-shot
     /// SESSION=<id>` can photograph the detail screen. A `UserDefaults` key,
     /// so it costs nothing when unset. `-changes YES` goes on to the diff's
-    /// file list, and `-diffFile <path>` to one file in it.
+    /// file list, and `-diffFile <path>` to one file in it. `-attach YES
+    /// -browser YES` opens the pane's Browser over it.
     @State private var path: [Route] = {
         let defaults = UserDefaults.standard
-        if defaults.bool(forKey: "browser") { return [.browser] }
         guard let id = defaults.string(forKey: "openSession") else { return [] }
         if defaults.bool(forKey: "attach") { return [.detail(id), .terminal(id)] }
         if let file = defaults.string(forKey: "diffFile") {
@@ -303,17 +302,24 @@ struct SessionListView: View {
                 case let .terminal(id):
                     // `.id`: swapping A's pane for B's in the same stack slot must
                     // build a new view, since the attach is made once per view.
-                    TerminalScreen(app: app, sessionID: id) { path.append($0) }
+                    TerminalScreen(app: app, sessionID: id, computer: computers.saved.current) { path.append($0) }
                         .id(id)
                 case let .changes(id): ChangesScreen(app: app, sessionID: id)
                 case let .fileDiff(id, file):
                     // Past the Changes list too: at the end of the files it has nothing left to offer.
                     FileDiffScreen(app: app, sessionID: id, path: file) { path.removeLast(min(2, path.count)) }
-                case .browser:
-                    if let computer = computers.saved.current { BrowserScreen(computer: computer) }
                 }
             }
             .searchable(text: $app.searchQuery, prompt: "Search names")
+            // A session deleted anywhere, the Mac included, takes its
+            // Browser's logins with it. Empty is "not loaded yet", not "all
+            // deleted"; a computer down to no sessions keeps them until its next.
+            .onChange(of: app.sessions, initial: true) { _, sessions in
+                // The store's own computer, not `computers.saved.current`,
+                // which a switch moves before this list is replaced.
+                guard !sessions.isEmpty, let computer = UUID(uuidString: app.notificationKey) else { return }
+                BrowserStores.sweep(computer: computer, live: Set(sessions.map(\.id)))
+            }
             .refreshable { await app.refresh() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -333,8 +339,6 @@ struct SessionListView: View {
                         Toggle("Archived Only", isOn: $app.showArchived)
                         Toggle("Show Project Emoji", isOn: $app.showProjectEmoji)
                         Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
-                        Button("Browser", systemImage: "safari") { path.append(.browser) }
-                            .disabled(computers.saved.current == nil)
                         // Off in a build with no notes baked in (`make ios`).
                         Button("What's New") { showingNotes = true }
                             .disabled(WhatsNew.releases.isEmpty)

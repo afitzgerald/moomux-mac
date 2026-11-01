@@ -653,13 +653,19 @@ shortcut holds only because the Mac and the core share a disk. In a remote pane 
 is uploaded and the core's path pasted, as on the phone.
 
 **D58. The phone has a browser for the computer's dev servers; the Mac has its own browser.**
-⋯ → Browser (`BrowserScreen`) is a `WebView` whose data store sends every connection through the
+A pane's ⋯ → Browser (`BrowserScreen`), under New Session, is a sheet holding a `WebView` whose data store sends every connection through the
 core's CONNECT proxy (`ipc.TailnetProxyPort`, 45877, behind the same whois check as the IPC
 port). The computer resolves and dials each name, so `localhost:3000/app` and names
 from its `/etc/hosts` open unchanged, and nothing has to bind beyond loopback.
-`localhost` is proxied too (measured with a logging proxy). Each computer gets its own persistent
-data store, keyed by its id, so logins survive a relaunch and do not cross computers; forgetting
-the computer removes it. The last URL is remembered per computer too. Plain http
+`localhost` is proxied too (measured with a logging proxy). Each session gets its own persistent
+data store (`BrowserStores`), so logins survive a relaunch and stay with the session: cookies are
+scoped by host, not port, so in one shared store `localhost:3000` and `localhost:3001` would
+read and overwrite each other's logins. A session gone from the computer's list, deleted from any front end, takes
+its store with it on the next snapshot, and forgetting the computer removes all of them. The last
+URL is remembered per session too, and a link the pane's tap reports as a dev server (`BrowserAddress.isDevServer`:
+a loopback name or one reserved for local use, `.localhost`/`.test`/`.local`/`.internal`) opens there rather than
+in Safari, and that tap or click never reaches the program in the pane: Claude Code tracks the
+mouse and would open the link itself, in the computer's browser. A swipe down closes it and puts the pane back. Plain http
 needs `NSAllowsArbitraryLoadsInWebContent`, which covers web content only. The Mac needs no
 browser of its own: it already reaches those servers. One address field, with no tabs and no
 history beyond the last URL.
