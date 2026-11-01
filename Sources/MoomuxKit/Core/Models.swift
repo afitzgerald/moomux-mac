@@ -397,7 +397,7 @@ public struct ThemePalette: Decodable, Hashable, Sendable {
     }
 }
 
-public struct Config: Decodable, Sendable {
+public struct Config: Decodable, Equatable, Sendable {
     public var projects: [String: Project]
     /// The global folder namespace, keyed by name (the name *is* the id, in
     /// every project at once). Membership lives on each session as
