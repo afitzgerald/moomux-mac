@@ -614,7 +614,7 @@ Ceiling: the punctuation keys the package's bar had (`| ~ /`) are gone.
 | Absolute path in a pane | opens locally if it exists; in a remote pane, `ReadFile` → temp file → default app | `ReadFile` → temp file → Quick Look |
 | Relative or `:line:col` path | `ResolveFile` on the core → opens locally; in a remote pane, `ReadFile` | `ReadFile` (the core resolves it) → Quick Look |
 | Ticket/PR tag | `WebSheet` (in-app WKWebView) | `Link` → the claiming app, then Safari |
-| Asana | rewritten to `asanadesktop://` | not rewritten |
+| Asana, Linear | rewritten to `asanadesktop://`, `linear://` | not rewritten |
 | MergeRight | when on and a handler is registered | when on and `canOpenURL` (`LSApplicationQueriesSchemes`) |
 
 **D34. Two allowlists, because a path means something different on each.** Pane output is
@@ -633,7 +633,7 @@ URLs.
 **D36. Tags open in-app on the Mac and through the system on the phone.** On the Mac, `WebSheet`
 closes with Esc and has "Open Externally" as the escape hatch. On the phone, `Link` hands an
 https URL to whichever app claims it, which covers GitHub and Asana, before Safari. The Mac
-rewrites Asana URLs because Asana's desktop app claims no universal link. The phone does not
+rewrites Asana and Linear URLs because neither desktop app claims a universal link. The phone does not
 rewrite them: the iPhone Asana app claims `app.asana.com`, so the plain https link already
 reaches it. No comment in the code records that reason.
 

@@ -14,7 +14,7 @@ public enum MergeRight {
     }
 
     /// nil for anything but a GitHub PR page or an Asana task. The plain https
-    /// Asana URL, never `TerminalLink.asanaDesktop`'s rewrite — MergeRight
+    /// Asana URL, never `TerminalLink.desktopApp`'s rewrite — MergeRight
     /// matches on the task id inside it.
     ///
     /// Strict about the shape because pane text reaches this too, not just a
