@@ -9,7 +9,7 @@ import WebKit
 /// Esc closes it (the Done button's `.cancelAction`), which is the whole point:
 /// a glance costs nothing to undo. "Open Externally" is the escape hatch for
 /// anything the web view cannot do, and goes through `TerminalLink.open` so an
-/// Asana link still lands in the Asana desktop app.
+/// Asana or Linear link still lands in its desktop app.
 struct WebSheet: View {
     @Environment(\.dismiss) private var dismiss
     let link: String

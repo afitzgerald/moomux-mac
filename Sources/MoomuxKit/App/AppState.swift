@@ -304,7 +304,7 @@ public final class AppState {
         case renameFolder(name: String)
         /// A ticket or PR, in an in-app web view. The link string and not a
         /// URL: the "Open Externally" button re-resolves it so an Asana link
-        /// still reaches the desktop app.
+        /// or Linear one still reaches its desktop app.
         case web(String)
         /// Settings *and* project management, on two tabs.
         ///

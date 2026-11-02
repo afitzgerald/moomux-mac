@@ -71,30 +71,42 @@ enum TerminalLink {
     /// `activateFileViewerSelecting([url])` if revealing is ever wanted instead.
     static func open(_ link: String) {
         guard let url = resolve(link) else { return }
-        NSWorkspace.shared.open(asanaDesktop(url) ?? url)
+        NSWorkspace.shared.open(desktopApp(url) ?? url)
     }
 
-    /// Asana's desktop app registers `asanadesktop://` but ships no
-    /// associated-domains entitlement, so it claims no universal link for
-    /// app.asana.com — an https task URL handed to `NSWorkspace` always lands
-    /// in a browser, which then bounces to the app. Rewriting it ourselves is
-    /// the only way to skip that. The shape is the app's own handler's:
-    /// `asanadesktop:///app` + the https path, query and fragment kept.
+    /// Asana's and Linear's desktop apps register a custom scheme but claim no
+    /// universal link for their https host, so an https task or issue URL
+    /// handed to `NSWorkspace` always lands in a browser. Rewriting it ourselves
+    /// is the only way to skip that. The shapes are the apps' own handlers':
+    /// `asanadesktop:///app` + the https path, and `linear://` + the path
+    /// without its leading slash (Linear's `resolveDeeplink` resolves that
+    /// against linear.app). Query and fragment are kept for both.
     ///
     /// nil whenever it would not work, so the caller falls back to the browser:
-    /// a link that is not Asana's, or an Asana one on a machine with no Asana
-    /// app, where the custom scheme would open nothing at all.
+    /// a link that is neither, or one on a machine without that app, where the
+    /// custom scheme would open nothing at all.
     ///
-    /// Deliberately *not* done by adding `asanadesktop` to `allowedSchemes`:
+    /// Deliberately *not* done by adding either scheme to `allowedSchemes`:
     /// this only ever fires on a URL that already passed the allowlist, so a
-    /// pane cannot print an `asanadesktop://` link of its own choosing.
-    static func asanaDesktop(_ url: URL, installed: (String) -> Bool = schemeHasHandler) -> URL? {
-        guard url.host?.lowercased() == "app.asana.com" else { return nil }
+    /// pane cannot print a custom-scheme link of its own choosing.
+    static func desktopApp(_ url: URL, installed: (String) -> Bool = schemeHasHandler) -> URL? {
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
-        guard installed("asanadesktop") else { return nil }
-        parts.scheme = "asanadesktop"
-        parts.host = ""
-        parts.path = "/app" + url.path
+        switch url.host?.lowercased() {
+        case "app.asana.com":
+            guard installed("asanadesktop") else { return nil }
+            parts.scheme = "asanadesktop"
+            parts.host = ""
+            parts.path = "/app" + url.path
+        case "linear.app":
+            guard installed("linear") else { return nil }
+            let path = url.path.drop { $0 == "/" }
+            guard let workspace = path.split(separator: "/").first else { return nil }
+            parts.scheme = "linear"
+            parts.host = String(workspace)
+            parts.path = String(path.dropFirst(workspace.count))
+        default:
+            return nil
+        }
         return parts.url
     }
 
@@ -151,15 +163,26 @@ enum TerminalLink {
         let yes: (String) -> Bool = { _ in true }
         let no: (String) -> Bool = { _ in false }
         let task = URL(string: "https://app.asana.com/1/1206/project/1216/task/1218")!
-        assert(asanaDesktop(task, installed: yes)?.absoluteString
+        assert(desktopApp(task, installed: yes)?.absoluteString
                == "asanadesktop:///app/1/1206/project/1216/task/1218")
-        assert(asanaDesktop(task, installed: no) == nil, "no app means the browser")
-        assert(asanaDesktop(URL(string: "https://app.asana.com/0/1/2?focus=true#f")!,
+        assert(desktopApp(task, installed: no) == nil, "no app means the browser")
+        assert(desktopApp(URL(string: "https://app.asana.com/0/1/2?focus=true#f")!,
                             installed: yes)?.absoluteString
                == "asanadesktop:///app/0/1/2?focus=true#f", "query and fragment survive")
-        assert(asanaDesktop(URL(string: "https://github.com/a/b/pull/1")!, installed: yes) == nil)
-        assert(asanaDesktop(URL(string: "https://asana.com/pricing")!, installed: yes) == nil,
+        assert(desktopApp(URL(string: "https://github.com/a/b/pull/1")!, installed: yes) == nil)
+        assert(desktopApp(URL(string: "https://asana.com/pricing")!, installed: yes) == nil,
                "only the app host, not the marketing site")
+
+        // Linear's desktop app: `linear://` + the path, per its resolveDeeplink.
+        let issue = URL(string: "https://linear.app/acme/issue/ENG-12/fix-it?x=1#c")!
+        assert(desktopApp(issue, installed: yes)?.absoluteString
+               == "linear://acme/issue/ENG-12/fix-it?x=1#c")
+        assert(desktopApp(issue, installed: no) == nil, "no app means the browser")
+        assert(desktopApp(URL(string: "https://linear.app/acme")!, installed: yes)?.absoluteString
+               == "linear://acme")
+        assert(desktopApp(URL(string: "https://linear.app/")!, installed: yes) == nil,
+               "the homepage is not a workspace")
+        assert(desktopApp(URL(string: "https://linear.app.example.com/a")!, installed: yes) == nil)
 
         // ⌘-click past mouse capture.
         let cmd: NSEvent.ModifierFlags = .command
@@ -189,8 +212,8 @@ enum TerminalLink {
 extension AppState {
     /// Where a clicked ticket or PR tag goes. Web links open in the overlay —
     /// a browser tab per glance is what this exists to stop — and anything with
-    /// a native app of its own (a `file:` tag, an Asana task on a machine with
-    /// the Asana app) goes there instead: the real app beats a logged-out
+    /// a native app of its own (a `file:` tag, an Asana task or Linear issue on
+    /// a machine with that app) goes there instead: the real app beats a logged-out
     /// WKWebView of the same page.
     ///
     /// Here rather than on `AppState` itself: the store is in `MoomuxKit`,
@@ -270,7 +293,7 @@ extension AppState {
 
     public func openTag(_ link: String) {
         guard let url = TerminalLink.resolve(link), !openInMergeRight(link) else { return }
-        if url.isFileURL || TerminalLink.asanaDesktop(url) != nil {
+        if url.isFileURL || TerminalLink.desktopApp(url) != nil {
             TerminalLink.open(link)
         } else {
             sheet = .web(link)
