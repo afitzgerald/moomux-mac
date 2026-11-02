@@ -2433,6 +2433,13 @@ public final class AppState {
         }
     }
 
+    public func setProtected(_ session: Session, _ protected: Bool) {
+        mutate(protected ? "Protect" : "Unprotect") {
+            try $0.setProtected(id: session.id, protected)
+            return nil
+        }
+    }
+
     /// Sends the project's whole resulting order, worked out from the layout
     /// this window is displaying — see `MoomuxClient.reorderSessions`. A move
     /// with nowhere to go is silence, the same no-op `MoveSession` was.

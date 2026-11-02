@@ -60,7 +60,7 @@ for d in Sources/Moomux Sources/MoomuxiOS Sources/MoomuxKit; do printf '%s ' $d;
 
 **D1. The phone ships the check-in-and-answer subset, not a small Mac app.**
 - **In:** the session list in both lenses, search, the archived view, a live attached pane,
-  creating a session (attachments included), rename, tags, archive, pin, filing into folders (by drag
+  creating a session (attachments included), rename, tags, archive, pin, protect, filing into folders (by drag
   or from detail, new folders included), folder rename/archive/delete, Kill tmux, delete, a native
   diff, and opening files a pane names.
 - **Out:** D2–D8.

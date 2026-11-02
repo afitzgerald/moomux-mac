@@ -510,8 +510,9 @@ struct MoreOptionsLabel: View {
     }
 }
 
-/// Name, agent and the dangerous flag — the same three fields as the TUI's
-/// edit-session form, saved the same way (rename, then agent).
+/// Name, agent and the dangerous flag — the TUI's edit-session form, saved the
+/// same way (rename, then agent). Its fourth field, protected, is a menu item
+/// here beside Pin, as on the iPhone.
 private struct EditSessionSheet: View {
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
@@ -1165,6 +1166,9 @@ private struct SessionRow: View {
             Button(session.pinned ? "Unpin" : "Pin to Top") {
                 app.setPinned(session, !session.pinned)
             }
+            Button(session.protected ? "Unprotect" : "Protect from Deletion") {
+                app.setProtected(session, !session.protected)
+            }
             Button(session.archived ? "Unarchive" : "Archive") {
                 app.setArchived(session, !session.archived)
             }
@@ -1191,6 +1195,7 @@ private struct SessionRow: View {
             Button("Kill tmux") { app.killTmux(session) }
                 .disabled(!app.isAlive(session))
             Button("Delete…", role: .destructive) { app.askDelete(session) }
+                .disabled(session.protected)
         }
     }
 }

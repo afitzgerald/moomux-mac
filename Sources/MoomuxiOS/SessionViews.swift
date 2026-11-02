@@ -864,6 +864,12 @@ struct SessionActions: View {
                 Label(session.pinned ? "Unpin" : "Pin to Top", systemImage: session.pinned ? "pin.slash" : "pin")
             }
             Button {
+                app.setProtected(session, !session.protected)
+            } label: {
+                Label(session.protected ? "Unprotect" : "Protect from Deletion",
+                      systemImage: session.protected ? "lock.open" : "lock")
+            }
+            Button {
                 app.setArchived(session, !session.archived)
             } label: {
                 Label(session.archived ? "Unarchive" : "Archive", systemImage: "archivebox")
@@ -884,6 +890,7 @@ struct SessionActions: View {
             Button(role: .destructive, action: delete) {
                 Label("Delete Session", systemImage: "trash")
             }
+            .disabled(session.protected)
         }
     }
 

@@ -565,6 +565,10 @@ public final class MoomuxClient: Sendable {
         try call("SetSessionPinned", Args(id: id, on: pinned))
     }
 
+    public func setProtected(id: String, _ protected: Bool) throws {
+        try call("SetSessionProtected", Args(id: id, on: protected))
+    }
+
     /// Switches which agent CLI a session launches, from its next open onward —
     /// a running pane keeps whatever it started. `dangerous` is always explicit
     /// here (the server reads a nil as false), because the agent and its
@@ -970,6 +974,7 @@ public final class MoomuxClient: Sendable {
         }
         expect(#"{"args":{"id":"s1","on":false},"method":"SetSessionArchived"}"#) { try client.setArchived(id: "s1", false) }
         expect(#"{"args":{"id":"s1","on":true},"method":"SetSessionPinned"}"#) { try client.setPinned(id: "s1", true) }
+        expect(#"{"args":{"id":"s1","on":true},"method":"SetSessionProtected"}"#) { try client.setProtected(id: "s1", true) }
         // `dangerous:false` explicit: the agent and its permission flag are one choice.
         expect(#"{"args":{"agent":"codex","dangerous":false,"id":"s1"},"method":"SetSessionAgent"}"#) {
             try client.setAgent(id: "s1", agent: "codex", dangerous: false)
