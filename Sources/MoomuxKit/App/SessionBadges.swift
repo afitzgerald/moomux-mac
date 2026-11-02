@@ -34,6 +34,12 @@ public struct SessionBadges<Tag: View>: View {
                     .help("Pinned")
                     .accessibilityLabel("Pinned")
             }
+            if session.protected {
+                Image(systemName: "lock.fill")
+                    .foregroundStyle(.secondary)
+                    .help("Protected from deletion")
+                    .accessibilityLabel("Protected")
+            }
             if let ticket = session.ticket, !ticket.isEmpty {
                 tag("ticket", ticket, ticket)
                     .foregroundStyle(.secondary)

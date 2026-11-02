@@ -222,6 +222,10 @@ struct SessionCommands: Commands {
                 if let s = selected { app.setPinned(s, !s.pinned) }
             }
             .disabled(selected == nil)
+            Button(selected?.protected == true ? "Unprotect" : "Protect from Deletion") {
+                if let s = selected { app.setProtected(s, !s.protected) }
+            }
+            .disabled(selected == nil)
             Button(selected?.archived == true ? "Unarchive" : "Archive") {
                 if let s = selected { app.setArchived(s, !s.archived) }
             }
@@ -243,7 +247,7 @@ struct SessionCommands: Commands {
                 .disabled(selected.map { !app.isAlive($0) } ?? true)
             Button("Delete…") { if let s = selected { app.askDelete(s) } }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .disabled(selected == nil)
+                .disabled(selected.map(\.protected) ?? true)
         }
     }
 }
