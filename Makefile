@@ -195,12 +195,21 @@ ARGS ?=
 # rather than a path — notification banners do, so they draw a blank icon for an
 # app whose Dock icon is fine. Self-healing rather than a one-off cleanup,
 # because the next worktree recreates the problem.
+#
+# Also forgets any live .build/ bundle carrying the *release* identifier, which
+# install, dist and notarize leave behind. Its version is Resources/Info.plist's
+# 0.1.0, which outranks every 0.0.x release, and `open -b` picks the highest:
+# brew reopens the app after an upgrade with exactly that, so it launched a
+# days-old local build instead of the release it had just installed.
 lsclean:
 	@$(LSREGISTER) -dump 2>/dev/null \
 		| awk -F'path: *' '/^path:/{p=$$2; sub(/ \(0x[0-9a-f]*\)$$/,"",p)} \
-			/identifier: *app\.moomux\.Moomux/{print p}' \
-		| sort -u | while read -r p; do \
-			[ -e "$$p" ] || $(LSREGISTER) -u "$$p"; \
+			/^identifier: *app\.moomux\.Moomux/{id=$$0; sub(/^identifier: */,"",id); print id " " p}' \
+		| sort -u | while read -r id p; do \
+			case "$$id:$$p" in \
+				app.moomux.Moomux:*/.build/*) $(LSREGISTER) -u "$$p" ;; \
+				*) [ -e "$$p" ] || $(LSREGISTER) -u "$$p" ;; \
+			esac; \
 		done
 
 # Waiting out the old process is not politeness: `open` against an app that is
@@ -236,6 +245,7 @@ install:
 	@while pgrep -f "/Applications/Moomux.app/Contents/MacOS/[M]oomux" >/dev/null; do sleep 0.2; done
 	rm -rf /Applications/Moomux.app
 	cp -R $(APP) /Applications/Moomux.app
+	$(MAKE) lsclean
 	@echo "installed $$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist) to /Applications/Moomux.app"
 
 # A PNG of the running app, for showing a UI change the way the Go side shows
@@ -296,6 +306,7 @@ dmg:
 dist:
 	$(MAKE) signapp
 	$(MAKE) dmg
+	$(MAKE) lsclean
 
 # Ships a disk image anyone can open without the right-click > Open dance.
 #
@@ -331,6 +342,7 @@ notarize:
 	@# Both checks, because either one passing alone is the bug above.
 	xcrun stapler validate $(APP)
 	spctl --assess --type open --context context:primary-signature -vv $(DMG)
+	$(MAKE) lsclean
 	@echo "notarized: $(DMG)"
 
 clean:
