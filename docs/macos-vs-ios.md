@@ -799,7 +799,8 @@ exits.** Both build on `NewSessionForm` and the core's `AgentOptions`.
   whatever pane they are typing in.
 - **Dismissal.** The phone disables swipe-to-dismiss once anything is typed or uploading.
 - **The prompt's pill.** Both apps put one row under the prompt, the same view (`PromptBar`): a
-  glass pill of Attach (a menu of Photos and Files, as on the key bar) and Snippets, then one
+  glass pill of Attach (on the phone a menu of Photos and Files, as on the key bar; on the Mac
+  straight to the file picker, since its photos are files Finder reaches) and Snippets, then one
   single-choice list of agent and model, each agent's models under its name (the button shows only
   the agent's logo; the menu's checkmark says which model), then Thinking, since the three change
   together. Neither sheet has More options or a send toggle any more (sending follows Settings'
