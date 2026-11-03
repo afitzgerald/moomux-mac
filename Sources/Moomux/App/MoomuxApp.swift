@@ -96,6 +96,12 @@ struct SessionCommands: Commands {
         app.session(id: app.selectedSessionID)
     }
 
+    /// The multi-selection while there is one, else the selection.
+    @MainActor
+    private var batch: [Session] {
+        app.marked.isEmpty ? selected.map { [$0] } ?? [] : app.sessions.filter { app.marked.contains($0.id) }
+    }
+
     var body: some Commands {
         // Replacing .newItem drops the dead "New Window" AppKit puts there for
         // a single-Window scene, so ⌘N means the only thing it can mean.
@@ -218,19 +224,20 @@ struct SessionCommands: Commands {
                 if let link = selected.flatMap(app.installedMergeRightLink) { NSWorkspace.shared.open(link) }
             }
             .disabled(selected.flatMap(app.installedMergeRightLink) == nil)
-            Button(selected?.pinned == true ? "Unpin" : "Pin to Top") {
-                if let s = selected { app.setPinned(s, !s.pinned) }
+            // These and Kill tmux act on a multi-selection, as the sidebar's
+            // menu does; a mixed one offers the "on" half.
+            let pinned = !batch.isEmpty && batch.allSatisfy(\.pinned)
+            Button(pinned ? "Unpin" : "Pin to Top") { app.setPinned(batch, !pinned) }
+                .disabled(batch.isEmpty)
+            let protected = !batch.isEmpty && batch.allSatisfy(\.protected)
+            Button(protected ? "Unprotect" : "Protect from Deletion") {
+                app.setProtected(batch, !protected)
             }
-            .disabled(selected == nil)
-            Button(selected?.protected == true ? "Unprotect" : "Protect from Deletion") {
-                if let s = selected { app.setProtected(s, !s.protected) }
-            }
-            .disabled(selected == nil)
-            Button(selected?.archived == true ? "Unarchive" : "Archive") {
-                if let s = selected { app.setArchived(s, !s.archived) }
-            }
+            .disabled(batch.isEmpty)
+            let archived = !batch.isEmpty && batch.allSatisfy(\.archived)
+            Button(archived ? "Unarchive" : "Archive") { app.setArchived(batch, !archived) }
             .keyboardShortcut("e", modifiers: .command)
-            .disabled(selected == nil)
+            .disabled(batch.isEmpty)
             Divider()
             // Disabled while the core sorts by last-opened: the move would
             // succeed and the next open would undo it, which reads as a bug.
@@ -242,9 +249,10 @@ struct SessionCommands: Commands {
                 .keyboardShortcut(.downArrow, modifiers: [.command, .control])
                 .disabled(selected == nil || !app.canReorder)
             Divider()
-            Button("Kill tmux") { if let s = selected { app.killTmux(s) } }
+            let alive = batch.filter(app.isAlive)
+            Button("Kill tmux") { app.killTmux(alive) }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-                .disabled(selected.map { !app.isAlive($0) } ?? true)
+                .disabled(alive.isEmpty)
             // With several selected it is the batch, which skips protected ones.
             Button("Delete…") {
                 if !app.marked.isEmpty { app.askDeleteMarked() } else if let s = selected { app.askDelete(s) }

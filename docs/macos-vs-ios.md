@@ -366,7 +366,7 @@ each session's fresh check beside it. Delete stays disabled until every check ha
 check that failed reads "couldn't check", never clean. It asks once, like the single delete (the
 TUI asks twice over dirty work). Protected sessions can be selected but are left out and named. On
 the Mac the sidebar `List` takes a set: ⌘-click and ⇧-click, then ⌘⌫ or the row menu's "Delete N
-Sessions…"; the detail stays on the last single selection, because attaching every ⌘-clicked
+Sessions…", and the same menu files, pins, protects, archives and kills the batch; the detail stays on the last single selection, because attaching every ⌘-clicked
 session would resize each one. The phone has no ⌘-click, so ⋯ → Select Sessions puts the list in
 edit mode, as Mail does, with Merged or Closed and Delete in the bottom bar. *Where:*
 `AppState` (Batch delete), `BatchDeleteSheet`, `SessionList`, `SessionListView`.
@@ -1010,3 +1010,7 @@ Not questions, just things out of step. Fix them and remove them from here.
 4. **The phone does not show the core's release notes.** The Mac opens a second What's New sheet
    for the core's own notes (`Snapshot.whatsNew`, its own `WhatsNew.coreSeenKey`) once per core
    upgrade. The snapshot reaches the phone's store too, but nothing there presents it.
+5. **The phone's Select mode only deletes.** On the Mac a multi-selection's row menu (and the
+   Session menu) also files, pins, protects, archives and kills tmux for the whole batch
+   (`AppState.targets`, the `[Session]` setters). The phone's bottom bar has Merged or Closed and
+   Delete only; the same setters would serve a Select-mode menu there.
