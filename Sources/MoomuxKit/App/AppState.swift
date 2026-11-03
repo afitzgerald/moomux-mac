@@ -235,7 +235,10 @@ public final class AppState {
 
     // MARK: UI state
 
-    public var selectedSessionID: Session.ID?
+    /// Picking one session — a click, ⌘↓, a banner — ends a multi-selection.
+    public var selectedSessionID: Session.ID? {
+        didSet { if !marked.isEmpty { marked = [] } }
+    }
     /// The session whose pane is on the phone's screen, if one is. `Notifier`
     /// reads it for the Mac's rule — no banner for what you are already
     /// looking at — since on the phone the selection is navigation, not
@@ -330,6 +333,25 @@ public final class AppState {
     /// Set it through `askDelete(_:)` rather than directly, or the unsaved-work
     /// step below is skipped.
     public var pendingDelete: Session?
+
+    /// Sessions picked for one batch delete: the Mac sidebar's multi-selection,
+    /// the phone's Select mode. It can hold a protected session; the batch
+    /// leaves those out and says so (`batchSkipped`).
+    public var marked: Set<Session.ID> = []
+    /// The batch the delete sheet is asking about, in store order. nil while
+    /// the sheet is closed. Set it through `askDeleteMarked()`.
+    public var pendingBatchDelete: [Session.ID]?
+    /// Which of the pending batch have had their fresh check answered —
+    /// successfully or not. A failed check stays out of `statuses`, so
+    /// `statuses` alone cannot say when checking is over.
+    public private(set) var batchChecked: Set<Session.ID> = []
+    /// The checks that failed. A failure leaves `statuses` as it was, so an
+    /// older, clean status would otherwise stand in for the check.
+    public private(set) var batchFailed: Set<Session.ID> = []
+    /// A confirmed batch. `listedSessions` hides these at once instead of one
+    /// row per finished delete (the TUI's `deleting`, for the same reason: 59
+    /// sessions trickling out one by one).
+    public private(set) var deleting: Set<Session.ID> = []
 
     /// The project the remove confirmation is asking about. Same reason.
     public var pendingProjectDelete: String?
@@ -904,9 +926,10 @@ public final class AppState {
     /// session you cannot remember is disproportionately likely to be one you
     /// archived and forgot.
     public var listedSessions: [Session] {
-        AppState.matchSessions(
+        let listed = AppState.matchSessions(
             searching ? sessions : showArchived ? sessions.filter(\.archived) : visibleSessions,
             query: searchQuery)
+        return deleting.isEmpty ? listed : listed.filter { !deleting.contains($0.id) }
     }
 
     public var searching: Bool {
@@ -2055,6 +2078,56 @@ public final class AppState {
             assert(warning.contains("removes the worktree"), warning)
         }
 
+        // Batch delete: what gets marked, what the batch leaves out, and a
+        // sheet that never reads as clean before every check has answered.
+        MainActor.assumeIsolated {
+            let app = AppState()
+            app.streamAnswered = true
+            func session(_ name: String, protected: Bool = false) -> Session {
+                try! Wire.decoder.decode(Session.self, from: Data(
+                    #"{"id":"p:\#(name)","project":"p","name":"\#(name)","protected":\#(protected)}"#.utf8))
+            }
+            func pr(_ id: String, _ state: String) -> SessionView {
+                try! Wire.decoder.decode(SessionView.self, from: Data(
+                    #"{"id":"\#(id)","state":"idle","pr":{"state":"\#(state)"}}"#.utf8))
+            }
+            let merged = session("merged"), closed = session("closed"), open = session("open")
+            let guarded = session("guarded", protected: true), bare = session("bare")
+            app.sessions = [merged, closed, open, guarded, bare]
+            app.views = [merged.id: pr(merged.id, "MERGED"), closed.id: pr(closed.id, "CLOSED"),
+                         open.id: pr(open.id, "OPEN"), guarded.id: pr(guarded.id, "MERGED")]
+            assert(app.hasFinished)
+            assert(app.markFinished() == 2, "merged and closed, not open, protected or PR-less")
+            assert(app.marked == [merged.id, closed.id])
+
+            app.marked.insert(guarded.id)
+            assert(app.batchCandidates == [merged.id, closed.id], "a protected mark is left out")
+            assert(app.batchSkipped.map(\.id) == [guarded.id])
+
+            let ids = app.batchCandidates
+            assert(app.batchChecking(ids))
+            assert(app.batchWarning(ids).hasPrefix("Checking 2 worktrees"), app.batchWarning(ids))
+            assert(app.batchWarning(ids).contains("“guarded” is protected and stays."))
+            assert(app.batchRisk(for: merged.id) == "checking…")
+
+            app.batchChecked = [merged.id, closed.id]
+            app.statuses[merged.id] = .init(known: true)
+            // closed's fresh check failed, behind a clean status from earlier.
+            app.statuses[closed.id] = .init(known: true)
+            app.batchFailed = [closed.id]
+            assert(!app.batchChecking(ids))
+            assert(app.batchRisk(for: merged.id) == nil)
+            assert(app.batchRisk(for: closed.id) == "⚠︎ couldn't check", "an unchecked worktree is not clean")
+            assert(app.batchWarning(ids).hasPrefix("⚠︎ 1 of them has work"), app.batchWarning(ids))
+
+            app.batchFailed = []
+            app.statuses[closed.id] = .init(known: true, dirty: true, filesChanged: 3)
+            assert(app.batchRisk(for: closed.id) == "⚠︎ 3 files changed")
+
+            app.deleting = [merged.id]
+            assert(!app.listedSessions.contains { $0.id == merged.id }, "a confirmed batch leaves the list at once")
+        }
+
         // A mutation the server refuses is an answer, not a dead socket. It has
         // to reach the user as its own message and leave `connection` exactly
         // where the poll loop left it, or one declined action blanks the
@@ -2833,6 +2906,153 @@ public final class AppState {
     public func delete(_ session: Session) {
         detachAndForget(session)
         mutate("Delete") { try $0.deleteSession(id: session.id) }
+    }
+
+    // MARK: Batch delete
+
+    /// `internal/tui`'s `markFinished`: every session, in every project and
+    /// archived ones included, whose PR merged or closed and that is not
+    /// protected. Pure, for `demo()`.
+    nonisolated static func finished(_ sessions: [Session],
+                                     views: [Session.ID: SessionView]) -> [Session.ID] {
+        sessions.filter { s in
+            guard !s.protected, let state = views[s.id]?.pr?.state else { return false }
+            return state == "MERGED" || state == "CLOSED"
+        }.map(\.id)
+    }
+
+    /// Adds the finished sessions to `marked`; returns how many it found.
+    @discardableResult
+    public func markFinished() -> Int {
+        let ids = Self.finished(sessions, views: views)
+        marked.formUnion(ids)
+        return ids.count
+    }
+
+    /// Disables "Merged or Closed" when it would find nothing: neither app has
+    /// anywhere to say so (`hint` draws only in the selected session's detail).
+    public var hasFinished: Bool { !Self.finished(sessions, views: views).isEmpty }
+
+    /// The marked sessions that still exist and are not protected, in store
+    /// order. A session protected after it was marked drops out here.
+    public var batchCandidates: [Session.ID] {
+        sessions.filter { marked.contains($0.id) && !$0.protected }.map(\.id)
+    }
+
+    /// The marked sessions the batch leaves alone because they are protected.
+    public var batchSkipped: [Session] {
+        sessions.filter { marked.contains($0.id) && $0.protected }
+    }
+
+    /// Opens the batch delete sheet and runs a fresh check on every session in
+    /// it, eight at a time. Delete stays disabled until every check answers —
+    /// the sheet lists what is at stake, so it must not be agreed to blind.
+    public func askDeleteMarked() {
+        let ids = batchCandidates
+        guard !ids.isEmpty else { return }
+        pendingBatchDelete = ids
+        batchChecked = []
+        batchFailed = []
+        Task {
+            // ponytail: fixed fan-out of 8, the TUI's — local git only, and it
+            // keeps a 100-session batch from starting 100 at once.
+            await withTaskGroup(of: (Session.ID, MoomuxClient.SessionStatus?).self) { group in
+                var next = ids.makeIterator()
+                func add() {
+                    guard let id = next.next() else { return }
+                    group.addTask { [client] in
+                        (id, try? await withoutBlockingTheUI { try client.status(id: id) })
+                    }
+                }
+                for _ in 0..<8 { add() }
+                while let (id, status) = await group.next() {
+                    // A sheet closed or reopened on another batch meanwhile.
+                    guard pendingBatchDelete == ids else { continue }
+                    if let status { setStatus(status, for: id) } else { batchFailed.insert(id) }
+                    batchChecked.insert(id)
+                    add()
+                }
+            }
+        }
+    }
+
+    public func dismissBatchDelete() { pendingBatchDelete = nil }
+
+    /// Whether a row draws as selected: the multi-selection while there is
+    /// one, else the single selection.
+    public func isSelected(_ id: Session.ID) -> Bool {
+        marked.isEmpty ? selectedSessionID == id : marked.contains(id)
+    }
+
+    public func batchChecking(_ ids: [Session.ID]) -> Bool {
+        !batchChecked.isSuperset(of: ids)
+    }
+
+    /// One session's line in the batch sheet: nil when there is nothing to
+    /// lose, "checking…" until its check answers, and a flagged line when
+    /// there is work at risk *or* the check could not tell — a worktree nobody
+    /// could check must not read as clean.
+    public func batchRisk(for id: Session.ID) -> String? {
+        guard batchChecked.contains(id) else { return "checking…" }
+        guard !batchFailed.contains(id), let status = statuses[id], status.known else {
+            return "⚠︎ couldn't check"
+        }
+        let summary = status.changeSummary
+        return summary.isEmpty ? nil : "⚠︎ " + summary
+    }
+
+    /// The sheet's footer: what is at stake across the batch, then what
+    /// deleting does.
+    public func batchWarning(_ ids: [Session.ID]) -> String {
+        let tail = "Kills their tmux, removes their worktrees, and deletes the branches moomux made."
+        var lines: [String] = []
+        if batchChecking(ids) {
+            lines.append("Checking \(ids.count) worktrees for uncommitted or unpushed work…")
+        } else {
+            let risky = ids.filter { batchRisk(for: $0) != nil }.count
+            lines.append(risky == 0 ? "Nothing uncommitted or unpushed."
+                : "⚠︎ \(risky) of them \(risky == 1 ? "has" : "have") work that goes with it.")
+        }
+        lines.append(tail)
+        let skipped = batchSkipped
+        if !skipped.isEmpty {
+            lines.append(skipped.count == 1 ? "“\(skipped[0].name)” is protected and stays."
+                : "\(skipped.count) protected sessions stay.")
+        }
+        return lines.joined(separator: "\n\n")
+    }
+
+    /// Deletes the batch one session after another — they share a repo's
+    /// worktree and ref locks, as in the TUI. The rows leave the list at once;
+    /// one that fails to delete comes back and is named in the error.
+    public func deleteBatch(_ ids: [Session.ID]) {
+        pendingBatchDelete = nil
+        // The protected ones too: left marked, they would come back ticked.
+        marked = []
+        let doomed = ids.compactMap { session(id: $0) }
+        doomed.forEach(detachAndForget)
+        deleting.formUnion(ids)
+        Task {
+            busy = "Deleting \(doomed.count) sessions"
+            defer { busy = nil }
+            var failures: [String] = []
+            var hints: [String] = []
+            for s in doomed {
+                do {
+                    let hint = try await withoutBlockingTheUI { [client] in try client.deleteSession(id: s.id) }
+                    if !hint.isEmpty { hints.append(hint) }
+                } catch {
+                    failures.append("\(s.name): \(error.localizedDescription)")
+                }
+            }
+            await refresh()
+            deleting.subtract(ids)
+            if !hints.isEmpty { hint = hints.joined(separator: "\n") }
+            if !failures.isEmpty {
+                actionError = "Couldn't delete \(failures.count) of \(doomed.count):\n"
+                    + failures.joined(separator: "\n")
+            }
+        }
     }
 
     /// Killing or deleting a session must not leave its tmux client running

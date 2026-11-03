@@ -245,9 +245,14 @@ struct SessionCommands: Commands {
             Button("Kill tmux") { if let s = selected { app.killTmux(s) } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
                 .disabled(selected.map { !app.isAlive($0) } ?? true)
-            Button("Delete…") { if let s = selected { app.askDelete(s) } }
+            // With several selected it is the batch, which skips protected ones.
+            Button("Delete…") {
+                if !app.marked.isEmpty { app.askDeleteMarked() } else if let s = selected { app.askDelete(s) }
+            }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .disabled(selected.map(\.protected) ?? true)
+                .disabled(app.marked.isEmpty ? selected.map(\.protected) ?? true : app.batchCandidates.isEmpty)
+            Button("Select Merged or Closed") { app.markFinished() }
+                .disabled(!app.hasFinished)
         }
     }
 }

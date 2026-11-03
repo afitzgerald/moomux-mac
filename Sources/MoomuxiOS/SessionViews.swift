@@ -54,6 +54,9 @@ struct SessionListView: View {
     @State private var creating = UserDefaults.standard.bool(forKey: "newSession")
     @State private var showingNotes = false
     @State private var showingAcknowledgements = false
+    /// Select mode: the list's own edit-mode checkmarks, bound to
+    /// `AppState.marked`, for a batch delete.
+    @State private var selecting = false
     /// Screenshot seam. There is no way to tap a row from `simctl`, so
     /// `-openSession <id>` opens one straight away and `make ios-shot
     /// SESSION=<id>` can photograph the detail screen. A `UserDefaults` key,
@@ -78,10 +81,11 @@ struct SessionListView: View {
         ForEach(rows) { row in
             switch row {
             case let .project(name, hidden):
-                ProjectHeader(app: app, name: name, count: hidden)
+                ProjectHeader(app: app, name: name, count: hidden).selectionDisabled()
             case let .row(.folder(name, collapsed, count), project):
                 FolderHeader(app: app, name: name, collapsed: collapsed,
                              count: count, project: project, renaming: $renaming)
+                    .selectionDisabled()
             case let .row(.session(session, folder), _):
                 // A session sits one level in from the header it is grouped
                 // under: 1 under a project, 2 under a folder.
@@ -157,10 +161,12 @@ struct SessionListView: View {
         // wins the long press, which the drag below needs.
         SessionRow(app: app, session: session)
             .contentShape(Rectangle())
-            .onTapGesture {
+            // Off in Select mode, where a tap is the list's own checkmark.
+            .gesture(TapGesture().onEnded {
                 if app.isAlive(session) { showTerminal(session.id) }
                 else { path.append(.detail(session.id)) }
-            }
+            }, including: selecting ? .none : .all)
+            .tag(session.id)
             // No `.draggable`: the long press belongs to the list's own
             // `onMove` drag. Review used to be a context
             // menu here, and two things on one long press means one loses.
@@ -223,6 +229,7 @@ struct SessionListView: View {
                 FolderHeader(app: app, name: name, collapsed: collapsed,
                              count: count, project: "", level: 0,
                              renaming: $renaming)
+                    .selectionDisabled()
             case let .project(folder, name, collapsed, hidden):
                 // The loose block — the sessions filed nowhere — is a *real*
                 // project header, folded by the core's `SetProjectCollapsed`.
@@ -233,7 +240,7 @@ struct SessionListView: View {
                 // core's flag, so a local toggle writes a set that is never
                 // consulted for it and the block can never be expanded again.
                 if folder.isEmpty {
-                    ProjectHeader(app: app, name: name, count: hidden)
+                    ProjectHeader(app: app, name: name, count: hidden).selectionDisabled()
                 } else {
                 Button {
                     app.setFolderProject(folder: folder, project: name, expanded: collapsed)
@@ -255,6 +262,7 @@ struct SessionListView: View {
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(collapsed && hidden > 0 ? "\(name), collapsed, \(hidden) sessions" : name)
+                .selectionDisabled()
                 }
             case let .session(session, indent):
                 sessionRow(session, indent: indent)
@@ -278,10 +286,13 @@ struct SessionListView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            List {
-                if app.connection.isDown { ConnectionRow(app: app, name: computerName) }
+            // Bound always; outside edit mode an iOS list ignores a
+            // multi-selection tap, so the row's own tap still navigates.
+            List(selection: $app.marked) {
+                if app.connection.isDown { ConnectionRow(app: app, name: computerName).selectionDisabled() }
                 if app.folderView { folderFirstRows } else { projectFirstRows }
             }
+            .environment(\.editMode, .constant(selecting ? .active : .inactive))
             .listStyle(.insetGrouped)
             .environment(\.defaultMinListHeaderHeight, 0)
             .contentMargins(.top, 0, for: .scrollContent)
@@ -340,6 +351,10 @@ struct SessionListView: View {
                         Toggle("Show Project Emoji", isOn: $app.showProjectEmoji)
                         Toggle("Open PRs in MergeRight", isOn: $app.mergeRightLinks)
                         Toggle("Open New Sessions", isOn: $app.autoFocusNewSession)
+                        Divider()
+                        Button("Select Sessions", systemImage: "checkmark.circle") { selecting = true }
+                            .disabled(app.connection.isDown || app.listedSessions.isEmpty)
+                        Divider()
                         // Off in a build with no notes baked in (`make ios`).
                         Button("What's New") { showingNotes = true }
                             .disabled(WhatsNew.releases.isEmpty)
@@ -353,14 +368,32 @@ struct SessionListView: View {
                 if app.usage != nil || app.codexUsage != nil {
                     ToolbarItem(placement: .topBarTrailing) { UsageMenu(app: app) }
                 }
-                // Search and create at the bottom, as Mail and Notes do: in
-                // thumb reach, and off the top bar the title needs.
-                DefaultToolbarItem(kind: .search, placement: .bottomBar)
-                ToolbarSpacer(.fixed, placement: .bottomBar)
-                ToolbarItem(placement: .bottomBar) {
-                    Button { creating = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("New Session")
-                        .disabled(app.connection.isDown || app.config?.projects.isEmpty != false)
+                if selecting {
+                    // Mail's Select mode: Done on top, the actions in thumb reach.
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { selecting = false; app.marked = [] }
+                    }
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Merged or Closed") { app.markFinished() }
+                            .disabled(!app.hasFinished)
+                    }
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Delete (\(app.batchCandidates.count))", role: .destructive) {
+                            app.askDeleteMarked()
+                        }
+                        .disabled(app.batchCandidates.isEmpty)
+                    }
+                } else {
+                    // Search and create at the bottom, as Mail and Notes do: in
+                    // thumb reach, and off the top bar the title needs.
+                    DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                    ToolbarSpacer(.fixed, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) {
+                        Button { creating = true } label: { Image(systemName: "plus") }
+                            .accessibilityLabel("New Session")
+                            .disabled(app.connection.isDown || app.config?.projects.isEmpty != false)
+                    }
                 }
             }
             // The computer this list is from; its menu switches. A create in
@@ -417,7 +450,7 @@ struct SessionListView: View {
             // unless another sheet is up; then the alert says where it went.
             .onChange(of: app.failedCreate) { _, failed in
                 guard let failed else { return }
-                if !creating && !showingNotes && !showingAcknowledgements && !showingComputers {
+                if !creating && !showingNotes && !showingAcknowledgements && !showingComputers && app.pendingBatchDelete == nil {
                     creating = true
                 } else {
                     app.actionError = "Creating session failed: \(failed.error)\n\n"
@@ -427,6 +460,16 @@ struct SessionListView: View {
             // "0": every version is newer, so the whole baked history.
             .sheet(isPresented: $showingNotes) { WhatsNewSheet(releases: WhatsNew.releases(after: "0")) }
             .sheet(isPresented: $showingAcknowledgements) { AcknowledgementsSheet() }
+            .sheet(isPresented: Binding(
+                get: { app.pendingBatchDelete != nil },
+                set: { if !$0 { app.dismissBatchDelete() } }
+            )) {
+                if let ids = app.pendingBatchDelete {
+                    BatchDeleteSheet(app: app, ids: ids)
+                }
+            }
+            // A confirmed batch ends Select mode; a cancelled one stays in it.
+            .onChange(of: app.deleting) { _, deleting in if !deleting.isEmpty { selecting = false } }
             // A tapped banner is a request to go to that session, and
             // `Notifier` has no way to reach the stack — it sets the
             // selection, which on the Mac *is* the navigation. Cleared after,

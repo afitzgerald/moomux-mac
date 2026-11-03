@@ -61,7 +61,7 @@ for d in Sources/Moomux Sources/MoomuxiOS Sources/MoomuxKit; do printf '%s ' $d;
 **D1. The phone ships the check-in-and-answer subset, not a small Mac app.**
 - **In:** the session list in both lenses, search, the archived view, a live attached pane,
   creating a session (attachments included), rename, tags, archive, pin, protect, filing into folders (by drag
-  or from detail, new folders included), folder rename/archive/delete, Kill tmux, delete, a native
+  or from detail, new folders included), folder rename/archive/delete, Kill tmux, delete (one at a time or as a batch, D59), a native
   diff, and opening files a pane names.
 - **Out:** D2–D8.
 
@@ -357,6 +357,19 @@ and connecting or a write in flight (`busy`) shows as the title's subtitle, whic
 slow, where a spinner only said that something was. The Mac's toolbar has the room, and its
 search and ⌘N stay where a Mac app has them. This is why the phone needs iOS 26 (`.bottomBar`
 search, `navigationSubtitle`, `ToolbarSpacer`). *Where:* `SessionListView`'s toolbar, `UsageMenu`.
+
+**D59. Both apps batch-delete; the Mac picks the batch by multi-selection, the phone in a Select
+mode.** The TUI's marks (space, `M`, `d`) are the model: one `AppState.marked` set, "Merged or
+Closed" adds every unprotected session whose PR merged or closed (`internal/tui`'s
+`markFinished`, archived ones included), and one shared `BatchDeleteSheet` lists the batch with
+each session's fresh check beside it. Delete stays disabled until every check has answered, and a
+check that failed reads "couldn't check", never clean. It asks once, like the single delete (the
+TUI asks twice over dirty work). Protected sessions can be selected but are left out and named. On
+the Mac the sidebar `List` takes a set: ⌘-click and ⇧-click, then ⌘⌫ or the row menu's "Delete N
+Sessions…"; the detail stays on the last single selection, because attaching every ⌘-clicked
+session would resize each one. The phone has no ⌘-click, so ⋯ → Select Sessions puts the list in
+edit mode, as Mail does, with Merged or Closed and Delete in the bottom bar. *Where:*
+`AppState` (Batch delete), `BatchDeleteSheet`, `SessionList`, `SessionListView`.
 
 ---
 

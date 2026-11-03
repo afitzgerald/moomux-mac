@@ -314,6 +314,12 @@ struct RootView: View {
         } message: { session in
             Text(app.deleteWarning(for: session))
         }
+        .sheet(isPresented: Binding(
+            get: { app.pendingBatchDelete != nil },
+            set: { if !$0 { app.dismissBatchDelete() } }
+        )) {
+            if let ids = app.pendingBatchDelete { BatchDeleteSheet(app: app, ids: ids) }
+        }
         // The whole visible surface of `actionError` for now: a refused action
         // has to say so somewhere, and an alert is the least that qualifies.
         .alert("Couldn't do that", isPresented: Binding(
@@ -698,7 +704,14 @@ private struct SessionList: View {
 
     var body: some View {
         @Bindable var app = app
-        List(selection: $app.selectedSessionID) {
+        // A set, so ⌘-click and ⇧-click pick several for a batch delete. The
+        // detail keeps showing the last single selection meanwhile: attaching
+        // every ⌘-clicked session would resize each of them.
+        List(selection: Binding(
+            get: { app.marked.isEmpty ? Set([app.selectedSessionID].compactMap { $0 }) : app.marked },
+            set: { picked in
+                if picked.count <= 1 { app.selectedSessionID = picked.first } else { app.marked = picked }
+            })) {
             // Two lenses on the same rows, both laid out by the core. Which one
             // is on screen is a `UserDefaults` preference (`folderFirst`), and
             // a core too old to send a folder-first layout keeps this one.
@@ -1114,7 +1127,7 @@ private struct SessionRow: View {
         .padding(.vertical, 2)
         // The system's selection pill is switched off (`NoSelectionHighlight`):
         // it was grey, the same tone as a header band.
-        .listRowBackground(app.selectedSessionID == session.id ? AnyView(selectionHighlight) : nil)
+        .listRowBackground(app.isSelected(session.id) ? AnyView(selectionHighlight) : nil)
         // `level - 1`: the dot sits straight under its header's icon, not a
         // step in from it — the band is what says which header it belongs to.
         .padding(.leading, SidebarGrid.rowIndent(max(0, level - 1), app.listFontSize))
@@ -1194,8 +1207,14 @@ private struct SessionRow: View {
             // Delete is the irreversible one, and the only thing that asks.
             Button("Kill tmux") { app.killTmux(session) }
                 .disabled(!app.isAlive(session))
-            Button("Delete…", role: .destructive) { app.askDelete(session) }
-                .disabled(session.protected)
+            // Inside a multi-selection the menu acts on all of it, as Finder's does.
+            if app.marked.count > 1 && app.marked.contains(session.id) {
+                Button("Delete \(app.marked.count) Sessions…", role: .destructive) { app.askDeleteMarked() }
+                    .disabled(app.batchCandidates.isEmpty)
+            } else {
+                Button("Delete…", role: .destructive) { app.askDelete(session) }
+                    .disabled(session.protected)
+            }
         }
     }
 }
