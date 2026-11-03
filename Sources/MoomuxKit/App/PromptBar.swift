@@ -35,6 +35,7 @@ public struct PromptBar: View {
         // Borderless, or two buttons sharing a Form row both fire on any tap in it.
         HStack(spacing: 8) {
             HStack(spacing: 0) {
+                #if os(iOS)
                 Menu {
                     Button("Photos", systemImage: "photo.on.rectangle") { pickingPhotos = true }
                     Button("Files", systemImage: "folder") { importingFiles = true }
@@ -43,6 +44,14 @@ public struct PromptBar: View {
                 }
                 .attachBarItem()
                 .accessibilityLabel("Attach")
+                #else
+                // A Mac's photos are files too; Finder reaches them.
+                Button { importingFiles = true } label: {
+                    Image(systemName: "paperclip").attachBarIcon()
+                }
+                .attachBarItem()
+                .accessibilityLabel("Attach")
+                #endif
                 Menu {
                     ForEach(snippets) { snippet in
                         Button(snippet.text.trimmingCharacters(in: .whitespacesAndNewlines)) {
