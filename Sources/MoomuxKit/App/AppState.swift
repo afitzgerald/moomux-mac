@@ -300,10 +300,10 @@ public final class AppState {
         case edit(Session)
         case tags(Session)
         /// A new folder — and, when it was opened from a session's own menu,
-        /// the session to file into it. `SetSessionFolder` creates a folder on
+        /// the sessions to file into it. `SetSessionFolder` creates a folder on
         /// first use, so that is one call rather than two. No project: the
         /// namespace is global.
-        case newFolder(assign: Session?)
+        case newFolder(assign: [Session])
         case renameFolder(name: String)
         /// A ticket or PR, in an in-app web view. The link string and not a
         /// URL: the "Open Externally" button re-resolves it so an Asana link
@@ -2099,6 +2099,8 @@ public final class AppState {
             assert(app.hasFinished)
             assert(app.markFinished() == 2, "merged and closed, not open, protected or PR-less")
             assert(app.marked == [merged.id, closed.id])
+            assert(app.targets(closed).map(\.id) == [merged.id, closed.id], "a marked row's menu acts on the batch")
+            assert(app.targets(open).map(\.id) == [open.id], "an unmarked row's menu acts on that row alone")
 
             app.marked.insert(guarded.id)
             assert(app.batchCandidates == [merged.id, closed.id], "a protected mark is left out")
@@ -2492,23 +2494,32 @@ public final class AppState {
         mutate("Set tags") { try $0.setTags(id: session.id, ticket: ticket, pr: pr); return nil }
     }
 
-    public func setArchived(_ session: Session, _ archived: Bool) {
-        mutate(archived ? "Archive" : "Unarchive") {
-            try $0.setArchived(id: session.id, archived)
+    public func setArchived(_ session: Session, _ archived: Bool) { setArchived([session], archived) }
+    public func setPinned(_ session: Session, _ pinned: Bool) { setPinned([session], pinned) }
+    public func setProtected(_ session: Session, _ protected: Bool) { setProtected([session], protected) }
+
+    // The batch forms are one `mutate` each, so the sidebar refreshes once at
+    // the end rather than per session.
+    public func setArchived(_ batch: [Session], _ archived: Bool) {
+        // Either way they leave the list on screen, and a mark nobody can see
+        // would still be in the next ⌘⌫'s batch.
+        marked.subtract(batch.map(\.id))
+        mutate(archived ? "Archive" : "Unarchive") { client in
+            for s in batch { try client.setArchived(id: s.id, archived) }
             return nil
         }
     }
 
-    public func setPinned(_ session: Session, _ pinned: Bool) {
-        mutate(pinned ? "Pin" : "Unpin") {
-            try $0.setPinned(id: session.id, pinned)
+    public func setPinned(_ batch: [Session], _ pinned: Bool) {
+        mutate(pinned ? "Pin" : "Unpin") { client in
+            for s in batch { try client.setPinned(id: s.id, pinned) }
             return nil
         }
     }
 
-    public func setProtected(_ session: Session, _ protected: Bool) {
-        mutate(protected ? "Protect" : "Unprotect") {
-            try $0.setProtected(id: session.id, protected)
+    public func setProtected(_ batch: [Session], _ protected: Bool) {
+        mutate(protected ? "Protect" : "Unprotect") { client in
+            for s in batch { try client.setProtected(id: s.id, protected) }
             return nil
         }
     }
@@ -2598,9 +2609,11 @@ public final class AppState {
 
     /// Files a session under `folder`, creating it on first use; an empty name
     /// puts the session back at the top level.
-    public func setFolder(_ session: Session, to folder: String) {
-        mutate(folder.isEmpty ? "Remove from folder" : "Move to folder") {
-            try $0.setSessionFolder(id: session.id, folder: folder)
+    public func setFolder(_ session: Session, to folder: String) { setFolder([session], to: folder) }
+
+    public func setFolder(_ batch: [Session], to folder: String) {
+        mutate(folder.isEmpty ? "Remove from folder" : "Move to folder") { client in
+            for s in batch { try client.setSessionFolder(id: s.id, folder: folder) }
             return nil
         }
     }
@@ -2861,9 +2874,14 @@ public final class AppState {
         #endif
     }
 
-    public func killTmux(_ session: Session) {
-        detachAndForget(session)
-        mutate("Kill tmux") { try $0.killTmux(id: session.id); return nil }
+    public func killTmux(_ session: Session) { killTmux([session]) }
+
+    public func killTmux(_ batch: [Session]) {
+        batch.forEach(detachAndForget)
+        mutate("Kill tmux") { client in
+            for s in batch { try client.killTmux(id: s.id) }
+            return nil
+        }
     }
 
     /// Opens the delete confirmation, and refreshes the worktree status
@@ -2982,6 +3000,13 @@ public final class AppState {
     /// one, else the single selection.
     public func isSelected(_ id: Session.ID) -> Bool {
         marked.isEmpty ? selectedSessionID == id : marked.contains(id)
+    }
+
+    /// What a session menu acts on: the whole multi-selection when `session`
+    /// is in it, as Finder's menu does, else `session` alone. Store order.
+    public func targets(_ session: Session) -> [Session] {
+        marked.count > 1 && marked.contains(session.id)
+            ? sessions.filter { marked.contains($0.id) } : [session]
     }
 
     public func batchChecking(_ ids: [Session.ID]) -> Bool {

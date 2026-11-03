@@ -279,8 +279,8 @@ struct RootView: View {
                     let name = values[0].trimmed
                     // Filing a session into it *is* the create: SetSessionFolder
                     // makes a folder on first use, so this stays one call.
-                    if let session = assign {
-                        app.setFolder(session, to: name)
+                    if !assign.isEmpty {
+                        app.setFolder(assign, to: name)
                     } else {
                         app.createFolder(name: name)
                     }
@@ -1004,7 +1004,7 @@ private struct ProjectHeader: View {
         .listRowBackground(targeted ? AnyView(SessionTheme.dropTarget)
             : AnyView(band(expanded: expanded, holdsSelection: holdsSelection)))
         .contextMenu {
-            Button("New Folder…") { app.sheet = .newFolder(assign: nil) }
+            Button("New Folder…") { app.sheet = .newFolder(assign: []) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -1152,63 +1152,76 @@ private struct SessionRow: View {
         // filing and naming, then what ends the session. The Mac-only tools
         // sit between the last two.
         .contextMenu {
+            // Inside a multi-selection the menu acts on all of it, as Finder's
+            // does, and drops what only makes sense for one session.
+            let batch = app.targets(session)
+            let single = batch.count == 1
             // Only a value the inspector would make a link (`Field`) appears.
             let ticket = session.ticket.flatMap { TerminalLink.resolve($0) != nil ? $0 : nil }
             let pr = session.pr.flatMap { TerminalLink.resolve($0) != nil ? $0 : nil }
             let mergeRight = app.installedMergeRightLink(for: session)
-            if let ticket { Button("Ticket") { app.openTag(ticket) } }
-            if let pr { Button("Pull Request") { app.openTag(pr) } }
-            if let mergeRight {
-                Button("Open in MergeRight") { NSWorkspace.shared.open(mergeRight) }
+            if single {
+                if let ticket { Button("Ticket") { app.openTag(ticket) } }
+                if let pr { Button("Pull Request") { app.openTag(pr) } }
+                if let mergeRight {
+                    Button("Open in MergeRight") { NSWorkspace.shared.open(mergeRight) }
+                }
+                if ticket != nil || pr != nil || mergeRight != nil { Divider() }
             }
-            if ticket != nil || pr != nil || mergeRight != nil { Divider() }
             Menu("Folder") {
-                Button("None") { app.setFolder(session, to: "") }
-                    .disabled(session.folder.isEmpty)
+                Button("None") { app.setFolder(batch, to: "") }
+                    .disabled(batch.allSatisfy(\.folder.isEmpty))
                 let folders = app.folderNames
                 if !folders.isEmpty { Divider() }
                 ForEach(folders, id: \.self) { name in
-                    Button(name) { app.setFolder(session, to: name) }
-                        .disabled(name == session.folder)
+                    Button(name) { app.setFolder(batch, to: name) }
+                        .disabled(batch.allSatisfy { $0.folder == name })
                 }
                 Divider()
                 Button("New Folder…") {
-                    app.sheet = .newFolder(assign: session)
+                    app.sheet = .newFolder(assign: batch)
                 }
             }
-            Button(session.pinned ? "Unpin" : "Pin to Top") {
-                app.setPinned(session, !session.pinned)
+            // A mixed batch offers the "on" half, Finder's rule for a tag.
+            let pinned = batch.allSatisfy(\.pinned)
+            Button(pinned ? "Unpin" : "Pin to Top") { app.setPinned(batch, !pinned) }
+            let protected = batch.allSatisfy(\.protected)
+            Button(protected ? "Unprotect" : "Protect from Deletion") {
+                app.setProtected(batch, !protected)
             }
-            Button(session.protected ? "Unprotect" : "Protect from Deletion") {
-                app.setProtected(session, !session.protected)
+            let archived = batch.allSatisfy(\.archived)
+            Button(archived ? "Unarchive" : "Archive") { app.setArchived(batch, !archived) }
+            if single {
+                Button("Edit…") { app.sheet = .edit(session) }
+                Button("Tags…") { app.sheet = .tags(session) }
             }
-            Button(session.archived ? "Unarchive" : "Archive") {
-                app.setArchived(session, !session.archived)
-            }
-            Button("Edit…") { app.sheet = .edit(session) }
-            Button("Tags…") { app.sheet = .tags(session) }
             Divider()
-            Button("Open in Diff Tool") { app.openDiffTool(session) }
-                .disabled(!app.canOpenDiffTool(session))
-            Button("Review Changes") { app.review(session) }
-                .disabled(!app.canReview(session))
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(session.worktreePath, forType: .string)
+            if single {
+                Button("Open in Diff Tool") { app.openDiffTool(session) }
+                    .disabled(!app.canOpenDiffTool(session))
+                Button("Review Changes") { app.review(session) }
+                    .disabled(!app.canReview(session))
             }
-            .disabled(session.worktreePath.isEmpty)
-            Button("Move Up") { app.move(session, by: -1) }
-                .disabled(!app.canReorder)
-            Button("Move Down") { app.move(session, by: 1) }
-                .disabled(!app.canReorder)
+            let paths = batch.map(\.worktreePath).filter { !$0.isEmpty }
+            Button(single ? "Copy Path" : "Copy Paths") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
+            }
+            .disabled(paths.isEmpty)
+            if single {
+                Button("Move Up") { app.move(session, by: -1) }
+                    .disabled(!app.canReorder)
+                Button("Move Down") { app.move(session, by: 1) }
+                    .disabled(!app.canReorder)
+            }
             Divider()
             // No confirmation: the worktree survives, the powersleep dot shows
             // the result immediately, and Attach brings it back.
             // Delete is the irreversible one, and the only thing that asks.
-            Button("Kill tmux") { app.killTmux(session) }
-                .disabled(!app.isAlive(session))
-            // Inside a multi-selection the menu acts on all of it, as Finder's does.
-            if app.marked.count > 1 && app.marked.contains(session.id) {
+            let alive = batch.filter(app.isAlive)
+            Button("Kill tmux") { app.killTmux(alive) }
+                .disabled(alive.isEmpty)
+            if !single {
                 Button("Delete \(app.marked.count) Sessions…", role: .destructive) { app.askDeleteMarked() }
                     .disabled(app.batchCandidates.isEmpty)
             } else {
