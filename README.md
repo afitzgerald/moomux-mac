@@ -101,6 +101,18 @@ brew services start agent-usage
 Allow its one Keychain prompt, and the numbers appear within five minutes. Until then the toolbar
 shows nothing; Settings → General → Claude usage says what's missing.
 
+## Codex scrolling on iOS
+
+Codex handles terminal scrolling inside its TUI. If scrolling feels slow in the iOS terminal, set
+its scroll speed in `~/.codex/config.toml` on the computer running the session:
+
+```toml
+[tui]
+mouse_scroll_speed = 3.0
+```
+
+Restart Codex for the setting to take effect.
+
 ## Compatibility
 
 `Sources/Moomux/Core/Models.swift` decodes the core's `internal/ipc` JSON into Swift structs with
