@@ -78,9 +78,10 @@ enum TerminalLink {
     /// universal link for their https host, so an https task or issue URL
     /// handed to `NSWorkspace` always lands in a browser. Rewriting it ourselves
     /// is the only way to skip that. The shapes are the apps' own handlers':
-    /// `asanadesktop:///app` + the https path, and `linear://` + the path
-    /// without its leading slash (Linear's `resolveDeeplink` resolves that
-    /// against linear.app). Query and fragment are kept for both.
+    /// `asanadesktop:///app` + the https path, and `linear://linear.app` + the
+    /// https path. Linear requires its web host in the custom URL; dropping it
+    /// produces a URI the desktop app does not resolve. Query and fragment are
+    /// kept for both.
     ///
     /// nil whenever it would not work, so the caller falls back to the browser:
     /// a link that is neither, or one on a machine without that app, where the
@@ -99,11 +100,10 @@ enum TerminalLink {
             parts.path = "/app" + url.path
         case "linear.app":
             guard installed("linear") else { return nil }
-            let path = url.path.drop { $0 == "/" }
-            guard let workspace = path.split(separator: "/").first else { return nil }
+            guard url.path.split(separator: "/").first != nil else { return nil }
             parts.scheme = "linear"
-            parts.host = String(workspace)
-            parts.path = String(path.dropFirst(workspace.count))
+            // Linear's documented form is linear://linear.app/<original path>.
+            // Keep the entire path, including the workspace slug.
         default:
             return nil
         }
@@ -173,13 +173,13 @@ enum TerminalLink {
         assert(desktopApp(URL(string: "https://asana.com/pricing")!, installed: yes) == nil,
                "only the app host, not the marketing site")
 
-        // Linear's desktop app: `linear://` + the path, per its resolveDeeplink.
+        // Linear's documented desktop URL keeps `linear.app` as the host.
         let issue = URL(string: "https://linear.app/acme/issue/ENG-12/fix-it?x=1#c")!
         assert(desktopApp(issue, installed: yes)?.absoluteString
-               == "linear://acme/issue/ENG-12/fix-it?x=1#c")
+               == "linear://linear.app/acme/issue/ENG-12/fix-it?x=1#c")
         assert(desktopApp(issue, installed: no) == nil, "no app means the browser")
         assert(desktopApp(URL(string: "https://linear.app/acme")!, installed: yes)?.absoluteString
-               == "linear://acme")
+               == "linear://linear.app/acme")
         assert(desktopApp(URL(string: "https://linear.app/")!, installed: yes) == nil,
                "the homepage is not a workspace")
         assert(desktopApp(URL(string: "https://linear.app.example.com/a")!, installed: yes) == nil)
