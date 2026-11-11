@@ -214,7 +214,12 @@ final class PaneKeyBar: UIView {
     }
 
     private func modifier(_ title: String, _ which: TerminalPublicStickyModifier) -> UIButton {
-        let button = base(title) { [weak self] in self?.terminal?.toggleStickyModifier(which) }
+        let button = base(title) { [weak self] in
+            guard let self, let view = terminal else { return }
+            view.toggleStickyModifier(which)
+            // An armed modifier waits for a key, so bring the keyboard back to type it.
+            if view.stickyActivation(for: which) != .inactive { keyboardHidden = false }
+        }
         text(title, on: button)
         modifiers.append((which, button))
         return button
@@ -277,6 +282,8 @@ final class PaneKeyBar: UIView {
                     view.resetStickyModifiers()
                     view.paste(text: snippet.text(for: agent))
                     if snippet.submit { view.sendKey(.enter) }
+                    // One that takes an argument is waiting for it to be typed.
+                    if snippet.text.hasSuffix(" ") { self?.keyboardHidden = false }
                 }
             }
             let edit = UIAction(title: "Edit Snippets…", image: UIImage(systemName: "pencil")) { [weak self] _ in
