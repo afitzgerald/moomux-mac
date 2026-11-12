@@ -209,9 +209,9 @@ private final class PadKey: PadSurface {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         handler()
         guard repeating else { return }
-        delay = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+        delay = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.ticker = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { [weak self] _ in
+                self?.ticker = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
                     MainActor.assumeIsolated { self?.handler() }
                 }
             }
