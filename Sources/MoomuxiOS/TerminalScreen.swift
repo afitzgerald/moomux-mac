@@ -211,7 +211,7 @@ struct TerminalScreen: View {
             // The key bar is the pane's input accessory: it floats over the
             // sheet until the pane lets go of first responder.
             .onChange(of: browsing) { _, open in
-                if open { pane.view?.resignFirstResponder() } else { pane.view?.becomeFirstResponder() }
+                if open { _ = pane.view?.resignFirstResponder() } else { pane.view?.becomeFirstResponder() }
             }
             .onChange(of: edit == nil) { _, closed in if closed { pane.view?.becomeFirstResponder() } }
             .onChange(of: killing) { _, open in if !open { pane.view?.becomeFirstResponder() } }

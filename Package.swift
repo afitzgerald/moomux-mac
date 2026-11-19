@@ -40,12 +40,12 @@ let package = Package(
         // explicitly not stable yet — 2.0 removed the long-press selection
         // sheet outright — so a bump is a deliberate act with a screenshot
         // behind it.
-        .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "2.2.2026100801"),
+        .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "2.2.2026111501"),
         // Diff parsing, highlighting and `PatchView` for the iPhone's Changes
         // screen — MergeRight's engine, extracted so both apps share it.
         // Minor-pinned for libghostty's reason: pre-1.0, so a minor can break
         // the API, and a bump here is a deliberate act with a screenshot behind it.
-        .package(url: "https://github.com/afitzgerald/DiffKit.git", .upToNextMinor(from: "0.3.23")),
+        .package(url: "https://github.com/afitzgerald/DiffKit.git", .upToNextMinor(from: "0.3.25")),
     ],
     targets: [
         // Everything platform-independent: the wire types, the client, the

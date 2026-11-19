@@ -9,7 +9,7 @@ reproduced at the end of this file.
 | [libghostty-spm](https://github.com/Lakr233/libghostty-spm) | Swift layer over libghostty | Copyright (c) 2026 @Lakr233 |
 | [DisplayLink](https://github.com/Lakr233/DisplayLink) | Display link, via libghostty-spm | Copyright (c) 2024 Lakr Aream |
 | [DiffKit](https://github.com/afitzgerald/DiffKit) | Diff rendering on the iPhone | Copyright (c) 2026 Alan Fitzgerald |
-| [mermaid.js](https://github.com/mermaid-js/mermaid) 11.12.1 | Mermaid diagrams in rendered markdown on the iPhone, bundled by DiffKit | Copyright (c) 2014 - 2022 Knut Sveidqvist |
+| [mermaid.js](https://github.com/mermaid-js/mermaid) 12.3.0 | Mermaid diagrams in rendered markdown on the iPhone, bundled by DiffKit | Copyright (c) 2014 - 2022 Knut Sveidqvist |
 | [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) | The terminal themes in `Resources/ghostty-themes` | Copyright (c) 2011 to Present Mark Badolato |
 
 The iTerm2-Color-Schemes license covers the collection. Its own notice adds:
