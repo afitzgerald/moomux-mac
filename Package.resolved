@@ -1,13 +1,13 @@
 {
-  "originHash" : "5db859cc85e3239c1ea6bc3d5ba28bc742ba92cee3e10d3dc372c494b5699741",
+  "originHash" : "4f45dc628e7bb60ca1541bac18d72188a39196a32a0142a5d272d4cd1d748f52",
   "pins" : [
     {
       "identity" : "diffkit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/afitzgerald/DiffKit.git",
       "state" : {
-        "revision" : "225bfbe953c26f616c5a9ced3d18e21cb22223a0",
-        "version" : "0.3.23"
+        "revision" : "795b69c8349b0b457751693327c59adae818025b",
+        "version" : "0.3.25"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Lakr233/libghostty-spm.git",
       "state" : {
-        "revision" : "68f302fd914ccfd521d17d905cc2be3030893f87",
-        "version" : "2.2.2026100801"
+        "revision" : "4220412e7cf7b97e42c9190f5f7fdf5bcb79c22d",
+        "version" : "2.2.2026111501"
       }
     }
   ],
