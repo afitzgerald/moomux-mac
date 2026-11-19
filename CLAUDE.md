@@ -430,6 +430,8 @@ App/Notifier.swift       the only file allowed to touch UNUserNotificationCenter
 App/MoomuxApp.swift      scenes: main window + MenuBarExtra
 App/SelfTest.swift       --selftest
 App/GhosttyResourceBundle.swift  makes Bundle.module resolvable from inside the .app
+App/NoAskSiri.swift      strips macOS 27's "Ask Siri" header (private `NSCampoMenuItem`) from
+                         context menus; no public opt-out, and the Writing Tools flag does not cover it
 UI/RootView.swift        split view, rows, detail, inspector, menu-bar content
 UI/PromptEditor.swift    the first-prompt NSTextView: drop/paste → upload → path at the caret
 UI/TerminalPane.swift    libghostty hosting a plain `tmux attach`
