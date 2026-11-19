@@ -1044,25 +1044,15 @@ extension View {
 
 // MARK: - Bits
 
-/// Claude's 5h and weekly quota; tap for every window's countdown. Rebuilt
-/// every minute: a menu's items are made when the body runs, not when it
-/// opens, and the snapshot alone may not change for hours.
+/// Claude's 5h and weekly quota; tap for readable, wrapping usage details.
 private struct UsageMenu: View {
     @Bindable var app: AppState
+    @State private var showingDetails = false
+
     var body: some View {
         TimelineView(.everyMinute) { context in
-            Menu {
-                if let usage = app.usage {
-                    Section("Claude") {
-                        ForEach(Array(usage.detail(now: context.date, free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in Text(line) }
-                    }
-                }
-                if let usage = app.codexUsage {
-                    Section("Codex") {
-                        ForEach(Array(usage.detail(now: context.date, agent: "Codex", free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in Text(line) }
-                    }
-                }
-                Toggle("Show free quota", isOn: $app.showFreeQuota)
+            Button {
+                showingDetails = true
             } label: {
                 HStack(spacing: 8) {
                     if let usage = app.usage { usageRings(usage, agent: "Claude", now: context.date) }
@@ -1071,6 +1061,41 @@ private struct UsageMenu: View {
             }
             .accessibilityLabel("Usage")
             .accessibilityValue(accessibilityValue(now: context.date))
+        }
+        .sheet(isPresented: $showingDetails) {
+            NavigationStack {
+                TimelineView(.everyMinute) { context in
+                    Form {
+                        if let usage = app.usage {
+                            usageDetails(usage, agent: "Claude", now: context.date)
+                        }
+                        if let usage = app.codexUsage {
+                            usageDetails(usage, agent: "Codex", now: context.date)
+                        }
+                        Toggle("Show free quota", isOn: $app.showFreeQuota)
+                    }
+                }
+                .navigationTitle("Usage")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingDetails = false }
+                    }
+                }
+            }
+        }
+    }
+
+    private func usageDetails(_ usage: Usage, agent: String, now: Date) -> some View {
+        Section {
+            ForEach(Array(usage.detail(now: now, agent: agent, free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        } header: {
+            Text(agent).foregroundStyle(.primary)
         }
     }
 
