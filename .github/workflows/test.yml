@@ -60,7 +60,7 @@ jobs:
         run: make app
 
   ios:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,15 +70,11 @@ jobs:
       # Without this a phone-only file can break and every other check stays
       # green.
       #
-      # The one job that needs an iOS SDK, so it pins the toolchain rather
-      # than inheriting whichever Xcode the image defaults to — `make ios`
-      # reads the SDK path out of `xcrun`, and the macOS jobs stay on
-      # the CommandLineTools toolchain the dev machine uses. The `xcrun` line
-      # is there so an image without that SDK says so in one line rather than
-      # as forty "unable to load standard library" errors.
+      # Use the same Xcode release as testflight.yml. `make ios` finds the
+      # simulator SDK through xcrun.
       - name: iOS bundle
         env:
-          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+          DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
         run: |
           xcrun --sdk iphonesimulator --show-sdk-path
           make ios
