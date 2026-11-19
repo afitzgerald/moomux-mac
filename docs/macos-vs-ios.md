@@ -351,8 +351,10 @@ gone from the ⋯ menu: the list does everything it was for.
 up top.** A phone reaches the bottom with a thumb, and the iOS 26 toolbar puts search there, so
 ⊕ sits beside it, as Mail and Notes do. That leaves the top bar to three things, so the computer's
 name (D56) is no longer cut off: ⋯ on the left, the title in the middle, and the usage rings
-alone on the right. Show free quota moved from ⋯ into the usage menu, the only place it changes
-anything. No connection icon: a healthy connection says nothing, a lost one has `ConnectionRow`,
+alone on the right. Tapping the rings opens a Usage sheet with primary-color text and wrapping
+rows. A menu renders informational text as disabled gray and truncates long token counts.
+Show free quota lives in that sheet, the only place it changes anything.
+No connection icon: a healthy connection says nothing, a lost one has `ConnectionRow`,
 and connecting or a write in flight (`busy`) shows as the title's subtitle, which says *what* is
 slow, where a spinner only said that something was. The Mac's toolbar has the room, and its
 search and ⌘N stay where a Mac app has them. This is why the phone needs iOS 26 (`.bottomBar`
