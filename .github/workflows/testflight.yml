@@ -23,8 +23,10 @@ on:
 
 jobs:
   upload:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 60
+    env:
+      XCODE: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,17 +60,14 @@ jobs:
           Scripts/release_notes.sh "${{ inputs.tag }}" "$RUNNER_TEMP"
           echo "WHATS_NEW=$RUNNER_TEMP/WhatsNew.md" >> "$GITHUB_ENV"
 
-      # The image ships several Xcodes and the default may be older than the
-      # project format. Pick the newest and print it, so "this Xcode is too old"
-      # says so instead of looking like a code error. Passed as XCODE rather
-      # than `xcode-select`ed, so the macOS steps of the build (the icon
-      # rasterizer) stay on the toolchain they always use.
-      - name: Pick Xcode
-        id: xcode
+      # App Store Connect requires the iOS 27 SDK starting April 2027. Pin an
+      # accepted Xcode release because the runner also carries betas.
+      - name: Verify the iOS toolchain
+        env:
+          DEVELOPER_DIR: ${{ env.XCODE }}
         run: |
-          dir="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)/Contents/Developer"
-          DEVELOPER_DIR="$dir" xcodebuild -version
-          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       # With -allowProvisioningUpdates and an *Admin*-role key the export is
       # cloud signing: Apple mints the distribution certificate and profile and
@@ -124,7 +123,7 @@ jobs:
 
       - name: Upload the iPhone build
         run: |
-          make testflight XCODE="${{ steps.xcode.outputs.dir }}" \
+          make testflight \
             XC_AUTH="-authenticationKeyPath $RUNNER_TEMP/asc.p8 \
               -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
               -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}"
