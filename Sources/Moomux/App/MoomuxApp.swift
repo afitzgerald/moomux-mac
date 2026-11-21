@@ -16,6 +16,7 @@ struct MoomuxApp: App {
         // does not resolve, so reaching this line is the pass.
         if CommandLine.arguments.contains("--warm-check") { exit(0) }
         NoAskSiri.install()
+        PreviewFile.clear() // fetched files from earlier runs
         return AppState(client: client())
     }
 

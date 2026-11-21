@@ -131,10 +131,10 @@ public enum PreviewFile {
         !data.prefix(8000).contains(0)
     }
 
-    /// Every earlier fetch's directory but `keep`.
-    public static func clear(keeping keep: URL) {
+    /// Every earlier fetch's directory but `keep` (all of them when nil).
+    public static func clear(keeping keep: URL? = nil) {
         let others = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-        for dir in others where dir.lastPathComponent != keep.lastPathComponent {
+        for dir in others where dir.lastPathComponent != keep?.lastPathComponent {
             try? FileManager.default.removeItem(at: dir)
         }
     }

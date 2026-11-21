@@ -628,7 +628,7 @@ Ceiling: the punctuation keys the package's bar had (`| ~ /`) are gone.
 | | Mac | iPhone |
 |---|---|---|
 | Allowlist | `TerminalLink`: http, https, file | `WebLink`: http, https |
-| Absolute path in a pane | opens locally if it exists; in a remote pane, `ReadFile` → temp file → default app | `ReadFile` → temp file → Quick Look |
+| Absolute path in a pane | opens locally if it exists and is viewable (image, PDF, media, text; apps, scripts, executables, folders and `.webloc` are revealed in Finder instead); in a remote pane, `ReadFile` → temp file → default app | `ReadFile` → temp file → Quick Look |
 | Relative or `:line:col` path | `ResolveFile` on the core → opens locally; in a remote pane, `ReadFile` | `ReadFile` (the core resolves it) → Quick Look |
 | Ticket/PR tag | `WebSheet` (in-app WKWebView) | `Link` → the claiming app, then Safari |
 | Asana, Linear | rewritten to `asanadesktop://`, `linear://` | not rewritten |
