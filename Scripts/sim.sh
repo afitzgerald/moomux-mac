@@ -21,7 +21,9 @@ devices() {
 case "${1:-}" in
 ensure)
     name=$2 type=$3
-    if ! devices | cut -f1 | rg -qxF -- "$name"; then
+    # A here-string, not a pipe: `grep -q` exits early and pipefail would read the SIGPIPE as "no match".
+    names=$(devices | cut -f1)
+    if ! grep -qxF -- "$name" <<<"$names"; then
         xcrun simctl create "$name" "$type" >/dev/null
         echo "created simulator: $name"
     fi
@@ -31,7 +33,7 @@ prune)
     devices | while IFS=$'\t' read -r name udid; do
         [[ $name == "$PREFIX"* ]] || continue
         wt=${name#"$PREFIX"}
-        if ! rg -qxF -- "$wt" <<<"$live"; then
+        if ! grep -qxF -- "$wt" <<<"$live"; then
             # `delete` refuses a booted device.
             xcrun simctl shutdown "$udid" 2>/dev/null || true
             xcrun simctl delete "$udid"
