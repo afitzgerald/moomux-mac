@@ -1056,8 +1056,8 @@ private struct UsageMenu: View {
                 showingDetails = true
             } label: {
                 HStack(spacing: 8) {
-                    if let usage = app.usage { usageRings(usage, agent: "Claude", now: context.date) }
-                    if let usage = app.codexUsage { usageRings(usage, agent: "Codex", now: context.date) }
+                    if let usage = app.usage { usageSummary(usage, agent: "Claude", now: context.date) }
+                    if let usage = app.codexUsage { usageSummary(usage, agent: "Codex", now: context.date) }
                 }
             }
             .accessibilityLabel("Usage")
@@ -1087,7 +1087,7 @@ private struct UsageMenu: View {
         }
     }
 
-    private func usageRings(_ usage: Usage, agent: String, now: Date) -> some View {
+    private func usageSummary(_ usage: Usage, agent: String, now: Date) -> some View {
         HStack(spacing: 3) {
             AgentMark(agent, size: 12)
             if usage.status == .signedOut {
@@ -1096,12 +1096,15 @@ private struct UsageMenu: View {
             } else if usage.headline.isEmpty {
                 Image(systemName: usage.tokens == nil ? "exclamationmark.circle" : "number.circle")
                     .font(.caption)
-            } else {
-                ZStack {
-                    ring(usage, window: usage.headline.first { $0.kind == "session" }, size: 20, now: now)
-                    ring(usage, window: usage.headline.first { $0.kind == "weekly_all" }, size: 10, now: now)
-                }
-                .frame(width: 20, height: 20)
+            } else if let window = summaryWindow(usage, now: now) {
+                let style = SessionTheme.usage(usage.level(of: window, now: now), app.palette)
+                let prefix = window.kind == "session" ? "5h " : ""
+                Text("\(prefix)\(usage.percent(of: window, free: true))%")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .fontWeight(style.bold ? .bold : .regular)
+                    .foregroundStyle(usage.isCurrent ? style.color : .secondary)
+                    .fixedSize()
                 if !usage.isCurrent && usage.status != .idle {
                     Image(systemName: "clock.badge.exclamationmark").font(.caption2)
                 } else if usage.inline(now: now).contains(where: { !$0.headline }) {
@@ -1111,28 +1114,16 @@ private struct UsageMenu: View {
         }
     }
 
-    private func ring(_ usage: Usage, window: Usage.Window?, size: CGFloat, now: Date) -> some View {
-        let percent = window.map { usage.percent(of: $0, free: app.showFreeQuota) } ?? 0
-        let color = window.map { SessionTheme.usage(usage.level(of: $0, now: now), app.palette).color } ?? .primary
-        return Canvas { context, bounds in
-            let rect = CGRect(origin: .zero, size: bounds).insetBy(dx: 1, dy: 1)
-            context.stroke(Path(ellipseIn: rect), with: .color(.primary.opacity(0.2)), lineWidth: 2)
-            let fraction = Double(max(0, min(100, percent))) / 100
-            if fraction > 0 {
-                var arc = Path()
-                arc.addArc(center: CGPoint(x: bounds.width / 2, y: bounds.height / 2),
-                           radius: rect.width / 2, startAngle: .degrees(-90),
-                           endAngle: .degrees(-90 + 360 * fraction), clockwise: false)
-                context.stroke(arc, with: .color(usage.isCurrent ? color : .secondary), lineWidth: 2)
-            }
-        }
-        .frame(width: size, height: size)
+    private func summaryWindow(_ usage: Usage, now: Date) -> Usage.Window? {
+        let session = usage.headline.first { $0.kind == "session" }
+        if let session, usage.level(of: session, now: now) != .ok { return session }
+        return usage.headline.first { $0.kind == "weekly_all" } ?? session ?? usage.headline.first
     }
 
     private func accessibilityValue(now: Date) -> String {
         [("Claude", app.usage), ("Codex", app.codexUsage)].compactMap { agent, usage in
             guard let usage else { return nil }
-            let details = usage.detail(now: now, agent: agent, free: app.showFreeQuota, includeTokens: false)
+            let details = usage.detail(now: now, agent: agent, free: true, includeTokens: false)
             return ([agent] + details).joined(separator: ", ")
         }.joined(separator: "; ")
     }
