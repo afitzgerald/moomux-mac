@@ -1191,12 +1191,11 @@ private struct UsageSection: View {
             quotaReading(window)
             ForEach(Array(scoped.enumerated()), id: \.offset) { _, model in
                 VStack(alignment: .leading, spacing: 3) {
-                    quotaReading(model)
+                    quotaReading(model, secondary: true)
                     if let modelReset = model.resets(now: now), modelReset != reset {
                         resetText(modelReset)
                     }
                 }
-                .foregroundStyle(.secondary)
                 .padding(.leading, 12)
             }
             if let reset {
@@ -1207,7 +1206,7 @@ private struct UsageSection: View {
         .textSelection(.enabled)
     }
 
-    private func quotaReading(_ window: Usage.Window) -> some View {
+    private func quotaReading(_ window: Usage.Window, secondary: Bool = false) -> some View {
         let percent = usage.percent(of: window, free: free)
         let name = switch window.kind {
         case "session": "5-hour"
@@ -1216,10 +1215,11 @@ private struct UsageSection: View {
         }
         return LabeledContent {
             (free ? Text("\(percent)% free") : Text("\(percent)% used"))
-                .foregroundStyle(.primary)
+                .foregroundStyle(secondary ? .secondary : .primary)
                 .monospacedDigit()
         } label: {
             Text(name)
+                .foregroundStyle(secondary ? .secondary : .primary)
         }
     }
 
