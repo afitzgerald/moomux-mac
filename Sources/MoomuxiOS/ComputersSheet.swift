@@ -6,6 +6,9 @@ import SwiftUI
 /// screen and connects to the other.
 struct ComputersSheet: View {
     let computers: ComputerStore
+    /// A write is in flight on the current computer; a switch would drop its
+    /// refusal, so the other rows wait (the list's own title menu does the same).
+    let busy: Bool
     let select: (UUID) -> Void
     let add: () -> Void
     let forget: (UUID) -> Void
@@ -66,6 +69,7 @@ struct ComputersSheet: View {
                 }
             }
         }
+        .disabled(busy && computer.id != computers.saved.currentID)
         .contextMenu {
             Button("Rename…", systemImage: "pencil") { rename(computer) }
             Button("Forget", systemImage: "trash", role: .destructive) { forgetting = computer }

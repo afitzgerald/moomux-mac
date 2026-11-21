@@ -181,7 +181,7 @@ final class PaneKeyBar: UIView {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.accessibilityLabel = label
         button.tintColor = .label
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 36).isActive = true
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         button.heightAnchor.constraint(equalToConstant: height).isActive = true
         button.addAction(UIAction { _ in action() }, for: .touchUpInside)
         return button
@@ -191,7 +191,8 @@ final class PaneKeyBar: UIView {
         var config = button.configuration ?? .plain()
         config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 7, bottom: 0, trailing: 7)
         config.attributedTitle = AttributedString(title, attributes: AttributeContainer([
-            .font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+            .font: UIFontMetrics(forTextStyle: .callout).scaledFont(
+                for: .monospacedSystemFont(ofSize: 14, weight: .regular), maximumPointSize: 20),
         ]))
         button.configuration = config
     }

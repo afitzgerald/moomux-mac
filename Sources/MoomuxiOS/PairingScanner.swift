@@ -93,6 +93,7 @@ private struct QRScanner: UIViewControllerRepresentable {
             scanner.stopScanning()
         } else if !scanner.isScanning {
             try? scanner.startScanning()
+            context.coordinator.resumed()
         }
     }
 
@@ -110,6 +111,21 @@ private struct QRScanner: UIViewControllerRepresentable {
         private var answered: String?
 
         init(parent: QRScanner) { self.parent = parent }
+
+        /// `didRemove` is not heard while paused, so a code carried out of
+        /// frame behind the alert would stay "answered" and be ignored when
+        /// it came back. A code still in front of the camera is re-reported
+        /// at once, inside this window, and is still ignored; after it,
+        /// anything new is a fresh scan.
+        private var forget: Task<Void, Never>?
+
+        @MainActor func resumed() {
+            forget?.cancel()
+            forget = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(1.5))
+                if !Task.isCancelled { self?.answered = nil }
+            }
+        }
 
         func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem],
                          allItems: [RecognizedItem]) {
