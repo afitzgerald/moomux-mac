@@ -1517,6 +1517,14 @@ public final class AppState {
     /// the sidebar and let the next snapshot sort it back a beat later. A
     /// nudge answers with the same list the stream would have sent, in the
     /// order it would have sent it.
+    /// An explicit refresh: the expensive per-session state is otherwise only
+    /// fetched on demand, so this is the one place it is re-fetched rather than
+    /// served from cache.
+    public func refreshNow() async {
+        await refresh()
+        if let id = selectedSessionID { await loadStatus(for: id, force: true) }
+    }
+
     public func refresh() async {
         await refreshConfig()
         if streaming {

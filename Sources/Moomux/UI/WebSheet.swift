@@ -15,6 +15,8 @@ struct WebSheet: View {
     let link: String
     let url: URL
     /// The window behind the sheet, tracked so the sheet can follow it.
+    @State private var failure: String?
+    @State private var attempt = 0
     @State private var host: CGRect = WebSheet.hostWindow?.frame ?? .zero
 
     var body: some View {
@@ -44,7 +46,20 @@ struct WebSheet: View {
             }
             .padding(10)
             Divider()
-            PageView(url: url)
+            PageView(url: url, failure: $failure)
+                .id(attempt)
+                .overlay {
+                    if let message = failure {
+                        ContentUnavailableView {
+                            Label("Couldn't load the page", systemImage: "exclamationmark.triangle")
+                        } description: {
+                            Text(message)
+                        } actions: {
+                            Button("Retry") { failure = nil; attempt += 1 }
+                        }
+                        .background(.background)
+                    }
+                }
         }
         // Scales with the window behind it, and stays draggable in between: a
         // sheet is only user-resizable when its content has a flexible max, and
@@ -137,17 +152,36 @@ private final class SheetSizerView: NSView {
 /// init — which then fails to build against this bundle's 14.0 target.
 private struct PageView: NSViewRepresentable {
     let url: URL
+    /// Set by a failed load; the sheet draws it and offers Retry.
+    @Binding var failure: String?
+
+    func makeCoordinator() -> Coordinator { Coordinator(failure: $failure) }
 
     func makeNSView(context: Context) -> WKWebView {
         let view = WKWebView()
+        view.navigationDelegate = context.coordinator
         view.load(URLRequest(url: url))
         return view
     }
 
-    /// Only ever loads once. SwiftUI re-runs this on every store tick, and
-    /// re-loading would throw away whatever the user was typing.
-    func updateNSView(_ view: WKWebView, context: Context) {
-        guard view.url == nil, !view.isLoading else { return }
-        view.load(URLRequest(url: url))
+    /// Loads once, in `makeNSView`. SwiftUI re-runs this on every store tick,
+    /// and re-loading would throw away whatever the user was typing — and
+    /// after a failed load would retry every two seconds. Retry re-creates
+    /// the view instead (`.id` in `WebSheet`).
+    func updateNSView(_ view: WKWebView, context: Context) {}
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var failure: Binding<String?>
+        init(failure: Binding<String?>) { self.failure = failure }
+
+        func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { fail(e) }
+        func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) { fail(e) }
+        func webView(_ w: WKWebView, didFinish n: WKNavigation!) { failure.wrappedValue = nil }
+
+        private func fail(_ error: Error) {
+            // A redirect or a link click cancels the load it replaces.
+            if (error as NSError).code == NSURLErrorCancelled { return }
+            failure.wrappedValue = error.localizedDescription
+        }
     }
 }

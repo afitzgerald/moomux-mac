@@ -102,8 +102,10 @@ struct SettingsSheet: View {
             Divider()
             HStack {
                 Spacer()
+                // Cancel, not default: a default action made Return in any
+                // text field close Settings, and left Esc doing nothing.
                 Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(12)
         }
@@ -197,6 +199,11 @@ private struct ProjectsPane: View {
                 }
             }
             .frame(maxHeight: .infinity)
+            // A removal (here or from another front end) must not leave Edit
+            // and Remove live against a name that no longer exists.
+            .onChange(of: names) { _, now in
+                if let selection, !now.contains(selection) { self.selection = nil }
+            }
             .overlay {
                 // A fresh install lands here with nothing in the list, and an
                 // empty `List` is a blank box that says nothing about what to do.
@@ -433,7 +440,10 @@ private struct CoreSection: View {
         Section {
             TextField("Host", text: $host, prompt: Text("this Mac"))
                 .help("A MagicDNS name or tailnet address of the Mac running moomux serve")
-            TextField("Port", value: $port, format: .number.grouping(.never),
+            // 0 is "unset" in storage; show the placeholder, not a literal 0.
+            TextField("Port", value: Binding<Int?>(get: { port == 0 ? nil : port },
+                                                   set: { port = $0 ?? 0 }),
+                      format: .number.grouping(.never),
                       prompt: Text(String(MoomuxClient.tailnetPort)))
                 .disabled(host.trimmingCharacters(in: .whitespaces).isEmpty)
             LabeledContent("Connected to", value: app.client.endpoint.description)
@@ -525,7 +535,7 @@ private struct GeneralPane: View {
                     Toggle("Send the first prompt by default", isOn: Binding(
                         get: { cfg?.autoSubmitDefault ?? false },
                         set: { app.setAutoSubmitDefault($0) }))
-                        .help("The starting state of the new-session form's send toggle, here and in the TUI")
+                        .help("Whether a new session's first prompt is sent as soon as the agent is up, here and in the TUI")
                     Toggle("Terminal pane", isOn: Binding(
                         get: { !(cfg?.noTerminalPane ?? false) },
                         set: { app.setTerminalPane($0) }))

@@ -46,11 +46,13 @@ struct SessionGrid: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 12)], spacing: 12) {
                 ForEach(tiles) { session in
-                    SessionTile(session: session, rows: screens[session.id] ?? [])
-                        .onTapGesture {
-                            app.selectedSessionID = session.id
-                            app.showGrid = false
-                        }
+                    Button {
+                        app.selectedSessionID = session.id
+                        app.showGrid = false
+                    } label: {
+                        SessionTile(session: session, rows: screens[session.id] ?? [])
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(12)
@@ -99,6 +101,7 @@ private struct SessionTile: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: state.symbol).foregroundStyle(Theme.color(state, app.palette))
+                    .accessibilityLabel(app.label(for: session))
                 Text(session.name).lineLimit(1)
                 Spacer()
                 Text(session.project).foregroundStyle(.secondary).lineLimit(1)

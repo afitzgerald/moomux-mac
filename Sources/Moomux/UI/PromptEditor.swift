@@ -30,6 +30,7 @@ struct PromptEditor: NSViewRepresentable {
         view.autoresizingMask = [.width]
         view.textContainer?.widthTracksTextView = true
         view.delegate = context.coordinator
+        view.setAccessibilityLabel("First prompt")
         view.string = text
         view.attachments = attachments
         view.upload = upload
