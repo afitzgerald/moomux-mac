@@ -22,9 +22,9 @@ struct TerminalScreen: View {
     let sessionID: Session.ID
     /// Whose servers the Browser reaches; nil only between computers.
     let computer: Computers.Computer?
-    /// Pushes onto the list's stack. The ⋯ menu's Details needs it: a
-    /// `NavigationLink` inside a `Menu` is not reliably a link.
+    /// Opens Details on the list's stack after the sheet closes.
     let push: (Route) -> Void
+    let closeAfterDelete: (Session.ID) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -38,11 +38,11 @@ struct TerminalScreen: View {
     @State private var pickingPhotos = false
     @State private var importingFiles = false
     @State private var attachments = AttachQueue()
-    /// Delete was asked from this screen's menu. The detail screen binds the
-    /// same `pendingDelete` and sits above this one when open, so without
-    /// this both would raise the alert.
-    @State private var deleting = false
-    @State private var killing = false
+    @State private var showingActions = false
+    @State private var afterActions: (() -> Void)?
+    @State private var edit: SessionEdit?
+    @State private var confirmingKill = false
+    @State private var confirmingDelete = false
     /// From the ⋯ menu. `focus` says no: the user is attached to a session and
     /// a create takes tens of seconds, so a jump would detach them from it.
     @State private var creating = false
@@ -52,9 +52,6 @@ struct TerminalScreen: View {
     @State private var browsing = UserDefaults.standard.bool(forKey: "browser")
     /// A dev-server link tapped in the pane, opened instead of the last URL.
     @State private var browserURL: URL?
-    /// The pane's own, for the same reason as `deleting`: detail binds its
-    /// own copy of these alerts.
-    @State private var edit: SessionEdit?
 
     /// A tapped file, fetched from the core and shown in Quick Look — which
     /// already does images, PDFs, text and code, with zoom and a share sheet.
@@ -93,7 +90,11 @@ struct TerminalScreen: View {
             // pinch would redraw the pane from nothing. The new width reaches
             // the pty through the ordinary resize path.
             .onChange(of: fontSize) { _, size in pane.view?.setFontSize(size) }
-            .onAppear { app.paneOnScreen = sessionID }
+            .onAppear {
+                app.paneOnScreen = sessionID
+                // Navigation back can run before UIKit finishes bringing the pane forward.
+                DispatchQueue.main.async { pane.view?.becomeFirstResponder() }
+            }
             // **Not** `.ignoresSafeArea(.bottom)`. The surface sizes its grid
             // to the view, so extending under the home indicator buys two more
             // rows that are drawn behind it — and tmux puts the status line
@@ -101,6 +102,7 @@ struct TerminalScreen: View {
             // missing. Reported as "the cursor is two lines below where it
             // should be", which is precisely the inset in rows.
             .quickLookPreview($preview)
+            .sheet(isPresented: $showingActions, onDismiss: finishActions) { actions }
             .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { false }) }
             .sheet(isPresented: $editingSnippets) { SnippetsSheet() }
             .sheet(isPresented: $browsing, onDismiss: { browserURL = nil }) {
@@ -129,7 +131,7 @@ struct TerminalScreen: View {
                     }
                 }
                 // The diff is one tap because "what has it changed?" is the
-                // question you attach to ask. Details and New Session share a menu:
+                // question you attach to ask. Details and New Session share the actions sheet:
                 // three icons beside the quip squeezed it to a word or two.
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(value: Route.changes(sessionID)) {
@@ -139,43 +141,10 @@ struct TerminalScreen: View {
                     .disabled(app.session(id: sessionID).map { !app.canDiff($0) } ?? true)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button { creating = true } label: {
-                            Label("New Session", systemImage: "plus.bubble")
-                        }
-                        Button { browsing = true } label: {
-                            Label("Browser", systemImage: "safari")
-                        }
-                        .disabled(computer == nil)
-                        if let session = app.session(id: sessionID) {
-                            SessionActions(app: app, session: session, edit: $edit, inMenu: true,
-                                           kill: { killing = true },
-                                           delete: {
-                                               deleting = true
-                                               app.askDelete(session)
-                                           })
-                        }
-                        ControlGroup {
-                            // Attached is exactly when you want the branch, the PR
-                            // state and the worktree — the row's swipe reaches
-                            // detail too, but not once you are already in here.
-                            Button { push(.detail(sessionID)) } label: {
-                                Label("Details", systemImage: "info.circle")
-                            }
-                            // Here and not in the list's menu: it is this pane's
-                            // size, and the one place to judge it is looking at it.
-                            Picker(selection: $fontSize) {
-                                ForEach(TerminalFontSize.choices(including: fontSize), id: \.self) { size in
-                                    Text("\(Int(size)) pt").tag(size)
-                                }
-                            } label: {
-                                Label("Text Size", systemImage: "textformat.size")
-                            }
-                            .pickerStyle(.menu)
-                        }
+                    Button {
+                        _ = pane.view?.resignFirstResponder()
+                        showingActions = true
                     } label: {
-                        // A spinner while a batch uploads, but still a menu:
-                        // Details must not wait on a photo.
                         if attachments.pending > 0 {
                             ProgressView()
                         } else {
@@ -185,6 +154,90 @@ struct TerminalScreen: View {
                     .accessibilityLabel("More")
                 }
             }
+    }
+
+    private var actions: some View {
+        NavigationStack {
+            let session = app.session(id: sessionID)
+            List {
+                Section {
+                    Button { closeActions { creating = true } } label: {
+                        Label("New Session", systemImage: "plus.bubble")
+                    }
+                    Button { closeActions { browsing = true } } label: {
+                        Label("Browser", systemImage: "safari")
+                    }
+                    .disabled(computer == nil)
+                    Button { closeActions { push(.detail(sessionID)) } } label: {
+                        Label("Details", systemImage: "info.circle")
+                    }
+                    Picker(selection: $fontSize) {
+                        ForEach(TerminalFontSize.choices(including: fontSize), id: \.self) { size in
+                            Text("\(Int(size)) pt").tag(size)
+                        }
+                    } label: {
+                        Label("Text Size", systemImage: "textformat.size")
+                    }
+                    .pickerStyle(.menu)
+                }
+                if let session {
+                    SessionActions(app: app, session: session, edit: $edit,
+                                   kill: { confirmingKill = true },
+                                   delete: {
+                                       confirmingDelete = true
+                                       Task { await app.loadStatus(for: session.id, force: true) }
+                                   })
+                }
+            }
+            .navigationTitle("Session Actions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingActions = false }
+                }
+            }
+            .sessionEditing(app: app, session: session, edit: $edit)
+            .alert("Delete \(session?.name ?? "session")?", isPresented: $confirmingDelete) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) {
+                    guard let session else { return }
+                    closeActions {
+                        closeAfterDelete(session.id)
+                        app.delete(session)
+                    }
+                }
+            } message: {
+                Text(session.map(app.deleteWarning(for:)) ?? "")
+            }
+            .confirmationDialog("Stop \(session?.name ?? "session")'s agent?",
+                                isPresented: $confirmingKill, titleVisibility: .visible) {
+                Button("Kill tmux", role: .destructive) {
+                    guard let session else { return }
+                    closeActions {
+                        dismiss()
+                        app.killTmux(session)
+                    }
+                }
+            } message: {
+                Text("Its tmux session ends. The worktree and branch stay, and Attach starts it again.")
+            }
+        }
+        .presentationDragIndicator(.visible)
+    }
+
+    private func closeActions(then action: @escaping () -> Void) {
+        // Let SwiftUI dismiss the sheet before opening another presentation.
+        afterActions = action
+        showingActions = false
+    }
+
+    private func finishActions() {
+        if let action = afterActions {
+            afterActions = nil
+            action()
+        } else {
+            pane.view?.becomeFirstResponder()
+        }
     }
 
     // Split from `body` for the same reason as `terminal`.
@@ -213,9 +266,6 @@ struct TerminalScreen: View {
             .onChange(of: browsing) { _, open in
                 if open { _ = pane.view?.resignFirstResponder() } else { pane.view?.becomeFirstResponder() }
             }
-            .onChange(of: edit == nil) { _, closed in if closed { pane.view?.becomeFirstResponder() } }
-            .onChange(of: killing) { _, open in if !open { pane.view?.becomeFirstResponder() } }
-            .onChange(of: deleting) { _, open in if !open { pane.view?.becomeFirstResponder() } }
     }
 
     var body: some View {
@@ -227,30 +277,6 @@ struct TerminalScreen: View {
                 Button("OK") {}
             } message: {
                 Text(attachments.error ?? "")
-            }
-            .alert("Delete \(app.session(id: sessionID)?.name ?? "session")?", isPresented: Binding(
-                get: { deleting && app.pendingDelete?.id == sessionID },
-                set: { if !$0 { deleting = false; app.dismissDelete() } }
-            )) {
-                Button("Cancel", role: .cancel) { app.dismissDelete() }
-                Button("Delete", role: .destructive) {
-                    if let session = app.session(id: sessionID) { app.delete(session) }
-                    dismiss()
-                }
-            } message: {
-                Text(app.session(id: sessionID).map(app.deleteWarning(for:)) ?? "")
-            }
-            .sessionEditing(app: app, session: app.session(id: sessionID), edit: $edit)
-            // Same question as detail's. The pane leaves first, or its
-            // reconnect would stand the session straight back up.
-            .confirmationDialog("Stop \(app.session(id: sessionID)?.name ?? "session")'s agent?",
-                                isPresented: $killing, titleVisibility: .visible) {
-                Button("Kill tmux", role: .destructive) {
-                    dismiss()
-                    if let session = app.session(id: sessionID) { app.killTmux(session) }
-                }
-            } message: {
-                Text("Its tmux session ends. The worktree and branch stay, and Attach starts it again.")
             }
             // No `onDisappear` cancel, unlike the sheet: pushing the info
             // screen disappears this one too, and would drop a batch mid-way.
