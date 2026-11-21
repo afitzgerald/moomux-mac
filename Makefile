@@ -135,7 +135,7 @@ warnings:
 # The assert-based checks. Deliberately not part of `build`: they must never be
 # built with -O, which deletes every assert (see Scripts/selfcheck.sh).
 selfcheck:
-	SWIFT_BUILD_FLAGS="$(MAC_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS)" bash Scripts/selfcheck.sh
+	SWIFT_BUILD_FLAGS="$(SWIFT_BUILD_FLAGS) $(MAC_SDK_FLAGS)" bash Scripts/selfcheck.sh
 
 # Wrap the SwiftPM binary in a bundle. There is no Xcode here, so this is the
 # app target. The bundle is not optional for anything that wants a bundle
