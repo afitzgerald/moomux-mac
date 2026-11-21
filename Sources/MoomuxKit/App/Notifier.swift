@@ -156,6 +156,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     ) {
         let id = response.notification.request.identifier
         Task { @MainActor in
+            app?.showGrid = false
             app?.selectedSessionID = id
             NSApp.activate()
             NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)

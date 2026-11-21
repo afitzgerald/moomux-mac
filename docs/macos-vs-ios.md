@@ -804,6 +804,8 @@ exits.** Both build on `NewSessionForm` and the core's `AgentOptions`.
   keeps its own answer. The phone also requires the user to still be on the list
   (`focus: { path.isEmpty }`), because a create takes tens of seconds and a jump would detach
   whatever pane they are typing in.
+  The Mac guards the same way: it jumps only if the selection is unchanged since Create and no
+  pane or text view is first responder.
 - **Dismissal.** The phone disables swipe-to-dismiss once anything is typed or uploading.
 - **The prompt's pill.** Both apps put one row under the prompt, the same view (`PromptBar`): a
   glass pill of Attach (on the phone a menu of Photos and Files, as on the key bar; on the Mac

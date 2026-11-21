@@ -103,11 +103,26 @@ struct SessionCommands: Commands {
         app.marked.isEmpty ? selected.map { [$0] } ?? [] : app.sessions.filter { app.marked.contains($0.id) }
     }
 
+    /// A menu key equivalent is offered before the focused text view sees it.
+    /// With one focused, hand the keystroke back as its own editing command
+    /// (nil swallows it) and report true so the session action is skipped.
+    @MainActor
+    private func textHasFocus(_ edit: Selector? = nil) -> Bool {
+        guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView else { return false }
+        if let edit { tv.doCommand(by: edit) }
+        return true
+    }
+
+    /// The write actions and sheet openers do nothing behind a sheet or
+    /// while a text field has the keyboard.
+    @MainActor
+    private var blocked: Bool { app.sheet != nil || textHasFocus() }
+
     var body: some Commands {
         // Replacing .newItem drops the dead "New Window" AppKit puts there for
         // a single-Window scene, so ⌘N means the only thing it can mean.
         CommandGroup(replacing: .newItem) {
-            Button("New Session…") { app.sheet = .create }
+            Button("New Session…") { if !blocked { app.sheet = .create } }
                 .keyboardShortcut("n")
         }
         // ⌘, is where every Mac app keeps this, and replacing the group is
@@ -115,7 +130,7 @@ struct SessionCommands: Commands {
         // sheet and not a `Settings` scene: `app.sheet` is how every other form
         // here is opened, and one path is fewer than two.
         CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { app.sheet = .settings }
+            Button("Settings…") { if !blocked { app.sheet = .settings } }
                 .keyboardShortcut(",", modifiers: .command)
         }
         // AppKit adds ⌥⌘Q "Quit and Keep Windows" as Quit's alternate, and
@@ -185,10 +200,16 @@ struct SessionCommands: Commands {
             // the moment a terminal pane has focus (it always takes first
             // responder on attach, so typing works without a click first) —
             // these are the equivalent of `PaneCommands` for the sidebar.
-            Button("Next Session") { app.selectAdjacentSession(by: 1) }
+            Button("Next Session") {
+                if app.sheet != nil || textHasFocus(#selector(NSResponder.moveToEndOfDocument(_:))) { return }
+                app.selectAdjacentSession(by: 1)
+            }
                 .keyboardShortcut(.downArrow, modifiers: .command)
                 .disabled(app.sessionsByProject.isEmpty)
-            Button("Previous Session") { app.selectAdjacentSession(by: -1) }
+            Button("Previous Session") {
+                if app.sheet != nil || textHasFocus(#selector(NSResponder.moveToBeginningOfDocument(_:))) { return }
+                app.selectAdjacentSession(by: -1)
+            }
                 .keyboardShortcut(.upArrow, modifiers: .command)
                 .disabled(app.sessionsByProject.isEmpty)
             Divider()
@@ -213,10 +234,10 @@ struct SessionCommands: Commands {
                 .keyboardShortcut("d", modifiers: .command)
                 .disabled(selected.map { !app.canOpenDiffTool($0) } ?? true)
             Divider()
-            Button("Edit Session…") { if let s = selected { app.sheet = .edit(s) } }
+            Button("Edit Session…") { if !blocked, let s = selected { app.sheet = .edit(s) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(selected == nil)
-            Button("Tags…") { if let s = selected { app.sheet = .tags(s) } }
+            Button("Tags…") { if !blocked, let s = selected { app.sheet = .tags(s) } }
                 .keyboardShortcut("t", modifiers: .command)
                 .disabled(selected == nil)
             // No shortcut: a ⌘ key would also have to go into `paneKeybinds`
@@ -236,7 +257,7 @@ struct SessionCommands: Commands {
             }
             .disabled(batch.isEmpty)
             let archived = !batch.isEmpty && batch.allSatisfy(\.archived)
-            Button(archived ? "Unarchive" : "Archive") { app.setArchived(batch, !archived) }
+            Button(archived ? "Unarchive" : "Archive") { if !blocked { app.setArchived(batch, !archived) } }
             .keyboardShortcut("e", modifiers: .command)
             .disabled(batch.isEmpty)
             Divider()
@@ -251,11 +272,12 @@ struct SessionCommands: Commands {
                 .disabled(selected == nil || !app.canReorder)
             Divider()
             let alive = batch.filter(app.isAlive)
-            Button("Kill tmux") { app.killTmux(alive) }
+            Button("Kill tmux") { if !blocked { app.killTmux(alive) } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
                 .disabled(alive.isEmpty)
             // With several selected it is the batch, which skips protected ones.
             Button("Delete…") {
+                if app.sheet != nil || textHasFocus(#selector(NSResponder.deleteToBeginningOfLine(_:))) { return }
                 if !app.marked.isEmpty { app.askDeleteMarked() } else if let s = selected { app.askDelete(s) }
             }
                 .keyboardShortcut(.delete, modifiers: .command)

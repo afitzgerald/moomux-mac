@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyTerminal
 import SwiftUI
 import UniformTypeIdentifiers
 import MoomuxKit
@@ -275,7 +276,7 @@ struct RootView: View {
                 }
             case let .newFolder(assign):
                 TextFieldSheet(title: "New folder",
-                               labels: ["Name"], values: [""]) { values in
+                               labels: ["Name"], values: [""], requiresFirst: true) { values in
                     let name = values[0].trimmed
                     // Filing a session into it *is* the create: SetSessionFolder
                     // makes a folder on first use, so this stays one call.
@@ -287,7 +288,7 @@ struct RootView: View {
                 }
             case let .renameFolder(name):
                 TextFieldSheet(title: "Rename “\(name)”",
-                               labels: ["Name"], values: [name]) { values in
+                               labels: ["Name"], values: [name], requiresFirst: true) { values in
                     app.renameFolder(from: name, to: values[0].trimmed)
                 }
             case let .web(link):
@@ -465,7 +466,15 @@ private struct NewSessionSheet: View {
                 // userscripts: `app.busy` reports progress in the toolbar, and
                 // a refusal reopens this sheet with the form as it was sent.
                 Button("Create") {
-                    app.create(form)
+                    // The create takes tens of seconds. Jump to the new session
+                    // only if the user is still on the same one and is not
+                    // typing in a pane or text field (docs/macos-vs-ios.md D45).
+                    let from = app.selectedSessionID
+                    app.create(form) {
+                        guard app.selectedSessionID == from else { return false }
+                        let r = NSApp.keyWindow?.firstResponder
+                        return !(r is NSTextView || r is AppTerminalView)
+                    }
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -580,6 +589,8 @@ private struct TextFieldSheet: View {
     let title: String
     let labels: [String]
     @State var values: [String]
+    /// Save stays off while the first field is blank (folder names).
+    var requiresFirst = false
     let onSave: ([String]) -> Void
 
     var body: some View {
@@ -605,6 +616,7 @@ private struct TextFieldSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Save") { onSave(values); dismiss() }
                     .keyboardShortcut(.defaultAction)
+                    .disabled(requiresFirst && values[0].trimmed.isEmpty)
             }
         }
         .padding(20)
@@ -1700,6 +1712,7 @@ struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(app.menuBarSessions) { session in
                 Button {
+                    app.showGrid = false
                     app.selectedSessionID = session.id
                     NSApp.activate()
                     NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
