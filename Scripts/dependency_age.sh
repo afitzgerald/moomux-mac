@@ -31,7 +31,7 @@ fail() { echo "::error::$*"; failed=1; }
 
 # Prints the hours since <owner/repo>@<sha> was published, checking <tag> points at it.
 age_hours() {
-    local repo=$1 sha=$2 tag=$3 dates ref
+    local repo=$1 sha=$2 tag=$3 dates ref rel
     dates=$(gh api "repos/$repo/commits/$sha" --jq .commit.committer.date)
     if [ -n "$tag" ]; then
         ref=$(gh api "repos/$repo/git/ref/tags/$tag" --jq '[.object.type, .object.sha] | @tsv')
@@ -42,9 +42,14 @@ age_hours() {
             ref=$(head -1 <<<"$ref")
         fi
         [ "${ref#*$'\t'}" = "$sha" ] || { echo "tag $tag is ${ref#*$'\t'}, not $sha" >&2; return 1; }
-        # A tag with no release is a 404, whose JSON body lands on stdout; the date filter
-        # below drops it.
-        dates+=$'\n'$(gh api "repos/$repo/releases/tags/$tag" --jq .published_at 2>/dev/null || true)
+        # A tag with no release is a 404 and has no date to add. Any other failure must not
+        # silently drop the one date GitHub sets and nobody can backdate.
+        if rel=$(gh api "repos/$repo/releases/tags/$tag" --jq .published_at 2>&1); then
+            dates+=$'\n'$rel
+        elif [[ $rel != *"HTTP 404"* ]]; then
+            echo "release lookup for $repo $tag failed: $rel" >&2
+            return 1
+        fi
     fi
     jq -Rn '[inputs | select(test("^[0-9]{4}-")) | fromdateiso8601] | (now - max) / 3600 | floor' <<<"$dates"
 }
@@ -74,6 +79,12 @@ for resolved in Package.resolved Moomux.xcodeproj/project.xcworkspace/xcsharedda
     done < <(jq -r '.pins[] | [.location, .state.revision, .state.version // ""] | @tsv' "$resolved")
 done
 
+# Both lockfiles must pin the same revisions: an Xcode resolve can move one without the other.
+pins() { jq -S '[.pins[] | {identity, revision: .state.revision}] | sort_by(.identity)' "$1"; }
+if ! diff <(pins Package.resolved) <(pins Moomux.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved) >&2; then
+    fail "the two Package.resolved files pin different revisions"
+fi
+
 for workflow in .github/workflows/*.yml; do
     while IFS=$'\t' read -r uses tag; do
         case $uses in ./*) continue ;; esac
@@ -84,6 +95,10 @@ for workflow in .github/workflows/*.yml; do
         fi
         # owner/repo, dropping a subdirectory action's path (github/codeql-action/init).
         IFS=/ read -r owner name _ <<<"$action"
+        if [ -z "$tag" ]; then
+            fail "$workflow: $uses has no trailing version comment, so its release date cannot be checked"
+            continue
+        fi
         check "$workflow" "$owner/$name" "$sha" "$tag"
     done < <(yq -o tsv '.. | select(tag == "!!map" and has("uses")) | [.uses, (.uses | line_comment)]' "$workflow")
 done
