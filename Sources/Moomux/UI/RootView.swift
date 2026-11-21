@@ -1118,9 +1118,11 @@ private struct SessionRow: View {
             // Order, colours and rules are the Kit's; the tags are links here.
             // Badges track the name 3pt down — what .caption (10pt) was under
             // .body (13pt) before any of this was adjustable.
-            SessionBadges(app: app, session: session, spacing: 10) { symbol, link, help in
-                TagIcon(symbol: symbol, link: link, help: help)
+            SessionBadges(app: app, session: session, spacing: 10) { label, link, help in
+                TagBadge(label: label, link: link, help: help)
             }
+            .lineLimit(1)
+            .layoutPriority(1)
             .font(Theme.list(app.listFontFamily, max(9, app.listFontSize - 3)))
         }
         .font(Theme.list(app.listFontFamily, app.listFontSize))
@@ -1494,7 +1496,7 @@ private struct SessionInfo: View {
     }
 }
 
-/// A tag icon that opens its target when the tag is a link, and stays
+/// A tag badge that opens its target when the tag is a link, and stays
 /// decorative when it isn't — a ticket is as often "T-1" as a URL, and a button
 /// that does nothing when clicked is worse than no button. `TerminalLink` is
 /// the same allowlist a ⌘-clicked pane link goes through, so nothing here can
@@ -1502,19 +1504,19 @@ private struct SessionInfo: View {
 ///
 /// A `Button` and not a tap gesture: a gesture on a row's content outranks the
 /// `List`'s own selection and would stop the row selecting at all.
-private struct TagIcon: View {
+private struct TagBadge: View {
     @Environment(AppState.self) private var app
-    let symbol: String
+    let label: Text
     let link: String
     let help: String
 
     var body: some View {
         if TerminalLink.resolve(link) != nil {
-            Button { app.openTag(link) } label: { Image(systemName: symbol) }
+            Button { app.openTag(link) } label: { label }
                 .buttonStyle(.plain)
                 .help("\(help) — click to open")
         } else {
-            Image(systemName: symbol).help(help)
+            label.help(help)
         }
     }
 }
@@ -1539,7 +1541,7 @@ private struct Field: View {
             // link; everything else stays selectable text.
             if link, TerminalLink.resolve(value) != nil {
                 // A Button and not a tap gesture on selectable text: the
-                // selection swallows the click (same reason TagIcon is one).
+                // selection swallows the click (same reason TagBadge is one).
                 Button { app.openTag(value) } label: {
                     Text(value).font(Theme.mono).underline()
                 }

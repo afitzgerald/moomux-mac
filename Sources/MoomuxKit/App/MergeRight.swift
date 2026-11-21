@@ -26,15 +26,12 @@ public enum MergeRight {
               url.scheme?.lowercased() == "https", let host = url.host?.lowercased()
         else { return nil }
         let parts = url.pathComponents.filter { $0 != "/" }
-        let number = { (i: Int) in i < parts.count && !parts[i].isEmpty && parts[i].allSatisfy { $0.isASCII && $0.isNumber } }
         switch host {
         case "github.com":
             // owner/repo/pull/<n>, and anything under it (/files, /commits).
-            guard parts.count >= 4, parts[2] == "pull", number(3) else { return nil }
+            guard parts.count >= 4, parts[2] == "pull", isNumber(parts[3]) else { return nil }
         case "app.asana.com":
-            // …/task/<id> (the current shape), or the older /0/<project>/<task>.
-            let task = parts.firstIndex(of: "task").map { number($0 + 1) } ?? false
-            guard task || (parts.first == "0" && number(1) && number(2)) else { return nil }
+            guard asanaTaskID(parts) != nil else { return nil }
         default:
             return nil
         }
@@ -43,6 +40,19 @@ public enum MergeRight {
         link.host = "open"
         link.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
         return link.url
+    }
+
+    /// Current task links contain /task/<id>. Older links use /0/<project>/<task>.
+    static func asanaTaskID(_ parts: [String]) -> String? {
+        if let task = parts.firstIndex(of: "task"), task + 1 < parts.count, isNumber(parts[task + 1]) {
+            return parts[task + 1]
+        }
+        guard parts.count >= 3, parts[0] == "0", isNumber(parts[1]), isNumber(parts[2]) else { return nil }
+        return parts[2]
+    }
+
+    private static func isNumber(_ value: String) -> Bool {
+        !value.isEmpty && value.allSatisfy { $0.isASCII && $0.isNumber }
     }
 
     public static func demo() {

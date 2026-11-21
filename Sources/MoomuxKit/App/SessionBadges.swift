@@ -8,18 +8,18 @@ import SwiftUI
 /// Shared so the order, the colours and the rules cannot drift between the Mac
 /// sidebar and the phone's list, which they had begun to as two copies. What
 /// differs is passed in: the spacing, and how a tag is drawn — a clickable link
-/// on the Mac (`TagIcon`), a plain glyph on the phone, where the row's own tap
+/// on the Mac, a plain label on the phone, where the row's own tap
 /// attaches and a 12pt target beside it would be a mis-tap waiting to happen.
 public struct SessionBadges<Tag: View>: View {
     let app: AppState
     let session: Session
     let spacing: CGFloat
-    /// symbol, link, help → the drawn tag. `link` is the ticket or PR value
+    /// label, link, help → the drawn tag. `link` is the ticket or PR value
     /// as the user set it; `help` already carries the PR's summary.
-    let tag: (_ symbol: String, _ link: String, _ help: String) -> Tag
+    let tag: (_ label: Text, _ link: String, _ help: String) -> Tag
 
     public init(app: AppState, session: Session, spacing: CGFloat,
-                @ViewBuilder tag: @escaping (_ symbol: String, _ link: String, _ help: String) -> Tag) {
+                @ViewBuilder tag: @escaping (_ label: Text, _ link: String, _ help: String) -> Tag) {
         self.app = app
         self.session = session
         self.spacing = spacing
@@ -41,13 +41,19 @@ public struct SessionBadges<Tag: View>: View {
                     .accessibilityLabel("Protected")
             }
             if let ticket = session.ticket, !ticket.isEmpty {
-                tag("ticket", ticket, ticket)
-                    .foregroundStyle(.secondary)
+                let number = Self.ticketNumber(ticket)
+                let label = number.map { Text(verbatim: "#\($0)").fontWeight(.semibold) }
+                    ?? Text(Image(systemName: "ticket"))
+                tag(label, ticket, ticket)
+                    .accessibilityLabel(number.map { "Ticket \($0)" } ?? "Ticket")
+                    .foregroundStyle(number == nil ? Color.secondary : Color("MoomuxGreen", bundle: .module))
             }
             if let pr = session.pr, !pr.isEmpty {
                 let info = app.views[session.id]?.pr
                 let badge = PRInfo.badge(info)
-                tag(badge.symbol, pr, SessionBadges.prHelp(badge, summary: info?.summary))
+                let help = Self.prHelp(badge, summary: info?.summary)
+                tag(Text(Image(systemName: badge.symbol)), pr, help)
+                    .accessibilityLabel(help)
                     .foregroundStyle(SessionTheme.pr(badge, app.palette))
             }
             // SF Symbols rather than the literal glyphs, so they weigh and
@@ -71,6 +77,31 @@ public struct SessionBadges<Tag: View>: View {
             .foregroundStyle(color)
             .help(label)
             .accessibilityLabel(label)
+    }
+
+    /// Read the identifier from the tag itself so a renamed session still shows the right ticket.
+    static func ticketNumber(_ ticket: String) -> String? {
+        let value = ticket.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate: String
+        if let url = WebLink.url(value) {
+            let parts = url.pathComponents.filter { $0 != "/" }
+            if url.host?.lowercased() == "app.asana.com" {
+                return MergeRight.asanaTaskID(parts)
+            }
+            if parts.count >= 3 && parts[1] == "issue" {
+                candidate = parts[2]
+            } else if let browse = parts.firstIndex(of: "browse"), browse + 1 < parts.count {
+                candidate = parts[browse + 1]
+            } else if parts.count == 4 && parts[2] == "issues" {
+                candidate = parts[3]
+            } else {
+                return nil
+            }
+        } else {
+            candidate = value
+        }
+        let identifier = #/(?:[A-Za-z][A-Za-z0-9]*-|#)?([0-9]+)/#
+        return candidate.wholeMatch(of: identifier).map { String($0.1) }
     }
 
     /// The PR badge's own words, plus the core's one-line summary when it has one.
@@ -118,6 +149,16 @@ public struct CowQuip: View {
 
 extension SessionBadges where Tag == Never {
     public static func demo() {
+        assert(ticketNumber(" t-12 ") == "12")
+        assert(ticketNumber("#42") == "42")
+        assert(ticketNumber("https://linear.app/example/issue/DEV-42/short-title?ref=7") == "42")
+        assert(ticketNumber("https://jira.example.test/browse/DEV-42") == "42")
+        assert(ticketNumber("https://github.com/example/demo/issues/42") == "42")
+        assert(ticketNumber("https://app.asana.com/1/100/project/200/task/300") == "300")
+        assert(ticketNumber("https://app.asana.com/0/200/300/f") == "300")
+        assert(ticketNumber("https://app.asana.com/1/100/project/200") == nil)
+        assert(ticketNumber("https://example.test/docs/42") == nil)
+        assert(ticketNumber("follow up") == nil)
         assert(prHelp(.open, summary: nil) == PRInfo.Badge.open.help)
         assert(prHelp(.open, summary: "") == PRInfo.Badge.open.help, "an empty summary adds nothing")
         assert(prHelp(.open, summary: "2 checks failing") == "\(PRInfo.Badge.open.help) — 2 checks failing")

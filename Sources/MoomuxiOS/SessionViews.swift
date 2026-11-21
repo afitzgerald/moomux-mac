@@ -678,11 +678,12 @@ private struct SessionRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 6)
-            // The Kit's row, as plain glyphs: the row's own tap attaches.
-            SessionBadges(app: app, session: session, spacing: 5) { symbol, _, help in
-                Image(systemName: symbol)
-                    .accessibilityLabel(symbol == "ticket" ? "Ticket" : help)
+            // The Kit's row, as plain labels: the row's own tap attaches.
+            SessionBadges(app: app, session: session, spacing: 5) { label, _, _ in
+                label
             }
+            .lineLimit(1)
+            .layoutPriority(1)
             .font(.caption2)
         }
         .contentShape(Rectangle())
