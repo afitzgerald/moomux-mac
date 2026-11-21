@@ -220,6 +220,15 @@ public final class AppState {
     /// tick: well inside `statusTTL`, so its badge never falls back mid-view.
     static let selectedStatusRefresh: TimeInterval = 30
     @ObservationIgnored private var statusInFlight: Set<Session.ID> = []
+    /// Sessions whose last status fetch failed. The delete dialog says so
+    /// instead of "Checking…" for ever; a good answer clears it.
+    public private(set) var statusFailed: Set<Session.ID> = []
+    /// Sessions attached while parked, until a snapshot has shown them live
+    /// once. A snapshot older than the revive still says parked, and `adopt`
+    /// would tear the new pane down off it.
+    @ObservationIgnored var reviving: Set<Session.ID> = []
+    /// Set by `stop()`: a refresh a write started before it must not land.
+    @ObservationIgnored private var stopped = false
     /// `Diff`, split into files, for sessions whose changes have been opened.
     /// Fetched on open and on pull-to-refresh, never polled: each one is a
     /// `git diff` on the core. nil inside means "not a git repo", which is not
@@ -1387,6 +1396,7 @@ public final class AppState {
 
     public func start() {
         guard tasks.isEmpty else { return }
+        stopped = false
         // Here rather than in `init`: `--selftest` exits inside `bootstrap()`
         // from an unbundled binary, where reaching the notification center at
         // all would trap.
@@ -1462,6 +1472,7 @@ public final class AppState {
     }
 
     public func stop() {
+        stopped = true
         tasks.forEach { $0.cancel() }
         tasks = []
         watch?.cancel()
@@ -1530,12 +1541,20 @@ public final class AppState {
         guard let fresh = try? await withoutBlockingTheUI({ [client] in try client.sessions() }),
               !Task.isCancelled
         else { return }  // `connection` already carries the failure
+        // The stream may have started while this was in flight: its snapshot
+        // is newer, and this list is in the pull's order.
+        guard !streaming else { return }
+        // A pulled list has no layout. Rows from the last snapshot would
+        // leave every session since then out of the sidebar.
+        if !rows.isEmpty { rows = [:] }
+        if !folderRows.isEmpty { folderRows = [] }
         adopt(sessions: fresh)
     }
 
     func setStatus(_ status: MoomuxClient.SessionStatus, for id: Session.ID) {
         if statuses[id] != status { statuses[id] = status }
         statusFetchedAt[id] = Date()
+        statusFailed.remove(id)
     }
 
     /// Loads (or reloads) worktree state and change counts for one session.
@@ -1554,6 +1573,8 @@ public final class AppState {
         } catch {
             // Leave whatever was there; `connection` already carries the
             // failure, and a missing status row is not worth a second alarm.
+            // Only the delete dialog needs to know the check did not happen.
+            statusFailed.insert(id)
         }
     }
 
@@ -1562,6 +1583,7 @@ public final class AppState {
     /// without going through this app (the TUI, the CLI, another front end),
     /// and a pooled tmux client left behind would leak forever.
     private func adopt(sessions fresh: [Session]) {
+        guard !stopped else { return }
         // `@Observable` fires on any assignment, equal or not, and this lands
         // on every raw watcher event — several a second while an agent is
         // writing its log — so an unguarded write re-renders every row that
@@ -1574,6 +1596,16 @@ public final class AppState {
             statusFetchedAt = statusFetchedAt.filter { live.contains($0.key) }
         }
         for id in attachedSessions where !live.contains(id) { detach(id: id) }
+        if !deleting.isEmpty { deleting.formIntersection(live) }
+        reviving.formIntersection(live)
+        updateDockBadge()  // needsInputCount filters visibleSessions
+    }
+
+    /// Detaches panes whose tmux went away. Snapshot path only: a pulled list
+    /// carries no views, so the views it would be judged by are the last
+    /// snapshot's.
+    func detachParked() {
+        reviving = reviving.filter { views[$0]?.state == .parked }
         // tmux went away under an attached pane — `/kill`, `moomux park`, a
         // kill from the TUI. libghostty does **not** close the surface when
         // its child exits: measured, with `waitAfterCommand: false` on the
@@ -1585,8 +1617,9 @@ public final class AppState {
         // knows tmux is gone; detach off that rather than off a callback that
         // never comes. `.parked` exactly and never `!isAlive`: unknown means
         // "no snapshot yet", which must not tear a live pane down.
-        for id in attachedSessions where views[id]?.state == .parked { detach(id: id) }
-        updateDockBadge()  // needsInputCount filters visibleSessions
+        for id in attachedSessions where views[id]?.state == .parked && !reviving.contains(id) {
+            detach(id: id)
+        }
     }
 
     /// The render path: sessions in display order and a view per session, one
@@ -1674,6 +1707,7 @@ public final class AppState {
         if snapshot.whatsNew != coreWhatsNew { coreWhatsNew = snapshot.whatsNew }
         if let agents = snapshot.agents, agents != agentOptions { agentOptions = agents }
         adopt(sessions: snapshot.sessions)
+        detachParked()
         // The detail pane's counts and the row badge for what is on screen:
         // loadStatus is a no-op until the entry is `selectedStatusRefresh` old.
         if let id = selectedSessionID, views[id]?.gitOK == true {
@@ -1811,13 +1845,29 @@ public final class AppState {
             assert(app.attachedSessions.contains(s.id), "still live, still attached")
             app.views = [s.id: view(s.id, state: "parked")]
             app.adopt(sessions: [s])
+            app.detachParked()
             assert(!app.attachedSessions.contains(s.id), "tmux gone: pane goes with it")
+            // …but not one just revived: the snapshot after a revive can still
+            // say parked, and tearing the pane down off it is what C2 was.
+            app.views = [s.id: view(s.id, state: "working")]
+            app.attach(s)
+            app.views = [s.id: view(s.id, state: "parked")]
+            app.reviving.insert(s.id)
+            app.adopt(sessions: [s])
+            app.detachParked()
+            assert(app.attachedSessions.contains(s.id), "reviving: a stale parked view keeps the pane")
+            app.views = [s.id: view(s.id, state: "working")]
+            app.detachParked()
+            app.views = [s.id: view(s.id, state: "parked")]
+            app.detachParked()
+            assert(!app.attachedSessions.contains(s.id), "once live, parked means gone")
             // Unknown is "no snapshot yet", not "tmux is gone", so a
             // snapshot that has lost the view must leave the pane alone.
             app.views = [s.id: view(s.id, state: "working")]
             app.attach(s)
             app.views = [:]
             app.adopt(sessions: [s])
+            app.detachParked()
             assert(app.attachedSessions.contains(s.id), "unknown is not parked")
         }
 
@@ -2076,6 +2126,20 @@ public final class AppState {
             let warning = app.deleteWarning(for: s)
             assert(warning.hasPrefix("⚠︎ 2 FILES CHANGED\n⚠︎ 1 COMMIT UNPUSHED"), warning)
             assert(warning.contains("removes the worktree"), warning)
+
+            // A check that failed must not read as clean, nor as pending for ever.
+            app.statuses[s.id] = nil
+            app.statusFailed.insert(s.id)
+            assert(app.deleteWarning(for: s).hasPrefix("Couldn't check"), app.deleteWarning(for: s))
+            app.setStatus(.init(known: true), for: s.id)
+            assert(app.deleteWarning(for: s).hasPrefix("Nothing uncommitted"), "a good answer clears it")
+
+            // A plain project has no worktree to check, so never "Checking…".
+            app.statuses[s.id] = nil
+            app.config = try! Wire.decoder.decode(Config.self, from: Data(
+                #"{"projects":{"\#(s.project)":{"kind":"plain","repo":"/r"}}}"#.utf8))
+            assert(app.deleteWarning(for: s).contains("no worktree"), app.deleteWarning(for: s))
+            app.config = nil
         }
 
         // Batch delete: what gets marked, what the batch leaves out, and a
@@ -2813,6 +2877,7 @@ public final class AppState {
                 self?.detach(id: session.id)
             }
         }
+        if !isAlive(session) { reviving.insert(session.id) }
         attachedSessions.insert(session.id)
     }
 
@@ -2837,6 +2902,7 @@ public final class AppState {
                 // `SessionTerminal` spawns its `tmux attach` on appear, and a
                 // stale "parked" view would also keep the row's dot grey.
                 await refresh()
+                reviving.insert(session.id)
                 attachedSessions.insert(session.id)
             } catch {
                 failed("Attach", error)
@@ -2866,6 +2932,7 @@ public final class AppState {
     /// is the public spelling of "let go of the pty".
     private func detach(id: Session.ID) {
         attachedSessions.remove(id)
+        reviving.remove(id)
         #if os(macOS)
         plainPanes.removeValue(forKey: id)?.controller = nil
         plainDelegates.removeValue(forKey: id)
@@ -2894,6 +2961,11 @@ public final class AppState {
     /// than implying a check that never ran.
     public func askDelete(_ session: Session) {
         pendingDelete = session
+        // An old answer must not stand in for the check: "clean" from before
+        // the agent's last edit is the one wrong thing this dialog can say.
+        statuses[session.id] = nil
+        statusFetchedAt[session.id] = nil
+        statusFailed.remove(session.id)
         Task { await loadStatus(for: session.id, force: true) }
     }
 
@@ -2912,7 +2984,15 @@ public final class AppState {
     public func deleteWarning(for session: Session) -> String {
         let tail = "Kills tmux, removes the worktree at \(session.worktreePath), "
             + "and deletes the branch if moomux made it."
+        if config?.projects[session.project]?.isPlain == true {
+            return "This project has no worktree, so there is nothing to check.\n\n"
+                + "Kills tmux and removes the session."
+        }
         guard let status = statuses[session.id], status.known else {
+            if statusFailed.contains(session.id) || statuses[session.id] != nil {
+                return "Couldn't check \(session.worktreePath) for uncommitted or unpushed work. "
+                    + "Anything not pushed is lost.\n\n" + tail
+            }
             return "Checking \(session.worktreePath) for uncommitted or unpushed work…\n\n"
                 + tail
         }
@@ -3061,6 +3141,7 @@ public final class AppState {
             busy = "Deleting \(doomed.count) sessions"
             defer { busy = nil }
             var failures: [String] = []
+            var failedIDs: Set<Session.ID> = []
             var hints: [String] = []
             for s in doomed {
                 do {
@@ -3068,10 +3149,13 @@ public final class AppState {
                     if !hint.isEmpty { hints.append(hint) }
                 } catch {
                     failures.append("\(s.name): \(error.localizedDescription)")
+                    failedIDs.insert(s.id)
                 }
             }
+            // Only the failures come back now. The rest stay hidden until a
+            // snapshot without them lands (`adopt`), or they would flash back.
+            deleting.subtract(failedIDs)
             await refresh()
-            deleting.subtract(ids)
             if !hints.isEmpty { hint = hints.joined(separator: "\n") }
             if !failures.isEmpty {
                 actionError = "Couldn't delete \(failures.count) of \(doomed.count):\n"
@@ -3255,5 +3339,13 @@ extension AppState {
                "the loop must reconnect, and say when the core is too old: \(app.statusError ?? "nil")")
         assert(script.connections == 2)
         assert(app.sessions.map(\.id) == [a.id], "an old core's empty snapshot must not blank the list")
+
+        // A refresh a write started must not land after `stop()`.
+        let gone = AppState(client: MoomuxClient(socketPath: core.path))
+        gone.start()
+        gone.stop()
+        Task { await gone.refresh() }
+        _ = FakeCore.spin(0.5) { !gone.sessions.isEmpty }
+        assert(gone.sessions.isEmpty, "a stopped store must not adopt a late answer")
     }
 }
