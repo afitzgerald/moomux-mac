@@ -6,6 +6,10 @@
 
 The core only listens on TCP at the machine's tailnet address, which the real
 core already holds, so a scratch core needs this to reach the simulator.
+
+Never point it at the real core's socket: it listens on loopback with no
+authentication, so every local user (and any local process) gets the core's
+full control surface through it. Scratch cores only.
 """
 import socket
 import sys

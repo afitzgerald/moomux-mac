@@ -714,7 +714,7 @@ public final class MoomuxClient: Sendable {
         AsyncThrowingStream { continuation in
             let holder = SocketHolder()
             // Closing the fd is what unblocks the read; cancelling the task is
-            // not enough, since `bytes.lines` is parked inside read(2).
+            // not enough, since `readLine` is parked inside read(2).
             continuation.onTermination = { _ in holder.close() }
             Task.detached { [endpoint, live] in
                 do {
@@ -726,10 +726,9 @@ public final class MoomuxClient: Sendable {
                     // writes on this connection later, so its write half has
                     // to stay open and the newline is what ends the request.
                     try socket.write(Wire.lineEncoded(Request(method: "Watch")))
-                    for try await line in socket.lines {
+                    while let line = try socket.readLine() {
                         guard !line.isEmpty else { continue }
-                        continuation.yield(
-                            try Wire.decoder.decode(Snapshot.self, from: Data(line.utf8)))
+                        continuation.yield(try Wire.decoder.decode(Snapshot.self, from: line))
                     }
                     // The server only stops sending when it goes away.
                     continuation.finish(throwing: Failure.disconnected)
