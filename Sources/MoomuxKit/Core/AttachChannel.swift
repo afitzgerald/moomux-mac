@@ -63,6 +63,11 @@ public final class AttachChannel: @unchecked Sendable {
                     pending = rest
                     return
                 }
+                // The response line is small; a core that streams without ever
+                // ending it must fail the attach, not grow `buffer`.
+                guard buffer.count <= 64 << 10 else {
+                    throw StreamSocket.Failure.tooLong(limit: 64 << 10)
+                }
                 let chunk = try socket.readChunk()
                 // EOF before the response line: the core refused and closed
                 // without a body, which is the only way that can look.

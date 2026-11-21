@@ -16,6 +16,8 @@ public final class StreamSocket {
         case syscall(String, Int32)
         case pathTooLong(String)
         case unresolved(String, String)
+        /// The core sent more than `limit` bytes without ending the reply or line.
+        case tooLong(limit: Int)
 
         public var errorDescription: String? {
             switch self {
@@ -25,6 +27,8 @@ public final class StreamSocket {
                 return "socket path is too long for sockaddr_un: \(path)"
             case let .unresolved(host, why):
                 return "cannot resolve \(host): \(why)"
+            case let .tooLong(limit):
+                return "the core's reply is longer than \(limit >> 10) KB"
             }
         }
     }
@@ -229,19 +233,41 @@ public final class StreamSocket {
     /// opened.") — the one failure a wrong-account phone gets, since the core
     /// drops it unread. `readChunk` keeps the errno, so `ConnectFailure` can
     /// tell a reset from a dead route.
-    public func readToEnd() throws -> Data {
+    ///
+    /// Capped at `limit` (64 MB, well past any real reply): a peer that never
+    /// stops sending must fail the call, not fill memory.
+    public func readToEnd(limit: Int = StreamSocket.maxReply) throws -> Data {
         var all = Data()
         while true {
             let chunk = try readChunk()
             if chunk.isEmpty { return all }
             all.append(chunk)
+            if all.count > limit { throw Failure.tooLong(limit: limit) }
         }
     }
 
-    /// Line-delimited reads, for the `Watch` stream. Go's `json.Encoder.Encode`
-    /// terminates every object with a newline, which is what makes this work.
-    public var lines: AsyncLineSequence<FileHandle.AsyncBytes> {
-        handle.bytes.lines
+    public static let maxReply = 64 << 20
+
+    /// Bytes read past the last line returned by `readLine`. Touched only by
+    /// the one task reading a `Watch` stream.
+    private var lineBuffer = Data()
+
+    /// One newline-terminated line, for the `Watch` stream (Go's
+    /// `json.Encoder.Encode` ends every object with one). Blocking, like
+    /// `readChunk`; `nil` means the peer closed. A line longer than `limit`
+    /// throws instead of growing without bound.
+    public func readLine(limit: Int = StreamSocket.maxReply) throws -> Data? {
+        while true {
+            if let newline = lineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
+                let line = lineBuffer[lineBuffer.startIndex..<newline]
+                lineBuffer = Data(lineBuffer[lineBuffer.index(after: newline)...])
+                return Data(line)
+            }
+            if lineBuffer.count > limit { throw Failure.tooLong(limit: limit) }
+            let chunk = try readChunk()
+            if chunk.isEmpty { return nil }
+            lineBuffer.append(chunk)
+        }
     }
 
     public static func demo() {
@@ -265,6 +291,34 @@ public final class StreamSocket {
                    "a read cancelled by close() must end, not park forever")
             assert(outcome.ended, "a read cancelled by close() must end, not raise")
             Darwin.close(pair[1])
+        }
+
+        // Read caps: a line splits at the newline and keeps the tail, and a
+        // peer that overruns the limit gets an error, not unbounded memory.
+        if socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0 {
+            let socket = StreamSocket(adopting: pair[0])
+            _ = Darwin.write(pair[1], "ab\ncd\n", 6)
+            let first = try? socket.readLine(limit: 8)
+            let second = try? socket.readLine(limit: 8)
+            assert(first == .some(Data("ab".utf8)), "readLine must split at the newline")
+            assert(second == .some(Data("cd".utf8)), "readLine must keep the tail")
+            let flood = [UInt8](repeating: 65, count: 200_000)
+            Self.silenceSigPipe(pair[1])  // the reader closes first; the flood must not SIGPIPE
+            Thread { _ = Darwin.write(pair[1], flood, flood.count); Darwin.close(pair[1]) }.start()
+            var capped = false
+            do { _ = try socket.readLine(limit: 100) } catch { capped = true }
+            assert(capped, "an over-long line must throw")
+            socket.close()
+        }
+        if socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0 {
+            let socket = StreamSocket(adopting: pair[0])
+            let flood = [UInt8](repeating: 65, count: 200_000)
+            Self.silenceSigPipe(pair[1])  // the reader closes first; the flood must not SIGPIPE
+            Thread { _ = Darwin.write(pair[1], flood, flood.count); Darwin.close(pair[1]) }.start()
+            var capped = false
+            do { _ = try socket.readToEnd(limit: 100) } catch { capped = true }
+            assert(capped, "an over-long reply must throw")
+            socket.close()
         }
 
         // A refused TCP connect must *throw*, not hang and not succeed: the
