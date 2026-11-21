@@ -14,6 +14,9 @@ on:
       - main
     paths-ignore: *docs
 
+permissions:
+  contents: read
+
 concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -59,6 +62,18 @@ jobs:
       - name: Release build + app bundle
         run: make app
 
+      # The Bundle.module crash (0.0.38, 0.0.163) is invisible on a build
+      # machine, where SwiftPM's baked-in .build fallback path resolves. Move
+      # every .bundle out of the bin path and launch the shipped bundle:
+      # --warm-check exits 0 only if warm() resolved every bundle.
+      - name: Bundle resolves without .build
+        run: |
+          set -euo pipefail
+          bin=$(swift build -c release --build-system swiftbuild --show-bin-path)
+          mkdir -p "$RUNNER_TEMP/moved"
+          mv "$bin"/*.bundle "$RUNNER_TEMP/moved/"
+          .build/Moomux.app/Contents/MacOS/Moomux --warm-check
+
   ios:
     runs-on: xcode-27
     timeout-minutes: 20
@@ -79,6 +94,19 @@ jobs:
           xcrun --sdk iphonesimulator --show-sdk-path
           make ios
 
+      # `make testflight` archives Moomux.xcodeproj, which nothing else builds
+      # before merge: a broken project file or a source missing from it fails
+      # only after the release cask is out. Same env scrub as the Makefile's
+      # XCODEBUILD (xcodebuild reads the environment as build settings).
+      - name: Xcode project builds
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+        run: |
+          env -u SDKROOT xcodebuild -project Moomux.xcodeproj -scheme Moomux \
+            -destination 'generic/platform=iOS Simulator' \
+            -onlyUsePackageVersionsFromResolvedFile \
+            CODE_SIGNING_ALLOWED=NO build
+
   # Plain bash and git, no macOS toolchain, so it skips the macOS runner.
   version-rules:
     runs-on: ubuntu-latest
@@ -88,3 +116,28 @@ jobs:
 
       - name: Release version rules
         run: ./Scripts/next_version_test.sh
+
+  # Same gate release.yml and testflight.yml run after merge: a pin under 72
+  # hours old should fail the PR that adds it. Needs only gh, jq and yq, so it
+  # skips the macOS runner. An urgent fix runs the script by hand with
+  # MIN_AGE_HOURS=0, or dispatches Release with min_age_hours.
+  dependency-age:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Refuse dependencies under 72 hours old
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: Scripts/dependency_age.sh
+
+  # shellcheck ships on the ubuntu runner image.
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: shellcheck Scripts
+        run: shellcheck --severity=warning Scripts/*.sh

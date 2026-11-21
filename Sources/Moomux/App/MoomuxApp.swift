@@ -12,6 +12,9 @@ struct MoomuxApp: App {
     private static func bootstrap() -> AppState {
         SelfTest.runIfRequested() // exits the process when --selftest is passed
         GhosttyResourceBundle.warm() // before any TerminalController
+        // CI's Bundle.module check: warm() takes the process down if a bundle
+        // does not resolve, so reaching this line is the pass.
+        if CommandLine.arguments.contains("--warm-check") { exit(0) }
         NoAskSiri.install()
         return AppState(client: client())
     }

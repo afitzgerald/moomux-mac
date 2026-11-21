@@ -41,6 +41,7 @@ fi
 # just the subject line.
 bodies=$(git log $range --pretty=%B)
 
+# shellcheck disable=SC2209 # a literal word, not the `patch` command
 bump=patch
 if echo "$subjects" | grep -qE '^[a-zA-Z]+(\([^)]+\))?!:' || echo "$bodies" | grep -qE '^BREAKING CHANGE:'; then
   bump=major

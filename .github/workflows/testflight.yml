@@ -20,6 +20,21 @@ on:
         description: "Release tag to build (vX.Y.Z); release.yml has already validated it"
         type: string
         required: true
+    secrets:
+      ASC_KEY_P8:
+        required: true
+      ASC_KEY_ID:
+        required: true
+      ASC_ISSUER_ID:
+        required: true
+      DEV_CERT_P12:
+        required: true
+      DEV_CERT_PASSWORD:
+        required: false
+
+# contents: write only for release_notes.sh's generate-notes call.
+permissions:
+  contents: write
 
 jobs:
   upload:

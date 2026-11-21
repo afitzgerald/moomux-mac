@@ -13,12 +13,26 @@ on:
       tag:
         description: "Tag to build and release (e.g. v1.2.3)"
         required: true
+      min_age_hours:
+        description: "Dependency cool-down in hours (default 72); 0 for an urgent fix, say why in the PR"
+        required: false
+        default: "72"
 
+# Two merges close together must not race on the cask or on a release tag; the
+# second waits for the first rather than cancelling it mid-publish.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Read-only by default; the release job asks for write, the TestFlight job
+# gets none of it.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
+    permissions:
+      contents: write
     # Needs a real Mac: swift build produces a Mach-O binary, and codesign /
     # notarytool / stapler only exist on macOS. macos-26 specifically: macOS
     # only draws the Liquid Glass toolbar for a binary linked against the
@@ -27,12 +41,12 @@ jobs:
     runs-on: macos-26
     steps:
       # workflow_dispatch can be triggered manually with any string, and
-      # inputs.tag feeds straight into checkout's ref: below — reject
-      # anything that isn't an exact vX.Y.Z tag before it's used as a ref.
-      - name: Validate tag input
-        if: inputs.tag != ''
+      # the tag feeds straight into checkout's ref: below — reject anything
+      # that isn't an exact vX.Y.Z tag before it's used as a ref. A pushed
+      # `v*` tag (v1.0-rc, v-evil) is checked the same way.
+      - name: Validate tag
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::invalid tag input: $TAG (want vX.Y.Z)" >&2
@@ -50,6 +64,7 @@ jobs:
       - name: Refuse dependencies under 72 hours old
         env:
           GH_TOKEN: ${{ github.token }}
+          MIN_AGE_HOURS: ${{ inputs.min_age_hours || '72' }}
         run: Scripts/dependency_age.sh
 
       - name: Resolve version
@@ -59,12 +74,32 @@ jobs:
         run: |
           echo "tag=$TAG_REF" >> "$GITHUB_OUTPUT"
           echo "version=${TAG_REF#v}" >> "$GITHUB_OUTPUT"
+          echo "name=Moomux-${TAG_REF}.dmg" >> "$GITHUB_OUTPUT"
+
+      # A re-run after a failed cask push finds the release already published.
+      # Building again would mint a different dmg (new timestamps) that the
+      # cask's sha256 no longer matches, and `gh release create` would fail on
+      # the existing tag. So skip build and create, and reuse the asset's own
+      # checksum.
+      - name: Look for an existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            gh release download "$TAG" --pattern '*.sha256' --dir .
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # CFBundleShortVersionString is a plain string SwiftPM doesn't stamp
       # for us (no ldflags equivalent) — set it from the tag being released
       # so `make install`'s reported version and About panel agree with the
       # GitHub release and the cask.
       - name: Stamp Info.plist version
+        if: steps.existing.outputs.exists != 'true'
         run: |
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" Resources/Info.plist
 
@@ -73,18 +108,24 @@ jobs:
       # it works offline and always matches the build. `make notarize` below
       # reads WHATS_NEW; testflight.yml runs the same script for the iPhone.
       - name: Generate release notes
+        if: steps.existing.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           Scripts/release_notes.sh "${{ steps.version.outputs.tag }}" "$RUNNER_TEMP"
           echo "WHATS_NEW=$RUNNER_TEMP/WhatsNew.md" >> "$GITHUB_ENV"
+          # PR titles are untrusted: stop the runner reading `::cmd::` in them.
+          token=$(uuidgen)
+          echo "::stop-commands::$token"
           cat "$RUNNER_TEMP/WhatsNew.md"
+          echo "::$token::"
 
       # Imports the Developer ID cert into a throwaway keychain scoped to this
       # job. A random, job-local password is fine — the keychain never
       # outlives the runner. codesign/notarytool find it because `security
       # list-keychains` appends it to the search list.
       - name: Import signing certificate
+        if: steps.existing.outputs.exists != 'true'
         env:
           P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -102,6 +143,7 @@ jobs:
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$P12_PASSWORD" \
             -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
 
@@ -113,6 +155,7 @@ jobs:
       # sequence, it just supplies the credentials, since a second copy of it
       # is exactly how the app inside the image ended up unstapled.
       - name: Build, sign and notarize DMG
+        if: steps.existing.outputs.exists != 'true'
         env:
           NOTARY_ARGS: >-
             --apple-id ${{ secrets.APPLE_ID }}
@@ -122,21 +165,22 @@ jobs:
         run: make notarize
 
       - name: Checksum
-        id: archive
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          NAME: ${{ steps.version.outputs.name }}
         run: |
-          dmg="dist/Moomux-${{ steps.version.outputs.version }}.dmg"
-          name="Moomux-${{ steps.version.outputs.tag }}.dmg"
-          mv "$dmg" "$name"
-          shasum -a 256 "$name" > "$name.sha256"
-          echo "name=$name" >> "$GITHUB_OUTPUT"
+          mv "dist/Moomux-${{ steps.version.outputs.version }}.dmg" "$NAME"
+          shasum -a 256 "$NAME" > "$NAME.sha256"
 
       - name: Create GitHub release
+        if: steps.existing.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.version.outputs.name }}
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
-            "${{ steps.archive.outputs.name }}" \
-            "${{ steps.archive.outputs.name }}.sha256" \
+            "$NAME" \
+            "$NAME.sha256" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file "$RUNNER_TEMP/notes.md"
 
@@ -145,8 +189,9 @@ jobs:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
+          NAME: ${{ steps.version.outputs.name }}
         run: |
-          sha256="$(cut -d' ' -f1 "${{ steps.archive.outputs.name }}.sha256")"
+          sha256="$(cut -d' ' -f1 "$NAME.sha256")"
 
           # `gh repo clone` authenticates through the gh binary itself, but a
           # plain `git push` afterwards uses git's own HTTP transport, which
@@ -217,14 +262,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/moomux-mac.rb
-          git commit -m "moomux-mac ${TAG}"
+          # A re-run writes the same cask: nothing to commit is not a failure.
+          git diff --cached --quiet || git commit -m "moomux-mac ${TAG}"
           git push
 
   # After the cask, not beside it: a TestFlight build only goes out for a
   # release brew actually got, and a failed upload cannot hold the cask back.
   testflight:
     needs: release
+    # generate-notes (release_notes.sh) needs contents: write; nothing else.
+    permissions:
+      contents: write
     uses: ./.github/workflows/testflight.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}
-    secrets: inherit
+    # Only what the upload uses, not every secret in the repo (the cask token,
+    # the Developer ID certificate).
+    secrets:
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
+      DEV_CERT_PASSWORD: ${{ secrets.DEV_CERT_PASSWORD }}

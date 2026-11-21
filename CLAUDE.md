@@ -876,7 +876,7 @@ Decisions, not oversights. Don't "fix" these without being asked.
   MIN_AGE_HOURS=999999 Scripts/dependency_age.sh  # fails every non-exempt pin: proves it bites
   ```
 
-  An urgent fix goes through with `MIN_AGE_HOURS=0`, said in the PR. An Xcode resolve picks the
+  An urgent fix goes through with `MIN_AGE_HOURS=0` (Release's `min_age_hours` dispatch input, or by hand), said in the PR. `test.yml` runs the same check on every PR. An Xcode resolve picks the
   newest tag in range (DiffKit's `upToNextMinor`), so after one, check both `Package.resolved`
   files agree.
 - **The app is ~11MB rather than ~5MB**, all of it the statically linked engine (the archive's
