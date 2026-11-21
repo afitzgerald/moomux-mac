@@ -145,6 +145,10 @@ struct SessionListView: View {
         path.removeAll { $0 == .terminal(id) }
     }
 
+    private func closeAfterDelete(_ id: Session.ID) {
+        path.removeAll { $0 == .terminal(id) || $0 == .detail(id) }
+    }
+
     /// One session. Shared by both lenses, and the only place the tap rule
     /// lives.
     ///
@@ -309,11 +313,12 @@ struct SessionListView: View {
                 switch route {
                 case let .detail(id):
                     SessionDetailView(app: app, sessionID: id, showTerminal: showTerminal,
-                                      leaveTerminal: leaveTerminal)
+                                      leaveTerminal: leaveTerminal, closeAfterDelete: closeAfterDelete)
                 case let .terminal(id):
                     // `.id`: swapping A's pane for B's in the same stack slot must
                     // build a new view, since the attach is made once per view.
-                    TerminalScreen(app: app, sessionID: id, computer: computers.saved.current) { path.append($0) }
+                    TerminalScreen(app: app, sessionID: id, computer: computers.saved.current,
+                                   push: { path.append($0) }, closeAfterDelete: closeAfterDelete)
                         .id(id)
                 case let .changes(id): ChangesScreen(app: app, sessionID: id)
                 case let .fileDiff(id, file):
@@ -705,8 +710,8 @@ struct SessionDetailView: View {
     let showTerminal: (Session.ID) -> Void
     /// Kill tmux's half of the stack: the session's pane leaves it first.
     let leaveTerminal: (Session.ID) -> Void
-    /// Deleting a session removes the screen's subject, so it leaves too.
-    @Environment(\.dismiss) private var dismiss
+    /// Close both the detail and any attached pane when deleting the session.
+    let closeAfterDelete: (Session.ID) -> Void
     @State private var confirmingKill = false
     @State private var edit: SessionEdit?
 
@@ -813,9 +818,6 @@ struct SessionDetailView: View {
                 Section("First prompt") { Text(prompt).font(.callout).textSelection(.enabled) }
             }
 
-            // Rows here, not a toolbar ⋯: reached from a pane, that pane's ⋯
-            // already holds them, and a parked session must be deletable
-            // without attaching.
             SessionActions(app: app, session: session, edit: $edit,
                            kill: { confirmingKill = true },
                            delete: { app.askDelete(session) })
@@ -835,7 +837,7 @@ struct SessionDetailView: View {
             Button("Cancel", role: .cancel) { app.dismissDelete() }
             Button("Delete", role: .destructive) {
                 app.delete(session)
-                dismiss()
+                closeAfterDelete(session.id)
             }
         } message: {
             Text(app.deleteWarning(for: session))
@@ -856,27 +858,16 @@ struct SessionDetailView: View {
     }
 }
 
-/// The links, Folder, Pin, Archive, Rename, Tags, Kill tmux and Delete: rows on the
-/// detail screen, items in the attached pane's ⋯. Rename, Tags, New Folder,
-/// Kill and Delete only raise the host screen's alerts (`sessionEditing` for
-/// the first three).
+/// Session management rows shared by Details and the terminal's actions sheet.
 struct SessionActions: View {
     let app: AppState
     let session: Session
     @Binding var edit: SessionEdit?
-    /// In the pane's ⋯ rather than detail's list: the links share one row,
-    /// as do Rename and Tags, or the menu outgrows the screen and scrolls;
-    /// and Folder has no room to show the current folder.
-    var inMenu = false
     let kill: () -> Void
     let delete: () -> Void
 
     var body: some View {
-        if inMenu {
-            ControlGroup { links }
-        } else {
-            Section { links }
-        }
+        Section { links }
         Section {
             // The Mac row's Folder submenu: none, every folder, or a new one.
             // Not on the list row, because the row's long press is its drag.
@@ -892,14 +883,10 @@ struct SessionActions: View {
                 Divider()
                 Button("New Folder…") { edit = SessionEdit(kind: .newFolder) }
             } label: {
-                if inMenu {
+                LabeledContent {
+                    Text(session.folder.isEmpty ? "None" : session.folder)
+                } label: {
                     Label("Folder", systemImage: "folder")
-                } else {
-                    LabeledContent {
-                        Text(session.folder.isEmpty ? "None" : session.folder)
-                    } label: {
-                        Label("Folder", systemImage: "folder")
-                    }
                 }
             }
             Button {
@@ -918,11 +905,7 @@ struct SessionActions: View {
             } label: {
                 Label(session.archived ? "Unarchive" : "Archive", systemImage: "archivebox")
             }
-            if inMenu {
-                ControlGroup { edits }
-            } else {
-                edits
-            }
+            edits
         }
         Section {
             // Stopping a runaway agent is a check-in job. The worktree,
@@ -943,16 +926,15 @@ struct SessionActions: View {
         Button {
             edit = SessionEdit(kind: .rename, text: session.name)
         } label: {
-            Label(inMenu ? "Rename" : "Rename…", systemImage: "pencil")
+            Label("Rename…", systemImage: "pencil")
         }
         Button {
             edit = SessionEdit(kind: .tags, text: session.ticket ?? "", pr: session.pr ?? "")
         } label: {
-            Label(inMenu ? "Tags" : "Tags…", systemImage: "ticket")
+            Label("Tags…", systemImage: "ticket")
         }
     }
 
-    /// Short titles in the menu: a control group row fits three under icons.
     @ViewBuilder
     private var links: some View {
         if let url = WebLink.url(session.ticket) {
@@ -960,7 +942,7 @@ struct SessionActions: View {
         }
         if let url = WebLink.url(session.pr) {
             Link(destination: url) {
-                Label(inMenu ? "PR" : "Pull request", systemImage: "arrow.triangle.pull")
+                Label("Pull request", systemImage: "arrow.triangle.pull")
             }
         }
         // Hidden without MergeRight installed, where the scheme
@@ -969,8 +951,7 @@ struct SessionActions: View {
         if let link = app.mergeRightLink(for: session),
            UIApplication.shared.canOpenURL(link) {
             Link(destination: link) {
-                Label(inMenu ? "MergeRight" : "Open in MergeRight",
-                      systemImage: "arrow.up.forward.app")
+                Label("Open in MergeRight", systemImage: "arrow.up.forward.app")
             }
         }
     }

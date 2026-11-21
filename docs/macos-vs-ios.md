@@ -663,8 +663,8 @@ it is what makes a first prompt work against a core on another machine, which is
 both apps are going.
 
 **D38. Files dropped on a *running* pane: an exception on the Mac.** A Finder drop onto a Mac pane
-types local shell-quoted paths, the iTerm/Terminal convention, with no upload. The phone's "Attach
-Photos/Files" in the pane's ⋯ menu uploads and pastes the returned path with `paste(text:)`, so
+types local shell-quoted paths, the iTerm/Terminal convention, with no upload. The paperclip in
+the phone's terminal key bar uploads the attachment and pastes the returned path with `paste(text:)`, so
 bracketed paste lets claude see a file rather than typing (an image becomes `[Image #1]`). The Mac
 shortcut holds only because the Mac and the core share a disk. In a remote pane (D25) the drop
 is uploaded and the core's path pasted, as on the phone.
@@ -749,24 +749,27 @@ different widths.
 | | Mac | iPhone |
 |---|---|---|
 | Attach | select / double-click / ⌘↩ | tap |
-| Archive / Unarchive | ⌘E, context menu | trailing swipe, detail, pane ⋯ |
-| Pin to Top / Unpin | Session menu, context menu | trailing swipe, detail, pane ⋯ |
-| Details | inspector ⌘I | trailing swipe; ⋯ in the pane |
+| Archive / Unarchive | ⌘E, context menu | trailing swipe, Details, pane ⋯ |
+| Pin to Top / Unpin | Session menu, context menu | trailing swipe, Details, pane ⋯ |
+| Details | inspector ⌘I | trailing swipe; pane ⋯ → Details |
 | Review | ⌘G, context menu, detail | leading swipe, detail |
 | View changes (native diff) | none (D46) | leading swipe, pane toolbar, detail |
-| File into a folder | context menu → Folder, drag onto a folder header, under it or between its members | drag onto or under a folder header, from above or below, or between its members; detail, pane ⋯ → Folder |
-| Rename | Edit… ⇧⌘R (with agent) | detail, pane ⋯ → Rename… (name only) |
-| Tags | ⌘T, context menu | detail, pane ⋯ → Tags… |
-| Delete | ⌘⌫, context menu | detail, pane ⋯ |
-| Kill tmux | ⇧⌘K, context menu (not confirmed) | detail, pane ⋯ (confirmed) |
-| New Folder | project header, row → Folder | detail, pane ⋯ → Folder → New Folder… |
+| File into a folder | context menu → Folder, drag onto a folder header, under it or between its members | drag onto or under a folder header, from above or below, or between its members; Details or pane ⋯ → Folder |
+| Rename | Edit… ⇧⌘R (with agent) | Details or pane ⋯ → Rename… (name only) |
+| Tags | ⌘T, context menu | Details or pane ⋯ → Tags… |
+| Delete | ⌘⌫, context menu | Details, pane ⋯ |
+| Kill tmux | ⇧⌘K, context menu (not confirmed) | Details, pane ⋯ (confirmed) |
+| New Folder | project header, row → Folder | Details or pane ⋯ → Folder → New Folder… |
 | Diff tool, Copy Path, Move Up/Down | yes | none, deliberately |
 | Reorder by drag, both lenses | drop between rows (`onMove`) | long press, drop between rows (`onMove`) |
 | Reorder projects | drag a project header, or Settings → Projects chevron buttons | long press a project header, drop above or below another project |
-| Ticket, Pull request, Open in MergeRight | inspector, context menu | detail, pane ⋯ |
+| Ticket, Pull request, Open in MergeRight | inspector, context menu | Details, pane ⋯ |
 | Folder header menu | Rename, Archive All, Unarchive All, Delete | the same (long press) |
 
-The Mac row's context menu and the phone's session actions (detail, pane ⋯) run in one order:
+The pane's ⋯ button opens a scrollable sheet with New Session, Browser, Details, Text Size,
+and the same session actions as Details.
+
+The Mac row's context menu and the phone's session actions run in one order:
 links; Folder, Archive, Edit/Rename, Tags; then Kill tmux and Delete. The Mac's own tools (Review,
 diff tool, Copy Path, Move Up/Down) sit between the last two groups.
 
