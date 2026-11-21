@@ -86,8 +86,8 @@ SIGNFLAGS := $(if $(filter -,$(DIST_IDENTITY)),,--options runtime --timestamp)
 # One-time local setup before `make notarize` will work:
 #   xcrun notarytool store-credentials moomux-mac-notary \
 #     --apple-id <you@example.com> --team-id <TEAMID> --password <app-specific-password>
-# CI does not use this profile — release.yml passes API-key credentials to
-# notarytool directly instead of storing them in a keychain.
+# CI does not use this profile — release.yml passes an Apple ID and app-specific
+# password to notarytool directly instead of storing them in a keychain.
 NOTARY_PROFILE ?= moomux-mac-notary
 # How `notarize` authenticates. CI has no keychain to store a profile in, so
 # release.yml overrides this with the API/app-password credentials directly —

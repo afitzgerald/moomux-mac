@@ -5,8 +5,8 @@ rough edges, missing features (see `CLAUDE.md`'s "Deliberately not done"), and b
 between releases without notice.
 
 A native macOS front end for [moomux](https://github.com/erickgnclvs/moomux) — a TUI for managing
-Claude Code / codex / opencode sessions across git worktrees. SwiftUI, SwiftPM executable, one
-dependency (libghostty), driving the moomux core over its `moomux serve` unix socket.
+Claude Code / codex / opencode sessions across git worktrees. SwiftUI, SwiftPM executable, two
+dependencies (libghostty, DiffKit), driving the moomux core over its `moomux serve` unix socket.
 
 ## Installing
 
@@ -18,7 +18,7 @@ Signed with a Developer ID and notarized, but still an alpha release — see abo
 
 This repo was split out of moomux's `macos/` directory (history preserved via `git subtree split`).
 `docs/native-macos-rewrite.md` is the design doc that led to this shape; `CLAUDE.md` has the
-day-to-day working notes (build commands, screenshot workflow, tmux control-mode gotchas).
+day-to-day working notes (build commands, screenshot workflow, tmux and terminal gotchas).
 
 ## Building
 
@@ -47,8 +47,8 @@ With no `--socket` it uses `~/.local/share/moomux/moomux.sock`, same default as 
 The app talks to `moomux serve`, but doesn't start it — you need something running that socket
 before you open Moomux.app.
 
-If `moomux` came from Homebrew (`brew install erickgnclvs/moomux/moomux` — the cask above pulls it
-in automatically), the formula ships a launchd service definition:
+If `moomux` came from Homebrew (`brew install erickgnclvs/moomux/moomux` — the cask above does not install it),
+the formula ships a launchd service definition:
 
 ```sh
 brew services start moomux
@@ -115,7 +115,7 @@ Restart Codex for the setting to take effect.
 
 ## Compatibility
 
-`Sources/Moomux/Core/Models.swift` decodes the core's `internal/ipc` JSON into Swift structs with
+`Sources/MoomuxKit/Core/Models.swift` decodes the core's `internal/ipc` JSON into Swift structs with
 no schema check at build time — a protocol change on the moomux side won't fail this repo's build,
 it'll just decode into `nil`/defaults at runtime. There's no version pinning yet; if session data
 looks wrong after updating the core, check `internal/ipc` and `session.Session`'s JSON tags there
