@@ -985,13 +985,18 @@ public struct Usage: Decodable, Equatable, Sendable {
         }
     }
 
-    /// Every window, one line per reset time, then any problem: the Mac's
-    /// popover and the phone's menu. Windows that roll over together share a
+    public func problem(for agent: String) -> String? {
+        status == .signedOut ? "\(agent) is signed out — run \(agent.lowercased()) login" : problem
+    }
+
+    /// Every window, one line per reset time, followed by optional token totals
+    /// and any problem. Windows that roll over together share a
     /// line — the week and its per-model carve-outs usually do, and the same
     /// countdown three times over is noise. Grouped by the *phrase*, not the
     /// date: the server stamps them seconds apart ("13:59:59", "14:00:00").
     /// "used" because a bare percent leaves open whether it is used or left.
-    public func detail(now: Date = Date(), agent: String = "Claude", free: Bool = false) -> [String] {
+    public func detail(now: Date = Date(), agent: String = "Claude", free: Bool = false,
+                       includeTokens: Bool = true) -> [String] {
         var groups: [(resets: String?, windows: [Window])] = []
         for window in windows {
             let resets = window.resets(now: now)
@@ -1006,8 +1011,7 @@ public struct Usage: Decodable, Equatable, Sendable {
                 + (free ? " free" : " used")
                 + (group.resets.map { " · \($0)" } ?? "")
         }
-        let message = status == .signedOut ? "\(agent) is signed out — run \(agent.lowercased()) login" : problem
-        return lines + [tokens?.detail, message].compactMap { $0 }
+        return lines + [includeTokens ? tokens?.detail : nil, problem(for: agent)].compactMap { $0 }
     }
 }
 
@@ -1525,10 +1529,11 @@ public enum Wire {
         assert(codex.usage != nil && codex.codexUsage?.status == .idle)
         assert(codex.codexUsage?.isDrawable == true && codex.codexUsage?.tokens?.input == 1234)
         assert(codex.codexUsage?.detail(agent: "Codex").first?.contains("Local tokens") == true)
+        assert(codex.codexUsage?.detail(agent: "Codex", includeTokens: false).isEmpty == true)
         let brokenCodex = try! decoder.decode(Snapshot.self, from: Data(#"{"views":{},"usage":{"status":"ok"},"codex_usage":{"windows":"bad"}}"#.utf8))
         assert(brokenCodex.usage != nil && brokenCodex.codexUsage == nil)
         let codexSignedOut = try! decoder.decode(Usage.self, from: Data(#"{"status":"signed_out"}"#.utf8))
-        assert(codexSignedOut.detail(agent: "Codex") == ["Codex is signed out — run codex login"])
+        assert(codexSignedOut.detail(agent: "Codex", includeTokens: false) == ["Codex is signed out — run codex login"])
         assert(none.usage == nil, "no usage key is nothing to draw")
         assert(none.usageSetup == nil)
         let missing = try! decoder.decode(
