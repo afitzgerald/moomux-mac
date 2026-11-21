@@ -31,6 +31,12 @@ enum Route: Hashable {
     case terminal(Session.ID)
     case changes(Session.ID)
     case fileDiff(Session.ID, String)
+
+    var sessionID: Session.ID {
+        switch self {
+        case let .detail(id), let .terminal(id), let .changes(id), let .fileDiff(id, _): id
+        }
+    }
 }
 
 // MARK: - List
@@ -294,6 +300,15 @@ struct SessionListView: View {
             // multi-selection tap, so the row's own tap still navigates.
             List(selection: $app.marked) {
                 if app.connection.isDown { ConnectionRow(app: app, name: computerName).selectionDisabled() }
+                // Connected but the status stream is failing (a core too old
+                // for it): every row reads unknown, and this says why.
+                if !app.connection.isDown, let error = app.statusError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .labelStyle(RowLabel())
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .selectionDisabled()
+                }
                 if app.folderView { folderFirstRows } else { projectFirstRows }
             }
             .environment(\.editMode, .constant(selecting ? .active : .inactive))
@@ -334,7 +349,11 @@ struct SessionListView: View {
                 // The store's own computer, not `computers.saved.current`,
                 // which a switch moves before this list is replaced.
                 guard !sessions.isEmpty, let computer = UUID(uuidString: app.notificationKey) else { return }
-                BrowserStores.sweep(computer: computer, live: Set(sessions.map(\.id)))
+                let live = Set(sessions.map(\.id))
+                BrowserStores.sweep(computer: computer, live: live)
+                // Same guard: a route for a session deleted elsewhere would
+                // spin on its ProgressView forever.
+                path.removeAll { !live.contains($0.sessionID) }
             }
             .refreshable { await app.refresh() }
             .toolbar {
@@ -796,6 +815,12 @@ struct SessionDetailView: View {
                 // it, because asking for a diff must not relaunch an agent.
                 if !app.canReview(session) {
                     Text("Review needs a live session.")
+                }
+            }
+
+            if let status = app.statuses[session.id], status.known || !status.changeSummary.isEmpty {
+                Section {
+                    LabeledContent("Changes", value: status.changeSummary.isEmpty ? "clean" : status.changeSummary)
                 }
             }
 

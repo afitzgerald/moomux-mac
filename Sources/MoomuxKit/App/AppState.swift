@@ -234,6 +234,9 @@ public final class AppState {
     /// `git diff` on the core. nil inside means "not a git repo", which is not
     /// the same as a clean worktree's empty list.
     public private(set) var diffs: [Session.ID: SessionDiff?] = [:]
+    /// The last `Diff` call's error per session, cleared by a success. Without
+    /// it a failed first load leaves `diffs` empty, which reads as loading.
+    public private(set) var diffErrors: [Session.ID: String] = [:]
     /// What the phone's Changes screen has marked as looked at, per session.
     public var viewedFiles: [Session.ID: ViewedFiles] = [:]
 
@@ -885,7 +888,10 @@ public final class AppState {
                 }
             }
             diffs[id] = .some(diff)
+            diffErrors[id] = nil
         } catch {
+            diffErrors[id] = error.localizedDescription
+            if diffs[id] == nil { return }
             failed("Loading the diff", error)
         }
     }

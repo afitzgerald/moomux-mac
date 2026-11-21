@@ -313,7 +313,7 @@ struct TerminalScreen: View {
         fetch = Task {
             do {
                 let url = try await Task.detached {
-                    let (resolved, data) = try client.readFile(id: id, path: path)
+                    let (resolved, data) = try WebLink.firstSuccess(of: path) { try client.readFile(id: id, path: $0) }
                     let dir = PreviewFile.root.appending(path: UUID().uuidString)
                     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                     let url = dir.appending(path: PreviewFile.name(for: resolved, data: data))
