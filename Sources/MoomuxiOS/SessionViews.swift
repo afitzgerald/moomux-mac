@@ -1112,7 +1112,7 @@ private struct UsageMenu: View {
             } else if let window = summaryWindow(usage, now: now) {
                 let style = SessionTheme.usage(usage.level(of: window, now: now), app.palette)
                 let prefix = window.kind == "session" ? "5h " : ""
-                Text("\(prefix)\(usage.percent(of: window, free: true))%")
+                Text("\(prefix)\(usage.percent(of: window, free: app.showFreeQuota))%")
                     .font(.caption)
                     .monospacedDigit()
                     .fontWeight(style.bold ? .bold : .regular)
@@ -1136,7 +1136,7 @@ private struct UsageMenu: View {
     private func accessibilityValue(now: Date) -> String {
         [("Claude", app.usage), ("Codex", app.codexUsage)].compactMap { agent, usage in
             guard let usage else { return nil }
-            return "\(agent): " + usage.detail(now: now, agent: agent, free: true).joined(separator: ", ")
+            return "\(agent): " + usage.detail(now: now, agent: agent, free: app.showFreeQuota).joined(separator: ", ")
         }.joined(separator: "; ")
     }
 }
