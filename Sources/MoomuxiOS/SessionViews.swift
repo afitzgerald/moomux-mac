@@ -1049,10 +1049,10 @@ private struct UsageMenu: View {
                 TimelineView(.everyMinute) { context in
                     Form {
                         if let usage = app.usage {
-                            usageDetails(usage, agent: "Claude", now: context.date)
+                            UsageSection(usage: usage, agent: "Claude", now: context.date, free: app.showFreeQuota)
                         }
                         if let usage = app.codexUsage {
-                            usageDetails(usage, agent: "Codex", now: context.date)
+                            UsageSection(usage: usage, agent: "Codex", now: context.date, free: app.showFreeQuota)
                         }
                         Toggle("Show free quota", isOn: $app.showFreeQuota)
                     }
@@ -1068,19 +1068,6 @@ private struct UsageMenu: View {
         }
     }
 
-    private func usageDetails(_ usage: Usage, agent: String, now: Date) -> some View {
-        Section {
-            ForEach(Array(usage.detail(now: now, agent: agent, free: app.showFreeQuota).enumerated()), id: \.offset) { _, line in
-                Text(line)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-        } header: {
-            Text(agent).foregroundStyle(.primary)
-        }
-    }
-
     private func usageSummary(_ usage: Usage, agent: String, now: Date) -> some View {
         HStack(spacing: 3) {
             AgentMark(agent, size: 12)
@@ -1093,7 +1080,7 @@ private struct UsageMenu: View {
             } else if let window = summaryWindow(usage, now: now) {
                 let style = SessionTheme.usage(usage.level(of: window, now: now), app.palette)
                 let prefix = window.kind == "session" ? "5h " : ""
-                Text("\(prefix)\(usage.percent(of: window, free: true))%")
+                Text("\(prefix)\(usage.percent(of: window, free: app.showFreeQuota))%")
                     .font(.caption)
                     .monospacedDigit()
                     .fontWeight(style.bold ? .bold : .regular)
@@ -1117,8 +1104,126 @@ private struct UsageMenu: View {
     private func accessibilityValue(now: Date) -> String {
         [("Claude", app.usage), ("Codex", app.codexUsage)].compactMap { agent, usage in
             guard let usage else { return nil }
-            return "\(agent): " + usage.detail(now: now, agent: agent, free: true).joined(separator: ", ")
+            let details = usage.detail(now: now, agent: agent, free: app.showFreeQuota, includeTokens: false)
+            return ([agent] + details).joined(separator: ", ")
         }.joined(separator: "; ")
+    }
+}
+
+private struct UsageSection: View {
+    let usage: Usage
+    let agent: String
+    let now: Date
+    let free: Bool
+    @State private var showingTokens = false
+
+    var body: some View {
+        Section {
+            let weekly = usage.windows.firstIndex { $0.kind == "weekly_all" }
+            ForEach(Array(usage.windows.enumerated()), id: \.offset) { index, window in
+                if index == weekly {
+                    quota(window, scoped: usage.windows.filter { $0.kind == "weekly_scoped" })
+                } else if weekly == nil || window.kind != "weekly_scoped" {
+                    quota(window)
+                }
+            }
+            if let problem = usage.problem(for: agent) {
+                Text(problem)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            if showingTokens, let tokens = usage.tokens {
+                Text("Local tokens (\(tokens.windowDays) days)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                tokenCount("Input", tokens.input)
+                tokenCount("Output", tokens.output)
+                tokenCount("Cache read", tokens.cacheRead)
+                tokenCount("Cache write", tokens.cacheWrite)
+            }
+        } header: {
+            if usage.tokens != nil {
+                Button {
+                    withAnimation { showingTokens.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        agentLabel
+                        Spacer()
+                        Image(systemName: showingTokens ? "chevron.down" : "chevron.right")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(agent)
+                .accessibilityValue(showingTokens ? "Tokens expanded" : "Tokens collapsed")
+                .accessibilityHint("Shows or hides local token totals")
+            } else {
+                agentLabel
+            }
+        }
+    }
+
+    private func quota(_ window: Usage.Window, scoped: [Usage.Window] = []) -> some View {
+        let reset = window.resets(now: now)
+        return VStack(alignment: .leading, spacing: 5) {
+            quotaReading(window)
+            ForEach(Array(scoped.enumerated()), id: \.offset) { _, model in
+                VStack(alignment: .leading, spacing: 3) {
+                    quotaReading(model, secondary: true)
+                    if let modelReset = model.resets(now: now), modelReset != reset {
+                        resetText(modelReset)
+                    }
+                }
+                .padding(.leading, 12)
+            }
+            if let reset {
+                resetText(reset)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+    }
+
+    private func quotaReading(_ window: Usage.Window, secondary: Bool = false) -> some View {
+        let percent = usage.percent(of: window, free: free)
+        let name = switch window.kind {
+        case "session": "5-hour"
+        case "weekly_all": "Weekly"
+        default: window.name
+        }
+        return LabeledContent {
+            (free ? Text("\(percent)% free") : Text("\(percent)% used"))
+                .foregroundStyle(secondary ? .secondary : .primary)
+                .monospacedDigit()
+        } label: {
+            Text(name)
+                .foregroundStyle(secondary ? .secondary : .primary)
+        }
+    }
+
+    private func resetText(_ reset: String) -> some View {
+        Text(reset.prefix(1).uppercased() + reset.dropFirst())
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+    }
+
+    private var agentLabel: some View {
+        HStack(spacing: 6) {
+            AgentMark(agent)
+            Text(agent)
+        }
+        .foregroundStyle(.primary)
+    }
+
+    private func tokenCount(_ label: String, _ count: Int64) -> some View {
+        LabeledContent(label) {
+            Text(count, format: .number)
+                .monospacedDigit()
+                .textSelection(.enabled)
+        }
     }
 }
 
