@@ -25,7 +25,17 @@ struct ChangesScreen: View {
     private var content: some View {
         switch app.diffs[sessionID] {
         case .none:
-            ProgressView().controlSize(.small)
+            if let error = app.diffErrors[sessionID] {
+                ContentUnavailableView {
+                    Label("Couldn't load the changes", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Retry") { Task { await app.loadDiff(sessionID) } }
+                }
+            } else {
+                ProgressView().controlSize(.small)
+            }
         case .some(.none):
             ContentUnavailableView("Not a git repository", systemImage: "folder.badge.questionmark")
         // Not when truncated: a first file over the cap alone sends no patch.
