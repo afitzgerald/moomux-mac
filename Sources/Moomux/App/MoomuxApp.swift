@@ -216,6 +216,24 @@ struct SessionCommands: Commands {
             }
                 .keyboardShortcut(.upArrow, modifiers: .command)
                 .disabled(app.sessionsByProject.isEmpty)
+            Button("Collapse or Expand Project") {
+                if let s = selected { app.setProject(s.project, expanded: !app.projectExpanded(s.project)) }
+            }
+            .disabled(selected == nil)
+            Divider()
+            // These were toolbar-only. Their shortcuts moved here from the
+            // toolbar buttons: two views claiming one shortcut is ambiguous.
+            Button("Refresh") { Task { await app.refreshNow() } }
+                .keyboardShortcut("r")
+            Toggle("Session Grid", isOn: Bindable(app).showGrid)
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+            Toggle("Show Archived", isOn: Bindable(app).showArchived)
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+            Button("Attach") { if let s = selected { app.attach(s) } }
+                .disabled(selected.map { !app.isAlive($0) || !app.canAttach || app.attachedSessions.contains($0.id) } ?? true)
+            Button("Detach") { if let s = selected { app.detach(s) } }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(selected.map { !app.attachedSessions.contains($0.id) } ?? true)
             Divider()
             // ⌘F is the find shortcut everywhere, and `f` is the TUI's. The
             // search field lives in the sidebar; this puts the caret in it.

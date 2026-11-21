@@ -173,9 +173,8 @@ struct RootView: View {
             }
             ToolbarItem {
                 Toggle(isOn: $app.showGrid) { Label("Grid", systemImage: "square.grid.2x2") }
-                    // ⌘G is Review Changes; the grid is the shifted one.
-                    .keyboardShortcut("g", modifiers: [.command, .shift])
-                    .help("Every live session at once, read-only. Click one to open it.")
+                    // ⇧⌘G lives on the Session menu item, not here.
+                    .help("Every live session at once, read-only. Click one to open it (⇧⌘G)")
             }
             ToolbarItem {
                 // Bound to what the sidebar is actually drawing, not to the
@@ -196,23 +195,16 @@ struct RootView: View {
             }
             ToolbarItem {
                 Toggle(isOn: $app.showArchived) { Label("Archived", systemImage: "archivebox") }
-                    .help("Show only archived sessions")
+                    .help("Show only archived sessions (⇧⌘A)")
             }
             ToolbarItem {
                 Button {
-                    Task {
-                        await app.refresh()
-                        // The expensive per-session state is only ever fetched
-                        // on demand, so an explicit refresh is the one place it
-                        // should be re-fetched rather than served from cache.
-                        if let id = app.selectedSessionID {
-                            await app.loadStatus(for: id, force: true)
-                        }
-                    }
+                    Task { await app.refreshNow() }
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
-                .keyboardShortcut("r")
+                // ⌘R lives on the Session menu item, not here.
+                .help("Refresh (⌘R)")
             }
             if app.sidebarOnRight {
                 // The split view's own sidebar button goes with the split view.
@@ -640,6 +632,7 @@ private struct PlateImage: View {
 /// session and knowing whether it auto-attaches.
 private struct AttachingSpinner: View {
     @State private var rotating = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -647,9 +640,10 @@ private struct AttachingSpinner: View {
                 Image(nsImage: image)
                     .resizable().scaledToFit().frame(width: 96, height: 96)
                     .rotationEffect(.degrees(rotating ? 360 : 0))
-                    .animation(.linear(duration: 1.1).repeatForever(autoreverses: false),
+                    .animation(reduceMotion ? nil
+                               : .linear(duration: 1.1).repeatForever(autoreverses: false),
                                value: rotating)
-                    .onAppear { rotating = true }
+                    .onAppear { rotating = !reduceMotion }
             } else {
                 PlateImage()
             }
@@ -1121,6 +1115,7 @@ private struct SessionRow: View {
             Image(systemName: state.symbol)
                 .foregroundStyle(Theme.color(state, app.palette))
                 .frame(width: SidebarGrid.icon(app.listFontSize))
+                .accessibilityLabel(app.label(for: session))
                 .help(app.label(for: session))
             Text(session.name)
                 .foregroundStyle(state == .parked ? .secondary : .primary)
@@ -1358,7 +1353,7 @@ private struct SessionDetail: View {
                     } label: {
                         Label("Detach", systemImage: "rectangle.portrait.and.arrow.right")
                     }
-                    .help("Leave the session running and give the size back")
+                    .help("Leave the session running and give the size back (⇧⌘D)")
                 }
                 ToolbarItem {
                     Button {
@@ -1382,6 +1377,8 @@ private struct SessionDetail: View {
         // Starting one back up stays a button press.
         .task(id: session.id) {
             await app.loadStatus(for: session.id)
+            // Selection moved on while that was in flight: this task is stale.
+            guard !Task.isCancelled else { return }
             if app.isAlive(session) && app.canAttach {
                 app.attach(session)
             }
@@ -1707,6 +1704,7 @@ private struct UsageBadge: View {
 /// waiting on you, visible while you are in another app.
 struct MenuBarContent: View {
     @Environment(AppState.self) private var app
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1714,8 +1712,10 @@ struct MenuBarContent: View {
                 Button {
                     app.showGrid = false
                     app.selectedSessionID = session.id
+                    // ⌘W closes the one window; ordering a window front finds
+                    // nothing then, so ask the scene to make it again.
+                    openWindow(id: "main")
                     NSApp.activate()
-                    NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
                 } label: {
                     let state = app.state(for: session)
                     HStack {

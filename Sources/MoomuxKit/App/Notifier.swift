@@ -159,7 +159,13 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             app?.showGrid = false
             app?.selectedSessionID = id
             NSApp.activate()
-            NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
+            if let window = NSApp.windows.first(where: { $0.canBecomeKey && !($0 is NSPanel) }) {
+                window.makeKeyAndOrderFront(nil)
+            } else {
+                // ⌘W closed it. This module has no `openWindow`; opening the
+                // app's own bundle is the Dock-icon reopen, which remakes it.
+                NSWorkspace.shared.open(Bundle.main.bundleURL)
+            }
             done()
         }
     }
