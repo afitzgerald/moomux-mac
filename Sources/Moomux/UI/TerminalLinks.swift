@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MoomuxKit
+import UniformTypeIdentifiers
 
 /// What a click on a link in a terminal pane is allowed to do.
 ///
@@ -71,7 +72,35 @@ enum TerminalLink {
     /// `activateFileViewerSelecting([url])` if revealing is ever wanted instead.
     static func open(_ link: String) {
         guard let url = resolve(link) else { return }
-        NSWorkspace.shared.open(desktopApp(url) ?? url)
+        if url.isFileURL { open(fileURL: url) } else { NSWorkspace.shared.open(desktopApp(url) ?? url) }
+    }
+
+    /// The one gate every file open goes through (pane paths, `file:` tags,
+    /// files fetched from a remote core). A path in pane output must never
+    /// launch anything: git checkouts carry no quarantine, so Gatekeeper does
+    /// not assess an `.app` or `.command` in one. Only viewable content opens
+    /// in its default app; the rest is revealed in Finder.
+    static func open(fileURL url: URL) {
+        let values = try? url.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey, .isPackageKey])
+        let direct = opensDirectly(
+            type: values?.contentType,
+            executable: FileManager.default.isExecutableFile(atPath: url.path),
+            directory: values?.isDirectory == true || values?.isPackage == true)
+        if direct { NSWorkspace.shared.open(url) } else { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    }
+
+    /// Pure half of `open(fileURL:)`. Scripts conform to `.text`, so they are
+    /// refused by name; `.webloc`/`.inetloc` hold any URL scheme. Ceiling: a
+    /// `.html` still opens (it is text), as a local page in the browser.
+    static func opensDirectly(type: UTType?, executable: Bool, directory: Bool) -> Bool {
+        guard let type, !executable, !directory else { return false }
+        let refused: [UTType] = [.executable, .application, .script, .shellScript,
+                                 .internetLocation, .urlBookmarkData]
+        guard !refused.contains(where: type.conforms(to:)) else { return false }
+        for ext in ["terminal", "command", "webloc", "inetloc"] {
+            if let t = UTType(filenameExtension: ext), type.conforms(to: t) { return false }
+        }
+        return [UTType.image, .pdf, .audiovisualContent, .text].contains { type.conforms(to: $0) }
     }
 
     /// Asana's and Linear's desktop apps register a custom scheme but claim no
@@ -156,6 +185,19 @@ enum TerminalLink {
         assert(resolve("/private/tmp/nope.png", exists: fake) == nil)
         assert(resolve("Sources/Moomux/UI/TerminalLinks.swift", exists: fake) == nil,
                "a relative path has no cwd to resolve against")
+
+        // The file-open gate.
+        func direct(_ ext: String, exe: Bool = false, dir: Bool = false) -> Bool {
+            opensDirectly(type: UTType(filenameExtension: ext), executable: exe, directory: dir)
+        }
+        assert(direct("png") && direct("pdf") && direct("mp4") && direct("txt") && direct("swift"))
+        assert(!direct("app"), "a bundle is launched, not viewed")
+        assert(!direct("command") && !direct("terminal") && !direct("sh"))
+        assert(!direct("webloc") && !direct("inetloc"), "any URL scheme")
+        assert(!direct("png", exe: true), "executable bit")
+        assert(!direct("png", dir: true), "directory or package")
+        assert(!direct("zzunknownext"), "no type, no open")
+        assert(!opensDirectly(type: nil, executable: false, directory: false))
 
         // Asana's desktop app. The shape is taken from the app's own log line
         // ("Custom protocol handler invoked with URL: asanadesktop:///app/1/…"),
@@ -259,9 +301,9 @@ extension AppState {
     }
 
     /// `ReadFile`, written under the temp directory with a name the system can
-    /// open (`PreviewFile`), then handed to the default app. Left there rather
-    /// than cleaned up: the app that opened it may still be reading it, and
-    /// the system clears the temp directory itself.
+    /// open (`PreviewFile`), then through `open(fileURL:)`. Left there until
+    /// the next launch (`PreviewFile.clear()`): the app that opened it may
+    /// still be reading it.
     private func openRemoteFile(_ path: String, in id: Session.ID) {
         let client = client
         Task {
@@ -274,7 +316,7 @@ extension AppState {
                     try data.write(to: url)
                     return url
                 }.value
-                NSWorkspace.shared.open(url)
+                TerminalLink.open(fileURL: url)
             } catch {
                 actionError = error.localizedDescription
             }

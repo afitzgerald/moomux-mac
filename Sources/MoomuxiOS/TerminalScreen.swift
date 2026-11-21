@@ -102,6 +102,7 @@ struct TerminalScreen: View {
             // missing. Reported as "the cursor is two lines below where it
             // should be", which is precisely the inset in rows.
             .quickLookPreview($preview)
+            .onChange(of: preview) { _, new in if new == nil { PreviewFile.clear() } }
             .sheet(isPresented: $showingActions, onDismiss: finishActions) { actions }
             .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { false }) }
             .sheet(isPresented: $editingSnippets) { SnippetsSheet() }

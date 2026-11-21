@@ -13,6 +13,7 @@ struct MoomuxApp: App {
         SelfTest.runIfRequested() // exits the process when --selftest is passed
         GhosttyResourceBundle.warm() // before any TerminalController
         NoAskSiri.install()
+        PreviewFile.clear() // fetched files from earlier runs
         return AppState(client: client())
     }
 
