@@ -394,7 +394,7 @@ public final class MoomuxClient: Sendable {
     /// Just the worktree half of `status(id:)`: one round trip and one
     /// `git status` on the Go side, with no `git log`. It also refreshes the
     /// remote ref, which `ChangeSummary` does not.
-    public func worktreeStatus(id: String) throws -> SessionStatus {
+    private func worktreeStatus(id: String) throws -> SessionStatus {
         var status = SessionStatus()
         let worktree = try call("WorktreeStatus", Args(id: id))
         status.known = worktree.ok ?? false
@@ -759,16 +759,18 @@ public final class MoomuxClient: Sendable {
     /// connection's socket down with it.
     private final class LiveWatch: @unchecked Sendable {
         private let lock = NSLock()
-        private var socket: StreamSocket?
+        // Every open stream, newest last: `pollOnce` opens a second one beside
+        // the foreground stream, and its end must not forget the first.
+        private var sockets: [StreamSocket] = []
 
-        func adopt(_ socket: StreamSocket) { lock.withLock { self.socket = socket } }
+        func adopt(_ socket: StreamSocket) { lock.withLock { sockets.append(socket) } }
 
         func drop(_ socket: StreamSocket) {
-            lock.withLock { if self.socket === socket { self.socket = nil } }
+            lock.withLock { sockets.removeAll { $0 === socket } }
         }
 
         func nudge() {
-            guard let socket = lock.withLock({ socket }) else { return }
+            guard let socket = lock.withLock({ sockets.last }) else { return }
             try? socket.write(Data(#"{"nudge":true}"#.utf8))
         }
     }

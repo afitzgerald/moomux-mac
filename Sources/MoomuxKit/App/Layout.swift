@@ -139,6 +139,18 @@ public enum Layout {
         "\(folder)\u{0}\(project)"
     }
 
+    /// `groups` with every key of folder `old` moved to `new`, or dropped when
+    /// `new` is nil (the folder was deleted), so a stale name never lingers.
+    public static func regrouped(_ groups: Set<String>, folder old: String, to new: String?) -> Set<String> {
+        let prefix = "\(old)\u{0}"
+        var out = groups
+        for key in groups where key.hasPrefix(prefix) {
+            out.remove(key)
+            if let new { out.insert(groupKey(folder: new, project: String(key.dropFirst(prefix.count)))) }
+        }
+        return out
+    }
+
     /// The folder-first layout (`Snapshot.folderRows`) filtered to what this
     /// window is showing, on the same rules as `rows(_:shown:searching:)`: a
     /// header with nothing in `shown` is not drawn, a collapsed one draws with
@@ -415,6 +427,16 @@ public enum Layout {
         if folder.isEmpty, let above, above.project != dragged.project { return .none }
         if folder == dragged.folder {
             let before = member(of: folder, below)
+            // Above a folder header that leads the project: the gap is not
+            // inside any folder, so place it before the first session below
+            // (the folder's first member, which `insert` takes as an anchor).
+            if before == nil, folder.isEmpty, let below, below.session == nil,
+               below.project == dragged.project {
+                let next = rest.dropFirst(at).first {
+                    $0.project == dragged.project && $0.session != nil
+                }?.session
+                return next == nil ? .none : .file("", after: nil, before: next)
+            }
             return before == nil ? .none : .place(after: nil, before: before)
         }
         return .file(folder, after: member(of: folder, above), before: member(of: folder, below))
@@ -450,7 +472,7 @@ public enum Layout {
         // a, [work: b, c], d — the shape BuildRows produces.
         func layout(collapsed: Bool) -> [Row] {
             [Row(id: "a"),
-             Row(folder: "work", collapsed: collapsed, count: 2),
+             Row(folder: "work", collapsed: collapsed),
              Row(id: "b", folder: "work", hidden: collapsed),
              Row(id: "c", folder: "work", hidden: collapsed),
              Row(id: "d")]
@@ -544,6 +566,11 @@ public enum Layout {
         assert(insert(order, id: "b", before: "c") == nil, "already there")
         assert(move(slots, from: 2, to: 0) == .file("", after: nil, before: "a"), "the top of the section is loose")
         assert(move(slots, from: 1, to: 4) == .none, "a header does not move")
+        let led = [MoveSlot(project: "p"), MoveSlot(folder: "work", project: "p"),
+                   MoveSlot(session: "b", folder: "work", project: "p"),
+                   MoveSlot(session: "d", project: "p")]
+        assert(move(led, from: 3, to: 1) == .file("", after: nil, before: "b"),
+               "above a folder that leads its project is not nowhere")
         // Folder-first: a project subheader files into its folder, and the
         // loose block's header takes a session out.
         let lens = [MoveSlot(folder: "work"),
@@ -593,6 +620,14 @@ public enum Layout {
         assert(moveProject(flat, from: 2, to: 3, order: projects) == nil, "dropped where it was")
         assert(moveProject(flat, from: 1, to: 6, order: projects) == nil, "a session is not a project")
 
+        let keys: Set = [groupKey(folder: "w", project: "p"), groupKey(folder: "w", project: "q"),
+                         groupKey(folder: "x", project: "p")]
+        assert(regrouped(keys, folder: "w", to: "v")
+               == [groupKey(folder: "v", project: "p"), groupKey(folder: "v", project: "q"),
+                   groupKey(folder: "x", project: "p")], "rename carries the folds along")
+        assert(regrouped(keys, folder: "w", to: nil) == [groupKey(folder: "x", project: "p")],
+               "delete drops them")
+
         folderDemo()
     }
 
@@ -605,14 +640,14 @@ public enum Layout {
                     .utf8))
         }
         func layout(collapsed: Bool) -> [FolderRow] {
-            [FolderRow(kind: .folder, folder: "work", collapsed: collapsed, count: 2),
-             FolderRow(kind: .project, folder: "work", project: "one", hidden: collapsed, count: 1),
+            [FolderRow(kind: .folder, folder: "work", collapsed: collapsed),
+             FolderRow(kind: .project, folder: "work", project: "one", hidden: collapsed),
              FolderRow(kind: .session, folder: "work", project: "one", id: "a", hidden: collapsed),
-             FolderRow(kind: .project, folder: "work", project: "two", hidden: collapsed, count: 1),
+             FolderRow(kind: .project, folder: "work", project: "two", hidden: collapsed),
              FolderRow(kind: .session, folder: "work", project: "two", id: "b", hidden: collapsed),
-             FolderRow(kind: .project, project: "one", count: 1),
+             FolderRow(kind: .project, project: "one"),
              FolderRow(kind: .session, project: "one", id: "c"),
-             FolderRow(kind: .project, project: "two", count: 1),
+             FolderRow(kind: .project, project: "two"),
              FolderRow(kind: .session, project: "two", id: "d")]
         }
         let all = [sess("a", "one", "work"), sess("b", "two", "work"),

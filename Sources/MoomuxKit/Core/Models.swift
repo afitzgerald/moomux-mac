@@ -638,26 +638,20 @@ public struct Row: Decodable, Hashable, Sendable {
     /// still holds a position: a manual reorder sends the project's *whole*
     /// order back, or the rows left out keep stale `Order` values.
     public var hidden: Bool
-    /// A header's member counts, one per view a client can be filtered to.
-    public var count: Int
-    public var archivedCount: Int
 
     public var isFolder: Bool { id.isEmpty }
 
     public init(id: String = "", folder: String = "", collapsed: Bool = false,
-                hidden: Bool = false, count: Int = 0, archivedCount: Int = 0) {
+                hidden: Bool = false) {
         self.id = id
         self.folder = folder
         self.collapsed = collapsed
         self.hidden = hidden
-        self.count = count
-        self.archivedCount = archivedCount
     }
 
-    enum CodingKeys: String, CodingKey {
-        case id, folder, collapsed, hidden, count
-        case archivedCount = "archived_count"
-    }
+    // The core also sends per-header member counts; headers here count what
+    // this window shows (`Layout`), so they are not decoded.
+    enum CodingKeys: String, CodingKey { case id, folder, collapsed, hidden }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -665,8 +659,6 @@ public struct Row: Decodable, Hashable, Sendable {
         folder = try c.decodeIfPresent(String.self, forKey: .folder) ?? ""
         collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
         hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
-        count = try c.decodeIfPresent(Int.self, forKey: .count) ?? 0
-        archivedCount = try c.decodeIfPresent(Int.self, forKey: .archivedCount) ?? 0
     }
 }
 
@@ -693,26 +685,18 @@ public struct FolderRow: Decodable, Hashable, Sendable {
     /// A folder header's state. Its subtree is still here, marked `hidden`.
     public var collapsed: Bool
     public var hidden: Bool
-    public var count: Int
-    public var archivedCount: Int
 
     public init(kind: Kind, folder: String = "", project: String = "", id: String = "",
-                collapsed: Bool = false, hidden: Bool = false, count: Int = 0,
-                archivedCount: Int = 0) {
+                collapsed: Bool = false, hidden: Bool = false) {
         self.kind = kind
         self.folder = folder
         self.project = project
         self.id = id
         self.collapsed = collapsed
         self.hidden = hidden
-        self.count = count
-        self.archivedCount = archivedCount
     }
 
-    enum CodingKeys: String, CodingKey {
-        case kind, folder, project, id, collapsed, hidden, count
-        case archivedCount = "archived_count"
-    }
+    enum CodingKeys: String, CodingKey { case kind, folder, project, id, collapsed, hidden }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -725,8 +709,6 @@ public struct FolderRow: Decodable, Hashable, Sendable {
         id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
         collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
         hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
-        count = try c.decodeIfPresent(Int.self, forKey: .count) ?? 0
-        archivedCount = try c.decodeIfPresent(Int.self, forKey: .archivedCount) ?? 0
     }
 }
 
@@ -744,7 +726,6 @@ public struct Snapshot: Decodable, Sendable {
     /// project. Empty from a core that predates it, which is what the sidebar's
     /// fall back to the project-first list is for.
     public var folderRows: [FolderRow]
-    public var pollTime: Date
     public var err: String?
     /// False when the snapshot carried no `views` key at all: a core older
     /// than the derived-state protocol, still sending path-keyed `states` and
@@ -769,7 +750,7 @@ public struct Snapshot: Decodable, Sendable {
     /// The core's own release notes, newest first. Absent from a dev build, a
     /// build without notes, or a core older than the key.
     public var whatsNew: CoreWhatsNew?
-    /// `AgentOptions`' answer as of `pollTime`. Nil means no answer (an older
+    /// `AgentOptions`' answer as of the snapshot. Nil means no answer (an older
     /// core, the error-only snapshot): keep the table already held.
     public var agents: [AgentOption]?
 
@@ -780,7 +761,6 @@ public struct Snapshot: Decodable, Sendable {
         case codexUsage = "codex_usage"
         case usageSetup = "usage_setup"
         case folderRows = "folder_rows"
-        case pollTime = "poll_time"
     }
 
     public init(from decoder: Decoder) throws {
@@ -789,7 +769,6 @@ public struct Snapshot: Decodable, Sendable {
         views = try c.decodeIfPresent([String: SessionView].self, forKey: .views) ?? [:]
         rows = try c.decodeIfPresent([String: [Row]].self, forKey: .rows) ?? [:]
         folderRows = try c.decodeIfPresent([FolderRow].self, forKey: .folderRows) ?? []
-        pollTime = try c.decodeIfPresent(Date.self, forKey: .pollTime) ?? Date()
         err = try c.decodeIfPresent(String.self, forKey: .err)
         // A usage block this build cannot read must not take the session list
         // down with it: it is the least important thing on the snapshot.
@@ -946,7 +925,7 @@ public struct Usage: Decodable, Equatable, Sendable {
     public var headline: [Window] { windows.filter(\.headline) }
 
     public func percent(of window: Window, free: Bool) -> Int {
-        free ? 100 - window.percent : window.percent
+        free ? max(0, 100 - window.percent) : window.percent
     }
 
     /// What goes on the line itself: the headline windows always, and a
@@ -1576,7 +1555,14 @@ public enum Wire {
                                                  "Week 12%, Fable 0% used · resets in 1d 18h"],
                "\(shared.detail(now: resetNow))")
         assert(usage.percent(of: usage.windows[0], free: false) == 82)
+        // A row kind this build has never heard of decodes as an id-less session,
+        // which every renderer drops, rather than failing the snapshot.
+        let odd = try! Wire.decoder.decode(FolderRow.self, from: Data(#"{"kind":"banner","folder":"x"}"#.utf8))
+        assert(odd.kind == .session && odd.id.isEmpty)
         assert(usage.percent(of: usage.windows[0], free: true) == 18)
+        var over = usage.windows[0]
+        over.percent = 104
+        assert(usage.percent(of: over, free: true) == 0, "over the limit is 0% free, not -4%")
         assert(usage.detail(now: resetNow, free: true).first == "5h 18% free · resets in 2h 26m")
         assert(usage.level(of: usage.windows[0], now: resetNow) == .warn)
         assert(usage.level(of: usage.windows[0], now: parseTimestamp("2026-09-30T22:00:00Z")!) == .ok,

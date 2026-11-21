@@ -55,6 +55,8 @@ enum SelfTest {
         GhosttyResourceBundle.demo()
         PromptDrop.demo()
         Attachments.demo()
+        AttachQueue.demo()
+        Snippet.demo()
         PairingLink.demo()
         PairingQR.demo()
         SessionBadges<Never>.demo()

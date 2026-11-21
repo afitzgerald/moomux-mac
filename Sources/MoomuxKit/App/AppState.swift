@@ -2051,7 +2051,7 @@ public final class AppState {
 
             // With the core's layout in hand the sidebar draws its folders, and
             // ⌘↓ steps past the members a collapsed one is hiding.
-            app.rows = ["a": [Row(folder: "wip", collapsed: true, count: 1),
+            app.rows = ["a": [Row(folder: "wip", collapsed: true),
                               Row(id: "a:one", folder: "wip", hidden: true),
                               Row(id: "a:two")]]
             let drawn = app.sidebarRows(of: "a", in: app.sessions.filter { $0.project == "a" })
@@ -2074,6 +2074,57 @@ public final class AppState {
             app.rows = [:]
             assert(app.sidebarRows(of: "a", in: app.sessions.filter { $0.project == "a" })
                 .map(\.id) == ["a:one", "a:two"])
+        }
+
+        // The folder-first lens: folds, ⌘↓ through it, and the drag/drop/archive
+        // entry points that must be no-ops (no core to write to here).
+        MainActor.assumeIsolated {
+            let app = AppState()
+            let wasFolderFirst = app.folderFirst, hadSubheaders = app.showFolderProjects
+            app.folderFirst = true
+            app.showFolderProjects = true
+            app.streamAnswered = true
+            app.config = try! Wire.decoder.decode(Config.self, from: Data(
+                #"{"projects":{"a":{"repo":"/a"}},"order":["a"]}"#.utf8))
+            func filed(_ name: String, _ folder: String) -> Session {
+                try! Wire.decoder.decode(Session.self, from: Data(
+                    #"{"id":"a:\#(name)","project":"a","name":"\#(name)","folder":"\#(folder)"}"#.utf8))
+            }
+            app.sessions = [filed("one", "w"), filed("two", "")]
+            app.folderRows = [FolderRow(kind: .folder, folder: "w"),
+                              FolderRow(kind: .project, folder: "w", project: "a"),
+                              FolderRow(kind: .session, folder: "w", project: "a", id: "a:one"),
+                              FolderRow(kind: .project, project: "a"),
+                              FolderRow(kind: .session, project: "a", id: "a:two")]
+            assert(app.folderView)
+            assert(app.folderSidebarRows.map(\.id) == ["folder:w", "sub:w/a", "a:one", "sub:/a", "a:two"],
+                   "\(app.folderSidebarRows.map(\.id))")
+            let heldFolds = app.collapsedGroups  // the user's own, loaded from defaults
+            app.setFolderProject(folder: "w", project: "a", expanded: false)
+            assert(app.collapsedGroups.contains(Layout.groupKey(folder: "w", project: "a")))
+            assert(!app.folderSidebarRows.map(\.id).contains("a:one"), "a folded subheader hides its members")
+            app.selectedSessionID = "a:one"
+            app.selectAdjacentSession(by: 1)
+            assert(app.selectedSessionID == "a:two", "a hidden selection steps to a visible row")
+            app.setFolderProject(folder: "w", project: "a", expanded: true)
+            assert(app.collapsedGroups == heldFolds, "the fold is persisted state: put it back")
+            app.selectAdjacentSession(by: -1)
+            assert(app.selectedSessionID == "a:one" || app.selectedSessionID == "a:two")
+            // The loose block's fold is the core's flag, never the local set.
+            app.config?.projects["a"]?.collapsed = true
+            assert(app.collapsedGroups.contains(Layout.groupKey(folder: "", project: "a")))
+            app.config?.projects["a"]?.collapsed = false
+
+            // Entry points with nothing to do must not start a write.
+            assert(!app.drop(["a:one"], into: "w", project: "a"), "already filed there")
+            assert(!app.drop(["a:one"], into: "", project: "other"), "another project's loose block")
+            assert(!app.drop(["nosuch"], into: "w", project: "a"))
+            app.setArchived(project: "a", folder: "w", false)
+            app.move([Layout.MoveSlot(session: "a:two", project: "a")], from: IndexSet(integer: 0), to: 1)
+            assert(app.busy == nil, "a no-op must not call the core")
+            app.folderRows = []
+            app.folderFirst = wasFolderFirst
+            app.showFolderProjects = hadSubheaders
         }
 
         // The sidebar's git badges come off the snapshot now — no per-session
@@ -2225,7 +2276,8 @@ public final class AppState {
     ///
     /// A non-nil return replaces `hint`; nil means the action had nothing to
     /// say and leaves whatever is there.
-    private func mutate(_ what: String, _ work: @Sendable @escaping (MoomuxClient) throws -> String?) {
+    private func mutate(_ what: String, onSuccess: (() -> Void)? = nil,
+                        _ work: @Sendable @escaping (MoomuxClient) throws -> String?) {
         Task {
             busy = what
             defer { busy = nil }
@@ -2233,6 +2285,7 @@ public final class AppState {
                 if let hint = try await withoutBlockingTheUI({ [client] in try work(client) }) {
                     self.hint = hint.isEmpty ? nil : hint
                 }
+                onSuccess?()
                 await refresh()
             } catch {
                 failed(what, error)
@@ -2713,7 +2766,9 @@ public final class AppState {
     }
 
     public func renameFolder(from old: String, to new: String) {
-        mutate("Rename folder") {
+        mutate("Rename folder", onSuccess: { [self] in
+            folderProjectCollapsed = Layout.regrouped(folderProjectCollapsed, folder: old, to: new)
+        }) {
             try $0.renameFolder(from: old, to: new)
             return nil
         }
@@ -2741,7 +2796,9 @@ public final class AppState {
     /// which is why this asks nothing. Members in *other* projects go with it:
     /// the folder is one global thing, however few of it this project shows.
     public func deleteFolder(name: String) {
-        mutate("Delete folder") { try $0.deleteFolder(name: name); return nil }
+        mutate("Delete folder", onSuccess: { [self] in
+            folderProjectCollapsed = Layout.regrouped(folderProjectCollapsed, folder: name, to: nil)
+        }) { try $0.deleteFolder(name: name); return nil }
     }
 
     /// Collapsed is one global bit, so this folds the folder in every project

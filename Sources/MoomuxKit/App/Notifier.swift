@@ -203,6 +203,9 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             if state == .needsInput { started.append(id) }
             if old[id] == .needsInput { ended.append(id) }
         }
+        // A session deleted while waiting never reports a state change; its
+        // banner would otherwise sit there for good.
+        for (id, state) in old where state == .needsInput && new[id] == nil { ended.append(id) }
         return (started.sorted(), ended.sorted())  // sorted so demo() can assert
     }
 
@@ -219,10 +222,12 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // Another session's churn is ignored.
         assert(transitions(from: [a: .working, b: .working],
                            to: [a: .working, b: .needsInput]).started == [b])
-        // A session that is simply gone (deleted, or filtered out) is not a
-        // transition either.
+        // A session that is simply gone starts nothing, but a waiting one that
+        // vanished has its banner removed.
         let u = transitions(from: [a: .needsInput, b: .working], to: [b: .working])
-        assert(u.started.isEmpty && u.ended.isEmpty, "\(u)")
+        assert(u.started.isEmpty && u.ended == [a], "\(u)")
+        let v = transitions(from: [a: .working, b: .working], to: [b: .working])
+        assert(v.started.isEmpty && v.ended.isEmpty, "\(v)")
 
         // Archived sessions and the focused one never banner; `focused` is nil
         // whenever the app is not in front, and then everything else does.

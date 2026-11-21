@@ -57,6 +57,27 @@ public struct Snippet: Codable, Hashable, Identifiable {
         let kept = list.filter { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
         UserDefaults.standard.set(try? JSONEncoder().encode(kept), forKey: key)
     }
+
+    public static func demo() {
+        let tag = Snippet(text: "/tag", submit: true)
+        assert(tag.text(for: "claude") == "/tag")
+        assert(tag.text(for: "codex") == "$tag ", "codex spells a skill with $ and a closing space")
+        assert(Snippet(text: "/clear", submit: true).text(for: "codex") == "/clear", "not a moomux skill")
+        assert(Snippet(text: "y", submit: true).text(for: "codex") == "y")
+        // A scratch key, so the user's own list is untouched.
+        let key = "snippets.selftest"
+        let store = UserDefaults.standard
+        defer { store.removeObject(forKey: key); store.removeObject(forKey: key + ".unreadable") }
+        store.removeObject(forKey: key)
+        assert(saved(key).isEmpty, "a prompt-style key starts empty")
+        save([Snippet(text: "a", submit: true), Snippet(text: "  ", submit: true)], key)
+        assert(saved(key).map(\.text) == ["a"], "blank rows are dropped on save")
+        save([], key)
+        assert(saved(key).isEmpty, "an emptied list stays empty")
+        store.set(Data("nope".utf8), forKey: key)
+        assert(saved(key).isEmpty && store.data(forKey: key + ".unreadable") != nil,
+               "an unreadable list is kept aside")
+    }
 }
 
 /// Add, remove, reorder and edit the key bar's snippets, or the first
