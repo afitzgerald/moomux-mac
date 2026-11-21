@@ -153,4 +153,31 @@ public final class AttachQueue {
         tasks.forEach { $0.cancel() }
         tasks = []
     }
+
+    /// Drives real jobs through the main run loop, which is what runs a
+    /// `@MainActor` task from a synchronous selftest.
+    public nonisolated static func demo() {
+        struct Boom: LocalizedError { var errorDescription: String? { "boom" } }
+        MainActor.assumeIsolated {
+            let queue = AttachQueue()
+            var landed: [String] = [], finished = 0
+            queue.run([{ "a" }, { throw Boom() }, { "b" }],
+                      landed: { landed.append($0) }, finished: { finished += 1 })
+            assert(queue.pending == 3)
+            let end = Date().addingTimeInterval(3)
+            while finished == 0 && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+            assert(landed == ["a", "b"], "jobs run in order, a failure does not stop the batch: \(landed)")
+            assert(queue.pending == 0 && finished == 1)
+            assert(queue.error == "Couldn't attach one file: boom", "\(String(describing: queue.error))")
+            var empty = 0
+            queue.run([], landed: { _ in }, finished: { empty += 1 })
+            assert(empty == 1 && queue.pending == 0, "an empty batch finishes at once")
+            queue.run([{ "c" }], landed: { landed.append($0) })
+            assert(queue.error == nil, "the next batch clears the error")
+            queue.cancelAll()
+            let settle = Date().addingTimeInterval(0.2)
+            while queue.pending != 0 && Date() < settle { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+            assert(queue.pending == 0, "a cancelled run still gives back its count")
+        }
+    }
 }

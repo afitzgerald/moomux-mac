@@ -511,8 +511,8 @@ core new enough to serve them** — there is no fallback to the old local paths.
   sessions filed nowhere, by project, last. `Layout.folderRows` filters that to the window the same
   way `Layout.rows` does: a header with nothing in view is not drawn, a collapsed one carries the
   count of what it hides — the *number* is spoken, not drawn: no header renders a count badge any
-  more, and `count`/`hidden` survive on the rows to decide what is drawn at all and to fill the
-  accessibility labels — and a search reaches inside both. Indentation is one rule in both lenses,
+  more. `Layout` recomputes the number from the sessions in view (the core's own per-header counts
+  are not decoded), and `hidden` on the rows decides what is drawn at all — and a search reaches inside both. Indentation is one rule in both lenses,
   and it is a **column grid**, not a per-row padding: `SidebarGrid` lays every row out as
   `[indent][disclosure][icon][name]` with the disclosure and icon columns fixed-width, left *empty*
   rather than skipped by a row that has neither. So a name's x follows from its nesting level and
