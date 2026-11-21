@@ -35,7 +35,7 @@ enum Route: Hashable {
 
 // MARK: - List
 
-/// Project-first, the same order the core served — `AppState.sessionsByProject`
+/// Project-first, the same order the core served — `AppState.projectFirstRows`
 /// is the Mac sidebar's source too, so the two front ends cannot disagree
 /// about what is in the list or what order it is in.
 struct SessionListView: View {

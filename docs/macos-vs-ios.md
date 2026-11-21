@@ -387,7 +387,7 @@ edit mode, as Mail does, with Merged or Closed and Delete in the bottom bar. *Wh
 | Detach | toolbar Detach (`controller = nil`) | Back |
 | Resize | live | 250ms settle, then `ResizeAttach` in place; reattach against an older core |
 | Link drop | not a failure mode | "connection lost — reconnecting", 2s retry |
-| Focus | taken on `viewDidMoveToWindow` | tap to type |
+| Focus | taken on `viewDidMoveToWindow`, keyboard follows | taken on first arrival with the keyboard down; tap to raise it |
 | Links | ⌘-click | tap, probed as ⌘-click |
 | Look | the user's Ghostty config | built-in dark + phone padding |
 | Size control | ⌘+ / ⌘− zoom (ghostty's own, kept in `paneKeybinds`) | Text Size in the pane's ⋯ menu, plus pinch; both saved |
@@ -566,10 +566,12 @@ A menu change goes through the same call, so the surface is never rebuilt; the n
 the pty as an ordinary resize (D27). *Where:* `AppState.paneConfig`, `TerminalFontSize`,
 `LinkTapView.setFontSize`.
 
-**D31. Focus: automatic on the Mac, tap-to-type on the phone.** The Mac takes first responder in
-`viewDidMoveToWindow`, because SwiftUI leaves it on the sidebar. The phone deliberately does not:
-the software keyboard covers half the pane, and most of the value there is reading what the agent
-is asking. Raising the keyboard shrinks the surface, which triggers a reattach (D27). Suspect that
+**D31. Focus: the Mac raises the keyboard, the phone focuses with it down.** The Mac takes first
+responder in `viewDidMoveToWindow`, because SwiftUI leaves it on the sidebar. The phone also takes
+first responder once, on arrival (`didMoveToWindow`), but with the software keyboard hidden: the
+key bar is an accessory view that only exists while the view is first responder, and the keyboard
+would cover half the pane, where most of the value is reading what the agent is asking. A tap
+raises the keyboard. Raising it shrinks the surface, which triggers a reattach (D27). Suspect that
 first if input misbehaves right after the keyboard appears.
 
 **D32. A scroll fix on the Mac only, because the phone's package grew its own.** ghostty reports
@@ -718,7 +720,7 @@ navigated to the terminal.
 | | Mac (`SessionList`) | iPhone (`SessionListView`) |
 |---|---|---|
 | Lenses | project-first / folder-first, ⇧⌘F | the same two, ⋯ → Group by Folder |
-| Project header | plain `.selectionDisabled()` row | `Section` header (project-first) or row (folder-first) |
+| Project header | plain `.selectionDisabled()` row | the same |
 | Row | state icon + name + badges on one line | the same |
 | Quip | toolbar title for the selection | toolbar title of the attached pane |
 | Font | Settings → Appearance (family, size) | system, `SidebarGrid.phoneFont` |
@@ -737,9 +739,9 @@ session on a phone and pushed three sessions off the screen. So the badges sit r
 the name's line and the name truncates at the tail, and the Mac does the same so the two lists
 read alike. The quip moved to the pane's title, where it describes the session you are in.
 
-**D43. Plain rows for Mac headers, `Section` headers on the phone.** A Mac sidebar `Section` keeps
+**D43. Plain rows for headers, on both.** A Mac sidebar `Section` keeps
 its own hidden disclosure state, which falls out of phase with the core's collapsed flag at
-launch. The phone's `Section` has no such state, but the phone now uses plain rows too, so a
+launch. The phone's `Section` has no such state, but it uses plain rows too, so a
 project header can be dragged (see D44's last paragraph). Both lenses are one flat list on both.
 Both lay rows out on `SidebarGrid`'s columns and rotate one chevron rather than swapping glyphs of
 different widths.
@@ -939,7 +941,7 @@ platform.
 **D50. Screens are reached differently because input is.** The Mac has `Scripts/ui.swift`, which
 walks the AX tree and refuses to drive any build but this worktree's. The simulator cannot be
 driven that way, so the phone reads launch arguments from `UserDefaults`' argument domain:
-`-coreHost`, `-corePort`, `-openSession <id>`, `-attach 1`, `-changes YES`, `-diffFile <path>`
+`-coreHost`, `-corePort`, `-openSession <id>`, `-attach 1`, `-browser YES`, `-browserURL <url>`, `-changes YES`, `-diffFile <path>`
 and `-newSession YES`. `simctl io screenshot` needs no Screen Recording grant; `make shot` does.
 
 Traps on the phone side that are not written down anywhere else (`CLAUDE.md` has the simulator

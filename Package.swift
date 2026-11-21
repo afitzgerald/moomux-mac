@@ -21,7 +21,7 @@ let package = Package(
         .library(name: "MoomuxKit", type: .static, targets: ["MoomuxKit"])
     ],
     dependencies: [
-        // The one dependency: Ghostty's terminal engine, as a prebuilt
+        // Ghostty's terminal engine, as a prebuilt
         // xcframework wrapped in a Swift package (MIT). Reached only through
         // UI/TerminalPane.swift and UI/SessionGrid.swift.
         //

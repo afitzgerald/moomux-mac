@@ -1,6 +1,6 @@
 # Moomux.app
 
-The native macOS front end. SwiftUI, SwiftPM executable, one dependency (libghostty), driving the
+The native macOS front end. SwiftUI, SwiftPM executable, two dependencies (libghostty, DiffKit), driving the
 Go core over the `moomux serve` unix socket — see `docs/native-macos-rewrite.md` for why this shape
 and not a rewrite. This file is for working on it; the Go side's `AGENTS.md` still governs
 everything outside `macos/`.
@@ -380,7 +380,7 @@ inversion check whenever you add a check that matters.
 README won't tell you — this is how `#Preview`-using libraries get caught. Both terminal
 dependencies were spiked this way before going into `Package.swift`: SwiftTerm first, then
 libghostty-spm (links clean under CommandLineTools, the binary runs unbundled so `make selfcheck`
-survives, no `#Preview` anywhere in it). It is currently the only one, which is a fact about how
+survives, no `#Preview` anywhere in it). It was the only one for a long time, which is a fact about how
 little this app has needed rather than a rule — add a dependency when it earns its place, and
 spike it first.
 
@@ -412,7 +412,7 @@ and PR status. Nothing on it is re-derived here and nothing on it is polled for 
 out to draw it, that is a hole in the protocol, not a thing to implement here.
 
 ```
-Core/UnixSocket.swift    AF_UNIX plumbing; blocking, closed to cancel
+Core/StreamSocket.swift  AF_UNIX plumbing; blocking, closed to cancel
 Core/Models.swift        the wire types + JSON coding + Wire.demo()
 Core/MoomuxClient.swift  the Swift half of internal/ipc
 Core/ToolPath.swift      finding tmux without a shell's PATH
@@ -576,7 +576,7 @@ core new enough to serve them** — there is no fallback to the old local paths.
   on the rest. `Wire.parseTimestamp` drops the fraction; nothing displays sub-second time.
 - **`close` on a socket class shadows the global.** Write `Darwin.close(fd)` inside a type that has
   its own `close()`, or the compiler resolves to the instance method and errors.
-- **`sockaddr_un.sun_path` is 104 bytes.** Scratchpad paths blow past that — `UnixSocket` refuses
+- **`sockaddr_un.sun_path` is 104 bytes.** Scratchpad paths blow past that — `StreamSocket` refuses
   rather than connecting to a truncated path, and this already happened once in practice. Put test
   sockets somewhere short, e.g. `/tmp/mmx.sock`.
 - **Every `MoomuxClient` call blocks.** Anything touching git or tmux takes seconds on the Go side.

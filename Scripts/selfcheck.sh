@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Runs the assert-based demo() self-checks, through the real app binary.
 #
-# There is no test target and there cannot be one: neither XCTest nor
-# swift-testing exists in a command-line-tools toolchain, both ship inside
-# Xcode. So the checks are assert-based functions compiled alongside the code
-# they verify, and `Moomux --selftest` runs them.
+# There is no test target: neither XCTest nor swift-testing exists in a
+# command-line-tools toolchain, both ship inside Xcode, and the build here
+# does not require Xcode. So the checks are assert-based functions compiled
+# alongside the code they verify, and `Moomux --selftest` runs them.
 #
 # The build here is DEBUG on purpose, and that is the whole subtlety:
 # `swift build -c release` passes -O, and -O deletes every `assert`, so a

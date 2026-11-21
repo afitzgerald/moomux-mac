@@ -7,8 +7,8 @@ import SwiftUI
 /// Same one-way flow as the Mac app — `moomux serve` → `MoomuxClient` →
 /// `AppState` → views — with two differences forced by the platform. The
 /// transport is TCP across a tailnet rather than a unix socket, and there is
-/// no `.exec` terminal: attaching waits on the core's `Attach` stream, which
-/// does not exist yet. Everything the wire already serves works today.
+/// no `.exec` terminal: attaching goes through the core's `Attach` stream
+/// (`AttachChannel`) instead.
 @main
 struct MoomuxiOSApp: App {
     @State private var computers = ComputerStore()
