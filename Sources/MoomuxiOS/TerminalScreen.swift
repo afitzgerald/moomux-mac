@@ -27,6 +27,10 @@ struct TerminalScreen: View {
     let closeAfterDelete: (Session.ID) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    /// Set once the screen is leaving, so a second dismiss — the far end
+    /// closing after Kill tmux has already left — cannot pop the list too.
+    @State private var leaving = false
 
     /// The pane's text size, and therefore the attached session's width — see
     /// the note on `fontSize` below. Set from the ⋯ menu's Text Size or by a
@@ -74,7 +78,7 @@ struct TerminalScreen: View {
                          // reason to exist: tmux exited, the session was
                          // killed, the core went down. Leaving a dead pane up
                          // makes the user dismiss a window to learn nothing.
-                         onEnded: { dismiss() },
+                         onEnded: leave,
                          onURL: open(url:),
                          onFile: open(file:),
                          onPinch: { fontSize = $0 },
@@ -90,6 +94,11 @@ struct TerminalScreen: View {
             // pinch would redraw the pane from nothing. The new width reaches
             // the pty through the ordinary resize path.
             .onChange(of: fontSize) { _, size in pane.view?.setFontSize(size) }
+            // The attach socket may have died while backgrounded; see
+            // `RemoteAttach.resume`.
+            .onChange(of: scenePhase) { old, phase in
+                if old == .background, phase != .background { pane.resume?() }
+            }
             .onAppear {
                 app.paneOnScreen = sessionID
                 // Navigation back can run before UIKit finishes bringing the pane forward.
@@ -215,7 +224,7 @@ struct TerminalScreen: View {
                 Button("Kill tmux", role: .destructive) {
                     guard let session else { return }
                     closeActions {
-                        dismiss()
+                        leave()
                         app.killTmux(session)
                     }
                 }
@@ -224,6 +233,12 @@ struct TerminalScreen: View {
             }
         }
         .presentationDragIndicator(.visible)
+    }
+
+    private func leave() {
+        guard !leaving else { return }
+        leaving = true
+        dismiss()
     }
 
     private func closeActions(then action: @escaping () -> Void) {
@@ -343,6 +358,8 @@ struct TerminalScreen: View {
 /// The live surface, for the toolbar to paste into and resize the text of.
 final class PaneHandle {
     weak var view: AttachedTerminal.LinkTapView?
+    /// Reattaches the pane after the app returns from the background.
+    var resume: (() -> Void)?
 }
 
 struct AttachedTerminal: UIViewRepresentable {
@@ -370,6 +387,7 @@ struct AttachedTerminal: UIViewRepresentable {
         view.keyBar.onFiles = onFiles
         view.keyBar.onEditSnippets = onEditSnippets
         pane.view = view
+        pane.resume = { [weak coordinator = context.coordinator] in coordinator?.resume() }
         view.delegate = context.coordinator
         view.controller = controller
         view.configuration = TerminalSurfaceOptions(
@@ -565,7 +583,7 @@ struct AttachedTerminal: UIViewRepresentable {
                 guard steps != 0 else { return }
                 pinchScale += CGFloat(steps) * 0.1
                 setFontSize(liveFontSize + Double(steps))
-            case .ended:
+            case .ended, .cancelled:
                 onPinch?(liveFontSize)
             default:
                 break
@@ -708,6 +726,8 @@ struct AttachedTerminal: UIViewRepresentable {
 
         /// Permanent: the pane is going away.
         func teardown() { remote.teardown() }
+
+        func resume() { remote.resume() }
 
         /// Read back by `LinkTapView`'s probe.
         var hoverLink: String?

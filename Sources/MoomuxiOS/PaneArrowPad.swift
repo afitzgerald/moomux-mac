@@ -55,6 +55,7 @@ final class PaneArrowPad: UIView {
 
         let grip = PadSurface()
         grip.translatesAutoresizingMaskIntoConstraints = false
+        grip.isAccessibilityElement = true
         grip.accessibilityLabel = "Move Arrow Pad"
         let bar = UIView()
         bar.translatesAutoresizingMaskIntoConstraints = false
@@ -99,13 +100,25 @@ final class PaneArrowPad: UIView {
         guard let terminal = superview, let centerX, let bottom else { return }
         let reach = max(0, (terminal.bounds.width - bounds.width) / 2)
         let x = min(max(centerX.constant, -reach), reach)
-        let y = min(max(bottom.constant, min(0, bounds.height - terminal.bounds.height)), 0)
+        let y = min(max(bottom.constant, min(0, bounds.height * fit - terminal.bounds.height)), 0)
         if x != centerX.constant { centerX.constant = x }
         if y != bottom.constant { bottom.constant = y }
     }
 
+    /// Shrinks the pad when the terminal is shorter than it is — landscape
+    /// with the keyboard up leaves about 150pt for its 220 — so the handle
+    /// stays on screen to drag. Scaled about the bottom edge, which is the
+    /// edge the constraints position.
+    private var fit: CGFloat {
+        guard let terminal = superview, bounds.height > 0 else { return 1 }
+        return min(1, max(0.5, (terminal.bounds.height - 12) / bounds.height))
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        let s = fit
+        transform = CGAffineTransform(scaleX: s, y: s)
+            .concatenating(CGAffineTransform(translationX: 0, y: (1 - s) * bounds.height / 2))
         clamp()
     }
 

@@ -43,8 +43,14 @@ public struct Computers: Codable, Equatable, Sendable {
     /// other. ponytail: a computer whose tailnet address changed comes back as
     /// a second entry; Forget the dead one.
     public mutating func add(host: String, port: Int, name: String) {
-        let host = host.trimmed
-        if let i = list.firstIndex(where: { $0.host == host && $0.port == port }) {
+        // DNS names compare without case or a trailing root dot.
+        func norm(_ h: String) -> String {
+            var h = h.trimmed.lowercased()
+            if h.hasSuffix(".") { h.removeLast() }
+            return h
+        }
+        let host = norm(host)
+        if let i = list.firstIndex(where: { norm($0.host) == host && $0.port == port }) {
             if !name.isEmpty { list[i].codeName = name }
             currentID = list[i].id
         } else {
@@ -92,6 +98,10 @@ public struct Computers: Codable, Equatable, Sendable {
         // had, and a different port is a different core.
         c.add(host: "100.64.0.1", port: 45876, name: "")
         assert(c.current?.displayName == "MacBook-Pro-2")
+        var d = Computers()
+        d.add(host: "Mac.Example.", port: 45876, name: "")
+        d.add(host: "mac.example", port: 45876, name: "")
+        assert(d.list.count == 1, "case and a trailing dot name the same host")
         c.add(host: "100.64.0.1", port: 8765, name: "")
         assert(c.list.count == 3 && c.current?.displayName == "100.64.0.1")
 

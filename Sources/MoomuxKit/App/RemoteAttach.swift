@@ -199,8 +199,12 @@ public final class RemoteAttach {
             } catch {
                 Task { @MainActor [weak self] in
                     guard let self, !self.done.isSet, self.channel === channel else { return }
+                    // The newest size, not this refused one: a later resize
+                    // may have been queued behind it, and its own fallback
+                    // is skipped once `stop` has dropped the channel.
+                    let latest = self.attachedSize ?? size
                     self.stop()
-                    self.start(columns: size.columns, rows: size.rows)
+                    self.start(columns: latest.columns, rows: latest.rows)
                 }
             }
         }
@@ -315,6 +319,16 @@ public final class RemoteAttach {
             done.set()
             await MainActor.run { [weak self] in self?.onEnded() }
         }
+    }
+
+    /// Back from the background: the socket may be dead without knowing it
+    /// yet, so keys typed now would go into it. Reattach at the current size;
+    /// `start` checks the session survived, and keys typed meanwhile buffer.
+    public func resume() {
+        guard !done.isSet, let size = attachedSize else { return }
+        stop()
+        attachedSize = size
+        start(columns: size.columns, rows: size.rows)
     }
 
     /// Permanent: the pane is going away. Anything that could start a new

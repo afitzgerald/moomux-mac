@@ -45,6 +45,8 @@ enum Route: Hashable {
 /// is the Mac sidebar's source too, so the two front ends cannot disagree
 /// about what is in the list or what order it is in.
 struct SessionListView: View {
+    /// Scales with Dynamic Type, as the `.body` text beside it does.
+    @ScaledMetric(relativeTo: .body) private var gridFont = SidebarGrid.phoneFont
     @Bindable var app: AppState
     let computers: ComputerStore
     let select: (UUID) -> Void
@@ -171,6 +173,7 @@ struct SessionListView: View {
         // wins the long press, which the drag below needs.
         SessionRow(app: app, session: session)
             .contentShape(Rectangle())
+            .accessibilityAddTraits(.isButton)
             // Off in Select mode, where a tap is the list's own checkmark.
             .gesture(TapGesture().onEnded {
                 if app.isAlive(session) { showTerminal(session.id) }
@@ -213,7 +216,7 @@ struct SessionListView: View {
             // `rowIndent`, not `indent`: a session pays for the disclosure
             // column it has no chevron for, which is what puts its state icon
             // one clean step right of the icon of the header above it.
-            .padding(.leading, SidebarGrid.rowIndent(indent - 1, SidebarGrid.phoneFont))
+            .padding(.leading, SidebarGrid.rowIndent(indent - 1, gridFont))
             // The folder-first lens has no card per project, so the header
             // band is what groups; rules between sessions would fight it.
             .listRowSeparator(app.folderView ? .hidden : .automatic)
@@ -258,7 +261,7 @@ struct SessionListView: View {
                     HStack(spacing: SidebarGrid.gap) {
                         Image(systemName: "chevron.right")
                             .font(.caption2)
-                            .frame(width: SidebarGrid.disclosure(SidebarGrid.phoneFont))
+                            .frame(width: SidebarGrid.disclosure(gridFont))
                             .rotationEffect(.degrees(collapsed ? 0 : 90))
                         Text([app.listEmoji(for: name), name]
                             .compactMap { $0 }.joined(separator: " "))
@@ -267,7 +270,7 @@ struct SessionListView: View {
                         Spacer(minLength: 6)
                     }
                     .contentShape(Rectangle())
-                    .padding(.leading, SidebarGrid.indent(1, SidebarGrid.phoneFont))
+                    .padding(.leading, SidebarGrid.indent(1, gridFont))
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
@@ -468,7 +471,7 @@ struct SessionListView: View {
             // session's terminal, which a jump would detach.
             .sheet(isPresented: $creating) { NewSessionSheet(app: app, focus: { path.isEmpty }) }
             .sheet(isPresented: $showingComputers) {
-                ComputersSheet(computers: computers, select: select, add: add, forget: forget)
+                ComputersSheet(computers: computers, busy: app.busy != nil, select: select, add: add, forget: forget)
             }
             // A refused create reopens its sheet with the form as it was sent,
             // unless another sheet is up; then the alert says where it went.
@@ -545,6 +548,8 @@ struct SessionListView: View {
 /// folds that folder in every project at once — `SetFolderCollapsed`'s own
 /// behaviour, not something this app decides.
 private struct FolderHeader: View {
+    /// Scales with Dynamic Type, as the `.body` text beside it does.
+    @ScaledMetric(relativeTo: .body) private var gridFont = SidebarGrid.phoneFont
     let app: AppState
     let name: String
     let collapsed: Bool
@@ -578,17 +583,17 @@ private struct FolderHeader: View {
                 Image(systemName: "chevron.right")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .frame(width: SidebarGrid.disclosure(SidebarGrid.phoneFont))
+                    .frame(width: SidebarGrid.disclosure(gridFont))
                     .rotationEffect(.degrees(collapsed ? 0 : 90))
                 Image(systemName: collapsed ? "folder.fill" : "folder")
                     .foregroundStyle(.secondary)
-                    .frame(width: SidebarGrid.icon(SidebarGrid.phoneFont))
+                    .frame(width: SidebarGrid.icon(gridFont))
                 Text(name).font(.subheadline.weight(.medium))
                 Spacer(minLength: 6)
             }
             .contentShape(Rectangle())
             .padding(.vertical, 2)
-            .padding(.leading, SidebarGrid.indent(level, SidebarGrid.phoneFont))
+            .padding(.leading, SidebarGrid.indent(level, gridFont))
         }
         .contentShape(Rectangle())
         .onTapGesture { app.setFolder(name: name, collapsed: !collapsed) }
@@ -621,6 +626,8 @@ private struct FolderHeader: View {
 /// flag is the core's and survives a restart, so it reads the same in both
 /// front ends.
 private struct ProjectHeader: View {
+    /// Scales with Dynamic Type, as the `.body` text beside it does.
+    @ScaledMetric(relativeTo: .body) private var gridFont = SidebarGrid.phoneFont
     let app: AppState
     let name: String
     /// What a collapsed header is hiding. Spoken in the accessibility label,
@@ -632,7 +639,7 @@ private struct ProjectHeader: View {
         HStack(spacing: SidebarGrid.gap) {
             Image(systemName: "chevron.right")
                 .font(.caption2)
-                .frame(width: SidebarGrid.disclosure(SidebarGrid.phoneFont))
+                .frame(width: SidebarGrid.disclosure(gridFont))
                 .rotationEffect(.degrees(expanded ? 90 : 0))
             // An empty emoji draws nothing rather than a computed glyph,
             // same as the Mac app — `emoji(for:)` returns only what the
@@ -673,6 +680,8 @@ private struct ProjectHeader: View {
 }
 
 private struct SessionRow: View {
+    /// Scales with Dynamic Type, as the `.body` text beside it does.
+    @ScaledMetric(relativeTo: .body) private var gridFont = SidebarGrid.phoneFont
     let app: AppState
     let session: Session
 
@@ -694,7 +703,7 @@ private struct SessionRow: View {
             // construction rather than by two tables kept in step.
             Image(systemName: app.state(for: session).symbol)
                 .foregroundStyle(SessionTheme.color(app.state(for: session), app.palette))
-                .frame(width: SidebarGrid.icon(SidebarGrid.phoneFont))
+                .frame(width: SidebarGrid.icon(gridFont))
                 .accessibilityLabel(app.state(for: session).label)
             Text(session.name)
                 .font(.body)

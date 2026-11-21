@@ -264,7 +264,9 @@ answers at once with a whole snapshot, or with the reason the core is gone.
   app pid), and a session renamed in the store while the app was away showed its new name on
   return.
 
-The pane's own connection has the same half-open window (D28 notices only when a read fails).
+The pane's own connection has the same half-open window (D28 notices only when a read fails), so
+the open pane reattaches on the same event: `RemoteAttach.resume`, from `TerminalScreen`'s
+`scenePhase` handler. It checks the session survived first, and keys typed meanwhile are buffered.
 *Where:* `AppState.resume`, `MoomuxiOSApp`'s `scenePhase` handler.
 
 **D55. The phone connects from a pairing link; the Mac only draws one.** `moomux pair` and the
