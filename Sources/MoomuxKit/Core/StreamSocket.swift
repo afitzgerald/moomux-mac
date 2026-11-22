@@ -344,19 +344,6 @@ public final class StreamSocket {
         }
     }
 
-    /// Writes `bytes` in 4 KB pieces, retrying short writes, then closes `fd`.
-    /// One 200 KB `write` into a socketpair is not guaranteed to be accepted
-    /// whole on every kernel; a failed one left the reader with an empty
-    /// stream, which `readToEnd` reports as a clean EOF rather than "too long".
-    private static func floodWrite(_ fd: Int32, _ bytes: [UInt8]) {
-        var sent = 0
-        while sent < bytes.count {
-            let n = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress! + sent, min(4096, bytes.count - sent)) }
-            if n > 0 { sent += n } else if n < 0, errno == EINTR || errno == EAGAIN || errno == ENOBUFS { usleep(1000) } else { break }
-        }
-        Darwin.close(fd)
-    }
-
     public static func demo() {
         assert(isTailnet(v4: [100, 64, 0, 1]) && isTailnet(v4: [100, 127, 255, 255]))
         assert(!isTailnet(v4: [100, 63, 255, 255]) && !isTailnet(v4: [100, 128, 0, 0]))
@@ -389,30 +376,39 @@ public final class StreamSocket {
 
         // Read caps: a line splits at the newline and keeps the tail, and a
         // peer that overruns the limit gets an error, not unbounded memory.
+        // The payload fits in the socket buffer, so each peer can write and
+        // signal EOF before the reader starts.
+        let overLimit = Data(repeating: 65, count: 101)
         if socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0 {
             let socket = StreamSocket(adopting: pair[0])
-            _ = Darwin.write(pair[1], "ab\ncd\n", 6)
+            let peer = StreamSocket(adopting: pair[1])
+            try! peer.write(Data("ab\ncd\n".utf8))
             let first = try? socket.readLine(limit: 8)
             let second = try? socket.readLine(limit: 8)
             assert(first == .some(Data("ab".utf8)), "readLine must split at the newline")
             assert(second == .some(Data("cd".utf8)), "readLine must keep the tail")
-            let flood = [UInt8](repeating: 65, count: 200_000)
-            Self.silenceSigPipe(pair[1])  // the reader closes first; the flood must not SIGPIPE
-            Thread { Self.floodWrite(pair[1], flood) }.start()
-            var capped = false
-            do { _ = try socket.readLine(limit: 100) } catch { capped = true }
-            assert(capped, "an over-long line must throw")
-            socket.close()
+            try! peer.write(overLimit)
+            peer.closeWrite()
+            do {
+                _ = try socket.readLine(limit: 100)
+                assertionFailure("an over-long line must throw")
+            } catch Failure.tooLong(limit: 100) {
+            } catch {
+                assertionFailure("unexpected line read error: \(error)")
+            }
         }
         if socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0 {
             let socket = StreamSocket(adopting: pair[0])
-            let flood = [UInt8](repeating: 65, count: 200_000)
-            Self.silenceSigPipe(pair[1])  // the reader closes first; the flood must not SIGPIPE
-            Thread { Self.floodWrite(pair[1], flood) }.start()
-            var capped = false
-            do { _ = try socket.readToEnd(limit: 100) } catch { capped = true }
-            assert(capped, "an over-long reply must throw")
-            socket.close()
+            let peer = StreamSocket(adopting: pair[1])
+            try! peer.write(overLimit)
+            peer.closeWrite()
+            do {
+                _ = try socket.readToEnd(limit: 100)
+                assertionFailure("an over-long reply must throw")
+            } catch Failure.tooLong(limit: 100) {
+            } catch {
+                assertionFailure("unexpected reply read error: \(error)")
+            }
         }
 
         // A refused TCP connect must *throw*, not hang and not succeed: the
