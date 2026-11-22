@@ -33,6 +33,10 @@ too. Where a library offers a choice of license, the one Moomux takes is named.
 | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (embedded font) | [SIL OFL 1.1](https://openfontlicense.org) | Copyright 2020 The JetBrains Mono Project Authors |
 | [Symbols Nerd Font](https://github.com/ryanoasis/nerd-fonts) (embedded font) | [SIL OFL 1.1](https://openfontlicense.org), glyphs per its [license audit](https://github.com/ryanoasis/nerd-fonts/blob/-/license-audit.md) | Copyright (c) 2016, Ryan McIntyre |
 
+The full SIL OFL 1.1 and LGPL-2.1 texts follow in `LICENSE-OFL-1.1` and
+`LICENSE-LGPL-2.1`, bundled beside this file and shown after it in
+Acknowledgements.
+
 libintl's source is available from the GNU gettext project above. libghostty's
 source, the work it is linked into, is at https://github.com/ghostty-org/ghostty.
 

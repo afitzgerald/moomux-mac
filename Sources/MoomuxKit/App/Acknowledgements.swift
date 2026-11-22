@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The app's own LICENSE and the third-party notices, as bundled by `make app`,
+/// The app's own LICENSE, the third-party notices and the SIL OFL and LGPL texts they link, as bundled by `make app`,
 /// `make ios` and the Xcode target. MIT and the BSD licenses in the notices
 /// require them to ship with the binary; this is where a user can read them.
 ///
@@ -8,7 +8,7 @@ import SwiftUI
 /// text and one table, which reads fine raw, and rendering Markdown tables is
 /// something SwiftUI's `AttributedString` does not do.
 public enum Acknowledgements {
-    public static let text: String = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+    public static let text: String = ["LICENSE", "THIRD_PARTY_NOTICES.md", "LICENSE-OFL-1.1", "LICENSE-LGPL-2.1"]
         .compactMap { name -> String? in
             let file = name as NSString
             let ext = file.pathExtension
