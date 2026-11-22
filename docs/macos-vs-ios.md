@@ -224,6 +224,12 @@ The core side, as built:
   nothing. The core refuses `Pair` when it arrives over the tailnet listener. The value is
   readable on every snapshot as a diagnostic.
 - **Bind.** The tailnet address only, never `0.0.0.0`.
+- **Client pinning (phone, TCP only).** Before dialling a non-loopback address,
+  `StreamSocket` requires a `utun` interface holding a `100.64.0.0/10` or
+  `fd7a:115c:a1e0::/48` address and binds the socket to it (`IP_BOUND_IF`), so with Tailscale off
+  nothing is sent to whatever answers a `*.ts.net` name or CGNAT address on the local network.
+  Loopback dials as-is for the scratch-core bridge and the simulator. Still open: a hostile
+  tailnet member's `moomux://connect` link (attack B) needs a per-pairing secret, a core change.
 - **Peer cache.** Authorized peers are cached for 60s, so `tailscale` does not fork on every
   `Accept`.
 - **Failure.** A failure to bind is logged and never fatal; the unix socket keeps serving.
