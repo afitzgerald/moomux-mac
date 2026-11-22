@@ -20,6 +20,42 @@ This repo was split out of moomux's `macos/` directory (history preserved via `g
 `docs/native-macos-rewrite.md` is the design doc that led to this shape; `CLAUDE.md` has the
 day-to-day working notes (build commands, screenshot workflow, tmux and terminal gotchas).
 
+## Displaying images in the terminal
+
+Moomux's embedded Ghostty renderer displays Kitty graphics in live tmux panes.
+
+1. Install `kitten` with Homebrew. You can keep using Moomux as your terminal.
+
+   ```sh
+   brew install --cask kitty
+   ```
+
+2. Enable passthrough. Run this inside a live Moomux pane to update the running tmux server.
+   To keep the setting across restarts, add `set -g allow-passthrough on` to `~/.tmux.conf`.
+
+   ```sh
+   tmux set -g allow-passthrough on
+   ```
+
+3. Run this inside the live pane with the path to a PNG or JPEG on the machine running tmux.
+
+   ```sh
+   kitten icat --passthrough=tmux --transfer-mode=stream --stdin=no "/path/to/image.png"
+   ```
+
+If `icat` reports `Failed to open controlling terminal`, run it at a shell prompt in Moomux.
+Session Grid uses tmux text snapshots, which omit image data.
+
+To have your agent show images when you ask, add this instruction to your global
+`AGENTS.md` and start a new session.
+
+> When I ask to see a local image, find my tmux session from a valid `TMUX_PANE` or
+> a unique worktree match. Check `tmux list-clients -F '#{client_session} #{client_termname}'`
+> for an attached `xterm-ghostty` client on that session. Open a new `image-preview`
+> window there and run `kitten icat --passthrough=tmux --transfer-mode=stream --stdin=no "$image"`
+> inside it. Pass the absolute image path as a shell argument. Keep the window open
+> until I press Enter. If the target session is ambiguous, ask me which one to use.
+
 ## Building
 
 The Mac app has no Xcode dependency — it is a plain SwiftPM package built and bundled by the
