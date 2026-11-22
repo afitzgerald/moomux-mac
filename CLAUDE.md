@@ -419,7 +419,7 @@ Core/ToolPath.swift      finding tmux without a shell's PATH
 App/Forms.swift          the two multi-field forms' state and defaulting rules, pure
 App/WhatsNew.swift       release notes baked into the bundle, both apps; self-contained, so it copies
                          to other apps
-App/Acknowledgements.swift  LICENSE + THIRD_PARTY_NOTICES.md as bundled, both apps' Help/⋯ item
+App/Acknowledgements.swift  LICENSE, THIRD_PARTY_NOTICES.md, LICENSE-OFL-1.1, LICENSE-LGPL-2.1 as bundled, both apps' Help/⋯ item
 App/Attachments.swift    first-prompt attachments, both front ends: re-encode, upload
                          through `SaveFile`, and the queue each New Session sheet runs
 App/PairingLink.swift    the `moomux://connect` link (tailnet and loopback hosts only) and refused-vs-unreachable
