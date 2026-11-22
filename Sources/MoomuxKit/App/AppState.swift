@@ -345,6 +345,8 @@ public final class AppState {
     /// Set it through `askDelete(_:)` rather than directly, or the unsaved-work
     /// step below is skipped.
     public var pendingDelete: Session?
+    /// The folder whose Delete is awaiting confirmation (both apps' header menus).
+    public var pendingFolderDelete: String?
 
     /// Sessions picked for one batch delete: the Mac sidebar's multi-selection,
     /// the phone's Select mode. It can hold a protected session; the batch
@@ -2800,8 +2802,8 @@ public final class AppState {
         }
     }
 
-    /// Deletes the folder only — every member is filed back at the top level,
-    /// which is why this asks nothing. Members in *other* projects go with it:
+    /// Deletes the folder only — every member is filed back at the top level.
+    /// Callers confirm first (`pendingFolderDelete`). Members in *other* projects go with it:
     /// the folder is one global thing, however few of it this project shows.
     public func deleteFolder(name: String) {
         mutate("Delete folder", onSuccess: { [self] in
@@ -3041,6 +3043,17 @@ public final class AppState {
     }
 
     public func dismissDelete() { pendingDelete = nil }
+
+    /// What folder Delete says is at stake. A folder is one global thing, so
+    /// the count spans every project, archived sessions included — more than
+    /// the header the user clicked may be showing. Caps for emphasis, as in
+    /// `deleteWarning`.
+    public func folderDeleteWarning(for name: String) -> String {
+        let n = sessions.filter { $0.folder == name }.count
+        let members = n == 0 ? "NO SESSIONS ARE IN IT" : "⚠︎ \(n) SESSION\(n == 1 ? "" : "S") LOSE\(n == 1 ? "S" : "") THIS FOLDER"
+        return members + ", ACROSS EVERY PROJECT.\n\nThey are filed back at the top level. "
+            + "No session, worktree or branch is removed."
+    }
 
     /// What the delete dialog says is at stake. Pure, so `demo()` can hold it
     /// to saying the three different things it has to say.
@@ -3287,6 +3300,7 @@ extension AppState {
         assert(core.count("WorktreeStatus") == 1 && core.count("ChangeSummary") == 1)
         assert(app.deleteWarning(for: a).hasPrefix("⚠︎ 2 FILES CHANGED\n"), app.deleteWarning(for: a))
 
+        assert(app.folderDeleteWarning(for: "nope").hasPrefix("NO SESSIONS"), app.folderDeleteWarning(for: "nope"))
         app.delete(a)
         assert(app.selectedSessionID == nil, "a deleted session cannot stay selected")
         assert(FakeCore.spin { core.count("DeleteSession") == 1 && app.busy == nil }, "delete must reach the core")

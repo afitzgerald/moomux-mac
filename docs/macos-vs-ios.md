@@ -768,7 +768,7 @@ different widths.
 | Reorder by drag, both lenses | drop between rows (`onMove`) | long press, drop between rows (`onMove`) |
 | Reorder projects | drag a project header, or Settings → Projects chevron buttons | long press a project header, drop above or below another project |
 | Ticket, Pull request, Open in MergeRight | inspector, context menu | Details, pane ⋯ |
-| Folder header menu | Rename, Archive All, Unarchive All, Delete | the same (long press) |
+| Folder header menu | Rename, Archive All, Unarchive All, Delete… (confirmed) | the same (long press) |
 
 The pane's ⋯ button opens a scrollable sheet with New Session, Browser, Details, Text Size,
 and the same session actions as Details.
@@ -984,6 +984,8 @@ These look like they could differ. Here is why they do not:
   those keys, and `setFolderProject` with an empty folder forwards to `setProject`.
 - **Delete asks once**, and on both the message is the safeguard (`askDelete` → `deleteWarning`).
   It says it is checking until the worktree status lands.
+- **Folder Delete asks once** on both: one alert naming how many sessions, across every project,
+  lose the folder (`folderDeleteWarning`).
 - **Search** matches names only, over the whole store, archived sessions included, on both.
 - **What's New** is one `WhatsNew` type and one baked `WhatsNew.md` per build.
 - **The cow and quip title** uses the Kit's `SpeechBubble`. The phone rasterizes the Mac's SVG at

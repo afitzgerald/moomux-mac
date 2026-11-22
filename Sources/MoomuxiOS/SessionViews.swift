@@ -599,14 +599,22 @@ private struct FolderHeader: View {
         .onTapGesture { app.setFolder(name: name, collapsed: !collapsed) }
         // The Mac's folder context menu, minus Rename's sheet — a phone gets
         // an alert with a field, which is the same question with less
-        // machinery. Delete is not confirmed for the same reason it is not
-        // there: it files members back at the top level and removes nothing.
+        // machinery. Delete asks once, as on the Mac, naming the members.
         .contextMenu {
             Button("Rename…") { renaming = name }
             Button("Archive All") { app.setArchived(project: project, folder: name, true) }
             Button("Unarchive All") { app.setArchived(project: project, folder: name, false) }
             Divider()
+            Button("Delete…", role: .destructive) { app.pendingFolderDelete = name }
+        }
+        .alert("Delete folder “\(name)”?", isPresented: Binding(
+            get: { app.pendingFolderDelete == name },
+            set: { if !$0 { app.pendingFolderDelete = nil } }
+        )) {
+            Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { app.deleteFolder(name: name) }
+        } message: {
+            Text(app.folderDeleteWarning(for: name))
         }
         // Spoken, not drawn. `CLAUDE.md`: "the *number* is spoken, not drawn:
         // no header renders a count badge any more" — `count` exists to decide

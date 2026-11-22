@@ -307,6 +307,16 @@ struct RootView: View {
         } message: { session in
             Text(app.deleteWarning(for: session))
         }
+        .alert(Text(app.pendingFolderDelete.map { "Delete folder “\($0)”?" } ?? "Delete folder?"),
+               isPresented: Binding(
+            get: { app.pendingFolderDelete != nil },
+            set: { if !$0 { app.pendingFolderDelete = nil } }
+        ), presenting: app.pendingFolderDelete) { name in
+            Button("Delete", role: .destructive) { app.deleteFolder(name: name) }
+            Button("Cancel", role: .cancel) {}
+        } message: { name in
+            Text(app.folderDeleteWarning(for: name))
+        }
         .sheet(isPresented: Binding(
             get: { app.pendingBatchDelete != nil },
             set: { if !$0 { app.dismissBatchDelete() } }
@@ -1077,9 +1087,7 @@ private struct FolderHeader: View {
             Button("Archive All") { app.setArchived(project: project, folder: name, true) }
             Button("Unarchive All") { app.setArchived(project: project, folder: name, false) }
             Divider()
-            // No confirmation: deleting a folder files its members back at the
-            // top level and removes nothing.
-            Button("Delete") { app.deleteFolder(name: name) }
+            Button("Delete…") { app.pendingFolderDelete = name }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
