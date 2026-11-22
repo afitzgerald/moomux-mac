@@ -18,6 +18,9 @@ public final class StreamSocket {
         case unresolved(String, String)
         /// The core sent more than `limit` bytes without ending the reply or line.
         case tooLong(limit: Int)
+        /// No `utun` interface holds a tailnet address, so a non-loopback dial
+        /// would leave over whatever network is up instead.
+        case noTailnet(String)
 
         public var errorDescription: String? {
             switch self {
@@ -27,6 +30,8 @@ public final class StreamSocket {
                 return "socket path is too long for sockaddr_un: \(path)"
             case let .unresolved(host, why):
                 return "cannot resolve \(host): \(why)"
+            case let .noTailnet(host):
+                return "Tailscale is not connected, so \(host) was not dialled"
             case let .tooLong(limit):
                 return "the core's reply is longer than \(limit >> 10) KB"
             }
@@ -144,10 +149,22 @@ public final class StreamSocket {
         // and connecting to the first is how a v6-only path looks like a dead
         // server.
         var lastErrno: Int32 = EHOSTUNREACH
+        var noTailnet = false
         var candidate = Optional(first)
         while let info = candidate {
             let fd = socket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
             if fd >= 0 {
+                // Loopback (scratch-core bridge, simulator) dials as-is. Anything
+                // else must leave through the tailnet's utun, or with Tailscale
+                // off a `*.ts.net` name or CGNAT address reaches whatever the
+                // local network answers with.
+                if !Self.isLoopback(info.pointee.ai_addr), !Self.bindToTailnet(fd, family: info.pointee.ai_family) {
+                    Darwin.close(fd)
+                    lastErrno = ENETDOWN
+                    noTailnet = true
+                    candidate = info.pointee.ai_next
+                    continue
+                }
                 Self.silenceSigPipe(fd)
                 Self.enableKeepalive(fd)
                 let err = Self.connectWithin(fd, info.pointee.ai_addr, info.pointee.ai_addrlen)
@@ -162,7 +179,64 @@ public final class StreamSocket {
             }
             candidate = info.pointee.ai_next
         }
+        if noTailnet, lastErrno == ENETDOWN { throw Failure.noTailnet(host) }
         throw Failure.syscall("connect \(host):\(port)", lastErrno)
+    }
+
+    // MARK: Tailnet pinning
+
+    /// Whether `a` is a tailnet address: `100.64.0.0/10` or `fd7a:115c:a1e0::/48`.
+    static func isTailnet(v4 b: [UInt8]) -> Bool { b.count == 4 && b[0] == 100 && b[1] & 0xC0 == 0x40 }
+    static func isTailnet(v6 b: [UInt8]) -> Bool {
+        b.count == 16 && b[0] == 0xfd && b[1] == 0x7a && b[2] == 0x11 && b[3] == 0x5c && b[4] == 0xa1 && b[5] == 0xe0
+    }
+
+    private static func isLoopback(_ sa: UnsafePointer<sockaddr>?) -> Bool {
+        guard let sa else { return false }
+        if Int32(sa.pointee.sa_family) == AF_INET {
+            return sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) >> 24 == 127 }
+        }
+        if Int32(sa.pointee.sa_family) == AF_INET6 {
+            return sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
+                var a = $0.pointee.sin6_addr
+                return withUnsafeBytes(of: &a) { Array($0) } == [UInt8](repeating: 0, count: 15) + [1]
+            }
+        }
+        return false
+    }
+
+    /// Index of a `utun` interface holding a tailnet address of `family`, if any.
+    private static func tailnetInterface(family: Int32) -> UInt32? {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0 else { return nil }
+        defer { freeifaddrs(list) }
+        var cur = list
+        while let i = cur?.pointee {
+            cur = i.ifa_next
+            guard String(cString: i.ifa_name).hasPrefix("utun"), let sa = i.ifa_addr,
+                  Int32(sa.pointee.sa_family) == family else { continue }
+            let hit: Bool
+            if family == AF_INET {
+                hit = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                    var a = $0.pointee.sin_addr
+                    return isTailnet(v4: withUnsafeBytes(of: &a) { Array($0) })
+                }
+            } else {
+                hit = sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
+                    var a = $0.pointee.sin6_addr
+                    return isTailnet(v6: withUnsafeBytes(of: &a) { Array($0) })
+                }
+            }
+            if hit { return if_nametoindex(i.ifa_name) }
+        }
+        return nil
+    }
+
+    /// Pins `fd` to the tailnet interface; false when there is none.
+    private static func bindToTailnet(_ fd: Int32, family: Int32) -> Bool {
+        guard family == AF_INET || family == AF_INET6, var idx = tailnetInterface(family: family), idx != 0 else { return false }
+        let (level, opt) = family == AF_INET ? (IPPROTO_IP, IP_BOUND_IF) : (IPPROTO_IPV6, IPV6_BOUND_IF)
+        return setsockopt(fd, level, opt, &idx, socklen_t(MemoryLayout<UInt32>.size)) == 0
     }
 
     public func write(_ data: Data) throws {
@@ -271,6 +345,13 @@ public final class StreamSocket {
     }
 
     public static func demo() {
+        assert(isTailnet(v4: [100, 64, 0, 1]) && isTailnet(v4: [100, 127, 255, 255]))
+        assert(!isTailnet(v4: [100, 63, 255, 255]) && !isTailnet(v4: [100, 128, 0, 0]))
+        assert(!isTailnet(v4: [10, 64, 0, 1]) && !isTailnet(v4: [127, 0, 0, 1]) && !isTailnet(v4: [100, 64]))
+        let ts: [UInt8] = [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0] + [UInt8](repeating: 7, count: 10)
+        assert(isTailnet(v6: ts))
+        assert(!isTailnet(v6: [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe1] + [UInt8](repeating: 7, count: 10)))
+        assert(!isTailnet(v6: [UInt8](repeating: 0, count: 15) + [1]))
         // Closing a socket under a parked read must *end* that read. This is
         // the crash `readChunk` exists in its current form to avoid — it took
         // the app down on every detach. The regression is a read that never
