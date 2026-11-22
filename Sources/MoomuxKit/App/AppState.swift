@@ -657,6 +657,14 @@ public final class AppState {
         builder.withCustom("keybind", "super+c=copy_to_clipboard")
         builder.withCustom("keybind", "super+v=paste_from_clipboard")
         builder.withCustom("keybind", "super+a=select_all")
+        // A program's OSC 52 read must reach `TerminalPane`'s confirmation
+        // delegate (which refuses it), however the user's own config, or the
+        // one a core serves the phone, sets this. The package's bridge always
+        // completes a read with `confirmed: false` and libghostty decides from
+        // this option, so `allow` would skip the delegate entirely.
+        // `clipboard-write` stays alone: `ask` would also refuse tmux
+        // copy-mode's own copies.
+        builder.withCustom("clipboard-read", "ask")
         // Zoom, ghostty's own defaults put back verbatim. A fixed pane font on
         // a large display is unreadable, and this is the one place the size can
         // be changed at all — there is deliberately no font setting (the user's
@@ -716,6 +724,11 @@ public final class AppState {
             .contains("font-size = 9"))
         assert(paneConfig(files: [], served: "", read: { _ in nil }).contains("background = 1a1b26"),
                "an empty served config falls back to the built-in look")
+        // `clipboard-read = ask` comes last, so it beats the user's and the served config.
+        let cr = paneConfig(files: [], served: "clipboard-read = allow", read: { _ in nil })
+        assert(cr.range(of: "clipboard-read = ask", options: .backwards)!.lowerBound
+               > cr.range(of: "clipboard-read = allow")!.lowerBound, "clipboard-read ask must follow the user's")
+        assert(!cr.contains("clipboard-write"), "clipboard-write stays the user's")
     }
 
     public nonisolated static func ghosttyConfigDemo() {

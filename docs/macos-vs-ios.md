@@ -585,7 +585,10 @@ step.
 
 **D33. The same two surface delegates on both.**
 - **Clipboard confirmation.** A paste is allowed and OSC 52 is refused. With no delegate, the
-  bridge silently denies the user's own multi-line paste.
+  bridge silently denies the user's own multi-line paste. Both also append `clipboard-read = ask`
+  after the user's (or the core-served) config: libghostty-spm completes every read as
+  unconfirmed and libghostty decides from that option, so `allow` would skip the delegate.
+  `clipboard-write` is left alone, because `ask` would also refuse tmux copy-mode's copies.
 - **Open-URL.** Every surface installs a delegate, because without one ghostty core opens links
   itself and bypasses the allowlist.
 
