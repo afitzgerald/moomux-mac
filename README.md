@@ -123,9 +123,12 @@ launchctl load ~/Library/LaunchAgents/com.erickgnclvs.moomux.plist
 
 `launchctl unload` the same path to stop it, or delete the plist to remove it for good.
 
-## Claude usage in the toolbar
+## Agent usage in the toolbar
 
-The toolbar can show your Claude quota (5-hour and weekly, with reset times). It comes from
+The toolbar can show your Claude and Codex quota. Open the usage details to see when quota
+windows roll over. The details also show any banked reset counts, grant expiry, and cooldown
+the provider reports.
+Usage comes from
 [agent-usage](https://github.com/afitzgerald/agent-usage), a separate tool that is not installed
 with Moomux or moomux. Install it on the Mac running `moomux serve`:
 

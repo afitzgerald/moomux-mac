@@ -1068,9 +1068,10 @@ extension View {
 
 // MARK: - Bits
 
-/// Claude's 5h and weekly quota; tap for readable, wrapping usage details.
+/// Agent quota and banked resets. Tap for usage details.
 private struct UsageMenu: View {
     @Bindable var app: AppState
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showingDetails = false
 
     var body: some View {
@@ -1078,9 +1079,13 @@ private struct UsageMenu: View {
             Button {
                 showingDetails = true
             } label: {
-                HStack(spacing: 8) {
-                    if let usage = app.usage { usageSummary(usage, agent: "Claude", now: context.date) }
-                    if let usage = app.codexUsage { usageSummary(usage, agent: "Codex", now: context.date) }
+                if horizontalSizeClass == .compact {
+                    summaries(now: context.date, showResets: false)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        summaries(now: context.date, showResets: true)
+                        summaries(now: context.date, showResets: false)
+                    }
                 }
             }
             .accessibilityLabel("Usage")
@@ -1110,16 +1115,22 @@ private struct UsageMenu: View {
         }
     }
 
-    private func usageSummary(_ usage: Usage, agent: String, now: Date) -> some View {
-        HStack(spacing: 3) {
+    private func summaries(now: Date, showResets: Bool) -> some View {
+        HStack(spacing: 8) {
+            if let usage = app.usage { usageSummary(usage, agent: "Claude", now: now, showResets: showResets) }
+            if let usage = app.codexUsage { usageSummary(usage, agent: "Codex", now: now, showResets: showResets) }
+        }
+    }
+
+    private func usageSummary(_ usage: Usage, agent: String, now: Date, showResets: Bool) -> some View {
+        let window = summaryWindow(usage, now: now)
+        let resets = usage.resetSummary
+        return HStack(spacing: 3) {
             AgentMark(agent, size: 12)
             if usage.status == .signedOut {
                 Image(systemName: "person.crop.circle.badge.exclamationmark")
                     .font(.caption)
-            } else if usage.headline.isEmpty {
-                Image(systemName: usage.tokens == nil ? "exclamationmark.circle" : "number.circle")
-                    .font(.caption)
-            } else if let window = summaryWindow(usage, now: now) {
+            } else if let window {
                 let style = SessionTheme.usage(usage.level(of: window, now: now), app.palette)
                 let prefix = window.kind == "session" ? "5h " : ""
                 Text("\(prefix)\(usage.percent(of: window, free: app.showFreeQuota))%")
@@ -1133,6 +1144,16 @@ private struct UsageMenu: View {
                 } else if usage.inline(now: now).contains(where: { !$0.headline }) {
                     Image(systemName: "exclamationmark.circle.fill").font(.caption2).foregroundStyle(.orange)
                 }
+            } else if resets == nil {
+                Image(systemName: usage.tokens == nil ? "exclamationmark.circle" : "number.circle")
+                    .font(.caption)
+            }
+            if let resets, showResets || window == nil {
+                Text(resets)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
             }
         }
     }
@@ -1168,6 +1189,11 @@ private struct UsageSection: View {
                 } else if weekly == nil || window.kind != "weekly_scoped" {
                     quota(window)
                 }
+            }
+            ForEach(Array(usage.resetDetail.enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
             if let problem = usage.problem(for: agent) {
                 Text(problem)

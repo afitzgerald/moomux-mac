@@ -361,7 +361,10 @@ up top.** A phone reaches the bottom with a thumb, and the iOS 26 toolbar puts s
 name (D56) is no longer cut off: ⋯ on the left, the title in the middle, and the quota summary
 alone on the right. Each agent shows its weekly quota percentage. A current 5-hour warning
 or critical level switches that agent to the 5-hour percentage, labeled 5h. The phone also uses
-the 5-hour figure when the weekly window is unavailable. Tapping the summary opens a Usage sheet with primary-color text and wrapping
+the 5-hour figure when the weekly window is unavailable. The compact phone toolbar keeps banked
+reset counts in the Usage sheet when a quota percentage is available. A wider phone toolbar
+shows both when they fit. On the Mac, banked reset counts appear in the Usage popover.
+Tapping the phone summary opens a Usage sheet with primary-color text and wrapping
 rows. A menu renders informational text as disabled gray and truncates long token counts.
 Show free quota in that sheet switches both the toolbar and the detail rows between used and free quota.
 No connection icon: a healthy connection says nothing, a lost one has `ConnectionRow`,

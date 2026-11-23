@@ -907,11 +907,79 @@ public struct Usage: Decodable, Equatable, Sendable {
         }
     }
 
+    public struct LimitResets: Decodable, Equatable, Sendable {
+        public struct Grant: Decodable, Equatable, Sendable {
+            public let name: String
+            public let count: Int
+            public let expiresAt: String?
+            public let windows: [String]?
+            public let isRedeemable: Bool?
+
+            enum CodingKeys: String, CodingKey {
+                case name, count, windows
+                case expiresAt = "expires_at"
+                case isRedeemable = "is_redeemable"
+            }
+        }
+
+        public let availableCount: Int
+        public let redeemableCount: Int?
+        public let grants: [Grant]?
+        public let cooldownUntil: String?
+
+        enum CodingKeys: String, CodingKey {
+            case grants
+            case availableCount = "available_count"
+            case redeemableCount = "redeemable_count"
+            case cooldownUntil = "cooldown_until"
+        }
+
+        var summary: String {
+            let held = "\(availableCount) \(availableCount == 1 ? "reset" : "resets")"
+            return held + (redeemableCount.map { " (\($0) ready)" } ?? "")
+        }
+
+        var detail: [String] {
+            var lines = ["Banked resets · \(summary)"]
+            if let cooldownUntil {
+                lines.append("Cooldown until \(displayDate(cooldownUntil))")
+            }
+            for grant in grants ?? [] {
+                var parts = ["\(grant.name) × \(grant.count)"]
+                if let isRedeemable = grant.isRedeemable {
+                    parts.append(isRedeemable ? "ready" : "unavailable")
+                }
+                if let expiresAt = grant.expiresAt {
+                    parts.append("expires \(displayDate(expiresAt))")
+                }
+                if let windows = grant.windows, !windows.isEmpty {
+                    parts.append(windows.map { window in
+                        switch window {
+                        case "five_hour": return "5-hour"
+                        case "seven_day": return "Weekly"
+                        default: return window
+                        }
+                    }.joined(separator: ", "))
+                }
+                lines.append(parts.joined(separator: " · "))
+            }
+            return lines
+        }
+
+        private func displayDate(_ timestamp: String) -> String {
+            Wire.parseTimestamp(timestamp)?.formatted(date: .abbreviated, time: .shortened) ?? timestamp
+        }
+    }
+
     public var status: Status
     public var windows: [Window]
     public var tokens: Tokens?
+    public var limitResets: LimitResets?
 
-    enum CodingKeys: String, CodingKey { case status, windows, tokens }
+    enum CodingKeys: String, CodingKey {
+        case status, windows, tokens
+        case limitResets = "limit_resets"
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -920,6 +988,7 @@ public struct Usage: Decodable, Equatable, Sendable {
         status = Status(rawValue: try c.decodeIfPresent(String.self, forKey: .status) ?? "") ?? .stale
         windows = try c.decodeIfPresent([Window].self, forKey: .windows) ?? []
         tokens = try? c.decodeIfPresent(Tokens.self, forKey: .tokens)
+        limitResets = try? c.decodeIfPresent(LimitResets.self, forKey: .limitResets)
     }
 
     public var headline: [Window] { windows.filter(\.headline) }
@@ -939,9 +1008,20 @@ public struct Usage: Decodable, Equatable, Sendable {
     /// good windows, which may already have reset.
     public var isCurrent: Bool { status == .ok }
 
-    /// Whether there is anything to draw. A signed-out account has no windows
-    /// and says so; a failed first run has none and nothing to say.
-    public var isDrawable: Bool { status == .signedOut || !headline.isEmpty || tokens != nil }
+    public var resetSummary: String? {
+        guard isCurrent, let limitResets, limitResets.availableCount > 0 else { return nil }
+        return limitResets.summary
+    }
+
+    public var resetDetail: [String] {
+        guard status != .signedOut, status != .idle else { return [] }
+        return limitResets?.detail ?? []
+    }
+
+    public var isDrawable: Bool {
+        status == .signedOut || !headline.isEmpty || tokens != nil ||
+            (status != .idle && (limitResets?.availableCount ?? 0) > 0)
+    }
 
     /// The level to draw `window` at — the core's, unless the reading is not
     /// current or the window has already rolled over. The core grades a reading
@@ -968,8 +1048,8 @@ public struct Usage: Decodable, Equatable, Sendable {
         status == .signedOut ? "\(agent) is signed out — run \(agent.lowercased()) login" : problem
     }
 
-    /// Every window, one line per reset time, followed by optional token totals
-    /// and any problem. Windows that roll over together share a
+    /// Every window, one line per reset time, followed by banked resets,
+    /// optional token totals and any problem. Windows that roll over together share a
     /// line — the week and its per-model carve-outs usually do, and the same
     /// countdown three times over is noise. Grouped by the *phrase*, not the
     /// date: the server stamps them seconds apart ("13:59:59", "14:00:00").
@@ -990,7 +1070,7 @@ public struct Usage: Decodable, Equatable, Sendable {
                 + (free ? " free" : " used")
                 + (group.resets.map { " · \($0)" } ?? "")
         }
-        return lines + [includeTokens ? tokens?.detail : nil, problem(for: agent)].compactMap { $0 }
+        return lines + resetDetail + [includeTokens ? tokens?.detail : nil, problem(for: agent)].compactMap { $0 }
     }
 }
 
@@ -1509,6 +1589,38 @@ public enum Wire {
         assert(codex.codexUsage?.isDrawable == true && codex.codexUsage?.tokens?.input == 1234)
         assert(codex.codexUsage?.detail(agent: "Codex").first?.contains("Local tokens") == true)
         assert(codex.codexUsage?.detail(agent: "Codex", includeTokens: false).isEmpty == true)
+        let banked = try! decoder.decode(Snapshot.self, from: Data(#"""
+        {"views":{},"usage":{"status":"ok","windows":[],"limit_resets":{
+         "available_count":2,"redeemable_count":0,"cooldown_until":"2026-09-30T20:00:00Z",
+         "grants":[{"name":"Full reset","count":2,"expires_at":"2026-10-03T14:00:00Z",
+          "windows":["five_hour","seven_day"],"is_redeemable":false}]}},
+         "codex_usage":{"status":"ok","limit_resets":{"available_count":1}}}
+        """#.utf8))
+        let bankedClaude = banked.usage!
+        let inventory = bankedClaude.limitResets!
+        assert(bankedClaude.isDrawable && bankedClaude.resetSummary == "2 resets (0 ready)")
+        assert(banked.codexUsage?.resetSummary == "1 reset" && banked.codexUsage?.limitResets?.redeemableCount == nil)
+        assert(inventory.cooldownUntil == "2026-09-30T20:00:00Z")
+        assert(inventory.grants?.first?.expiresAt == "2026-10-03T14:00:00Z")
+        assert(inventory.grants?.first?.isRedeemable == false)
+        assert(bankedClaude.detail().first == "Banked resets · 2 resets (0 ready)")
+        assert(bankedClaude.resetDetail[2].hasSuffix("5-hour, Weekly"))
+        for status in [Usage.Status.stale, .failed, .signedOut] {
+            var previous = bankedClaude
+            previous.status = status
+            assert(previous.isDrawable && previous.resetSummary == nil)
+            assert(previous.resetDetail.isEmpty == (status == .signedOut))
+        }
+        let emptyInventory = try! decoder.decode(Usage.self, from: Data(#"""
+        {"status":"ok","limit_resets":{"available_count":0,"grants":[]}}
+        """#.utf8))
+        assert(emptyInventory.limitResets?.grants == [] && emptyInventory.resetSummary == nil)
+        assert(emptyInventory.resetDetail == ["Banked resets · 0 resets"])
+        assert(codex.usage?.limitResets == nil && codex.usage?.resetDetail.isEmpty == true)
+        let brokenInventory = try! decoder.decode(Usage.self, from: Data(#"""
+        {"status":"ok","windows":[{"headline":true}],"limit_resets":{"available_count":"bad"}}
+        """#.utf8))
+        assert(brokenInventory.headline.count == 1 && brokenInventory.limitResets == nil)
         let brokenCodex = try! decoder.decode(Snapshot.self, from: Data(#"{"views":{},"usage":{"status":"ok"},"codex_usage":{"windows":"bad"}}"#.utf8))
         assert(brokenCodex.usage != nil && brokenCodex.codexUsage == nil)
         let codexSignedOut = try! decoder.decode(Usage.self, from: Data(#"{"status":"signed_out"}"#.utf8))

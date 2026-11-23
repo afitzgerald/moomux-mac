@@ -1661,10 +1661,7 @@ private struct UpdateBadge: View {
     }
 }
 
-/// Claude's 5h and weekly quota, when the core serves one. Absent draws
-/// nothing — almost nobody running this app runs agent-usage. Click for every
-/// window and when it resets: the phone's menu, as a popover. A tooltip alone
-/// was too well hidden — nothing about a line of text says "hover me".
+/// Agent quota in the toolbar, with banked resets in the usage popover.
 private struct UsageBadge: View {
     @Environment(AppState.self) private var app
     @State private var showingDetail = false
