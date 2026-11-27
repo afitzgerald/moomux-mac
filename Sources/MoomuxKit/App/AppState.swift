@@ -1257,7 +1257,12 @@ public final class AppState {
     /// The model IDs `agent`'s picker offers: the core's full list minus the
     /// hidden ones, "default" always kept. Empty means the agent has no fixed
     /// list (opencode) and the control is a free-text field.
-    public func models(for agent: String) -> [String] {
+    public func models(for agent: String, project: String = "") -> [String] {
+        // OpenCode's list is the project's own, discovered; until it
+        // arrives (or if it never does) "default" is the only choice.
+        if agent == NewSessionForm.openCode {
+            return [NewSessionForm.defaultChoice] + (openCodeOptions(for: project)?.models ?? [])
+        }
         let hidden = config?.excludedModels[agent] ?? []
         return (option(agent)?.models ?? []).filter {
             $0 == NewSessionForm.defaultChoice || !hidden.contains($0)
@@ -1279,7 +1284,51 @@ public final class AppState {
     /// Whether `agent`'s model control is a picker or a free-text field —
     /// `agentUsesFreeTextModel`, keyed off the served list being empty.
     public func hasModelList(for agent: String) -> Bool {
-        !(option(agent)?.models.isEmpty ?? true)
+        agent == NewSessionForm.openCode || !(option(agent)?.models.isEmpty ?? true)
+    }
+
+    /// The thinking choices a form offers: OpenCode's are the effective
+    /// model's own variants, everything else's the core's table.
+    public func thinking(for form: NewSessionForm, model: String) -> [String] {
+        guard form.isOpenCode else { return thinking(for: form.agent, model: model) }
+        guard let o = openCodeOptions(for: form.project) else { return [NewSessionForm.defaultChoice] }
+        return o.efforts(model: model, agent: form.openCodeAgent)
+    }
+
+    // MARK: OpenCode choices
+
+    public enum OpenCodeLoad: Equatable, Sendable {
+        case loading
+        case loaded(OpenCodeOptions)
+        /// Why not, in words for the sheet. The form still works: OpenCode
+        /// picks its own agent and model.
+        case unavailable(String)
+    }
+
+    /// Per project, from `OpenCodeOptions`. Not polled: the sheet asks when
+    /// OpenCode is the agent and the project changes.
+    public private(set) var openCodeLoads: [String: OpenCodeLoad] = [:]
+
+    public func openCodeOptions(for project: String) -> OpenCodeOptions? {
+        if case .loaded(let o) = openCodeLoads[project] { return o }
+        return nil
+    }
+
+    /// Fetches `project`'s choices. A failure leaves a previous good answer
+    /// in place — a flaky call must not empty the pickers under a user — and
+    /// otherwise says why, an older core's "unknown method" in plain words.
+    public func loadOpenCodeOptions(project: String) async {
+        guard !project.isEmpty else { return }
+        if openCodeOptions(for: project) == nil { openCodeLoads[project] = .loading }
+        do {
+            let o = try await withoutBlockingTheUI { [client] in try client.openCodeOptions(project: project) }
+            openCodeLoads[project] = .loaded(o)
+        } catch {
+            guard openCodeOptions(for: project) == nil else { return }
+            let message = error.localizedDescription
+            openCodeLoads[project] = .unavailable(
+                message.hasPrefix("unknown method") ? "This core is too old to list OpenCode's choices." : message)
+        }
     }
 
     /// One row of Settings' Hidden models list.
@@ -1359,6 +1408,11 @@ public final class AppState {
         clampChoices(of: &form)
     }
 
+    /// What a create sends for `form`'s model, thinking and OpenCode agent.
+    func sendFields(_ form: NewSessionForm) -> (model: String, thinking: String, openCodeAgent: String) {
+        form.sendFields(opencode: openCodeOptions(for: form.project))
+    }
+
     /// Presets the agent from `last_agent` — at open, and again when the agent
     /// names or `last_agent` arrive under an open form (see `presetAgent`).
     /// An unchanged agent keeps its model by value, as a table change does.
@@ -1371,15 +1425,17 @@ public final class AppState {
     /// The agent or the model changed: keep model and thinking on values that
     /// are still offered, by value.
     public func clampChoices(of form: inout NewSessionForm) {
-        let agent = form.agent
-        form.clampChoices(models: models(for: agent), thinking: { self.thinking(for: agent, model: $0) })
+        form.clampOpenCodeAgent(openCodeOptions(for: form.project))
+        let f = form
+        form.clampChoices(models: models(for: f.agent, project: f.project), thinking: { self.thinking(for: f, model: $0) })
     }
 
     /// The table or the hidden list changed under an open form: the same, but
     /// a chosen model that left the list stays chosen as the extra entry.
     public func keepChoices(of form: inout NewSessionForm) {
-        let agent = form.agent
-        form.clampChoices(models: models(for: agent), thinking: { self.thinking(for: agent, model: $0) },
+        form.clampOpenCodeAgent(openCodeOptions(for: form.project))
+        let f = form
+        form.clampChoices(models: models(for: f.agent, project: f.project), thinking: { self.thinking(for: f, model: $0) },
                           keep: true)
     }
 
@@ -1918,9 +1974,32 @@ public final class AppState {
             ]
             assert(app.agentNames == ["claude", "codex", "opencode"])
             assert(app.models(for: "codex") == ["default", "gpt"])
-            // opencode has no list, which is what makes its control a text
-            // field; nothing falls back to another agent's.
-            assert(app.models(for: "opencode").isEmpty && !app.hasModelList(for: "opencode"))
+            // opencode's list is the project's, discovered: "default" alone
+            // until it arrives. Nothing falls back to another agent's.
+            assert(app.models(for: "opencode", project: "p") == ["default"] && app.hasModelList(for: "opencode"))
+            app.openCodeLoads["p"] = .loaded(OpenCodeOptions(
+                models: ["a/fast", "a/deep"], defaultModel: "a/fast", variants: ["a/deep": ["low", "high"]],
+                agents: [OpenCodeAgent(id: "build"), OpenCodeAgent(id: "plan", model: "a/deep")]))
+            assert(app.models(for: "opencode", project: "p") == ["default", "a/fast", "a/deep"])
+            assert(app.models(for: "opencode", project: "q") == ["default"], "another project's list is not p's")
+            var oc = NewSessionForm()
+            oc.project = "p"
+            oc.agent = "opencode"
+            app.clampChoices(of: &oc)
+            assert(oc.openCodeAgent == "build", "the project's default agent")
+            oc.openCodeAgent = "plan"
+            oc.thinking = "high"
+            app.clampChoices(of: &oc)
+            assert(oc.thinking == "high", "plan's own model has the effort")
+            assert(app.sendFields(oc).model == "a/deep#high" && app.sendFields(oc).openCodeAgent == "plan")
+            oc.model = "a/fast"
+            app.clampChoices(of: &oc)
+            assert(oc.thinking == "default", "a/fast has no variants: the effort resets with the model")
+            oc.model = "a/deep"
+            oc.project = "q"
+            app.applyProject(to: &oc)
+            assert(oc.model == "default", "a project switch drops a model it does not offer")
+            app.openCodeLoads = [:]
             assert(app.models(for: "nonesuch").isEmpty, "no fallback list")
             assert(app.thinking(for: "codex", model: "gpt") == ["default", "high"])
             assert(app.thinking(for: "nonesuch", model: "default").isEmpty, "no fallback list")
@@ -2386,13 +2465,14 @@ public final class AppState {
     }
 
     public func create(_ form: NewSessionForm, focus: @escaping @MainActor () -> Bool = { true }) {
+        let send = sendFields(form)
         let req = CreateRequest(project: form.project, name: form.name.trimmed, agent: form.agent,
                                 branch: form.existingBranch, baseBranch: form.baseBranchToSend,
                                 ticket: form.ticket, pr: form.pr,
-                                model: form.modelToSend(hasModelList: hasModelList(for: form.agent)),
-                                thinking: form.thinking, prompt: form.prompt,
+                                model: send.model, thinking: send.thinking, prompt: form.prompt,
                                 autoSubmit: form.autoSubmit,
-                                dangerous: dangerousToSend(project: form.project))
+                                dangerous: dangerousToSend(project: form.project),
+                                openCodeAgent: send.openCodeAgent)
         // Before the call, not after: a core that hangs never answers at all.
         promptDraft = form.prompt
         // Not `mutate`: that discards the created `Session`, and selecting it

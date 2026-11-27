@@ -178,6 +178,7 @@ public final class MoomuxClient: Sendable {
         var sessions: [Session]?
         var cfg: Config?
         var agents: [AgentOption]?
+        var opencode: OpenCodeOptions?
         var themes: [ThemePalette]?
         /// Project name → the glyph to draw: the project's own `emoji` when it
         /// set one, and `config.ProjectEmojiPalette`'s deterministic pick when
@@ -224,7 +225,7 @@ public final class MoomuxClient: Sendable {
         var attach: String?
 
         enum CodingKeys: String, CodingKey {
-            case session, sessions, cfg, agents, themes, hint, ok, dirty, unpushed, files, commits, path, data
+            case session, sessions, cfg, agents, opencode, themes, hint, ok, dirty, unpushed, files, commits, path, data
             case patch, truncated, base, commit, uncommitted, attach, ghostty, pairing
             case screens
             case projectEmoji = "project_emoji"
@@ -309,6 +310,13 @@ public final class MoomuxClient: Sendable {
     /// Go side, and re-polling it every two seconds would buy nothing.
     public func agentOptions() throws -> [AgentOption] {
         try call("AgentOptions").agents ?? []
+    }
+
+    /// What `project` offers a new OpenCode session. A core from before
+    /// moomux#389 answers "unknown method", which is passed through for the
+    /// caller to treat as "unavailable", not as an empty list.
+    public func openCodeOptions(project: String) throws -> OpenCodeOptions {
+        try call("OpenCodeOptions", Args(project: project)).opencode ?? OpenCodeOptions()
     }
 
     /// The core's color palettes — the agent-state colors this app renders
@@ -866,6 +874,14 @@ public final class MoomuxClient: Sendable {
             {"result":{"agents":[{"name":"claude","models":["default","opus"],"thinking":["default","ultrathink"]}]}}
             """) {
             check(try client.agentOptions().first?.thinking == ["default", "ultrathink"])
+        }
+        expect(#"{"args":{"project":"p"},"method":"OpenCodeOptions"}"#, answer: """
+            {"result":{"opencode":{"models":["a/m"],"default_model":"a/m","variants":{"a/m":["high"]},
+            "agents":[{"id":"build","name":"Build"},{"id":"plan","name":"Plan","model":"a/m"}]}}}
+            """) {
+            let o = try client.openCodeOptions(project: "p")
+            check(o.models == ["a/m"] && o.defaultModel == "a/m" && o.variants["a/m"] == ["high"])
+            check(o.agents.map(\.id) == ["build", "plan"] && o.agents[1].model == "a/m")
         }
         expect(#"{"method":"Themes"}"#) { check(try client.themes().isEmpty) }
         expect(#"{"method":"Sessions"}"#,

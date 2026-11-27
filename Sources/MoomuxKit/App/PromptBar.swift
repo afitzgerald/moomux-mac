@@ -28,7 +28,7 @@ public struct PromptBar: View {
         self.fileJobs = fileJobs
     }
 
-    private var thinking: [String] { app.thinking(for: form.agent, model: form.model) }
+    private var thinking: [String] { app.thinking(for: form, model: form.model) }
     private var hasModelList: Bool { app.hasModelList(for: form.agent) }
 
     public var body: some View {
@@ -83,10 +83,8 @@ public struct PromptBar: View {
                 .labelsHidden()
                 .tint(.secondary)
                 .fixedSize()
-                // The core decides which; opencode is the one agent with no
-                // launch flag for it (`reasoningEffortFlag`).
-                .help(form.agent == "opencode"
-                      ? "Thinking — prepended to the first prompt, as opencode has no flag for it"
+                .help(form.isOpenCode
+                      ? "Reasoning effort — one of the variants the selected model supports in opencode"
                       : "Thinking — passed to \(form.agent) as its reasoning-effort flag")
             }
         }
@@ -105,7 +103,7 @@ public struct PromptBar: View {
 
     /// One list, each agent's models under its name, so a choice sets both,
     /// and the button shows only the agent's logo. An agent with no model
-    /// list (opencode) is one row, its model free text under this row.
+    /// list is one row.
     /// The agent is empty only until the core's table arrives.
     private var agentPicker: some View {
         Menu {
@@ -116,7 +114,7 @@ public struct PromptBar: View {
                         // No heading: the logo on every row names the agent.
                         Section {
                             // The current agent's list keeps a chosen model that was since hidden.
-                            let shown = app.models(for: name)
+                            let shown = app.models(for: name, project: form.project)
                             ForEach(name == form.agent ? form.modelChoices(shown) : shown, id: \.self) { model in
                                 Label { Text(app.modelLabel(model, agent: name)) } icon: { icon }
                                     .tag(AgentChoice(agent: name, model: model))
@@ -175,6 +173,42 @@ public struct PromptBar: View {
             form.agent = $0.agent
             if !$0.model.isEmpty { form.model = $0.model }
         }
+    }
+}
+
+/// OpenCode's native agent (`Build`, `Plan`…), and what the core said about
+/// discovering it, under the prompt on both sheets. Shown only for opencode.
+/// The model and effort are in the bar above: this row is the one choice the
+/// bar has no room for.
+public struct OpenCodeRow: View {
+    let app: AppState
+    @Binding var form: NewSessionForm
+
+    public init(app: AppState, form: Binding<NewSessionForm>) {
+        self.app = app
+        _form = form
+    }
+
+    public var body: some View {
+        if form.isOpenCode {
+            switch app.openCodeLoads[form.project] {
+            case .loaded(let options) where !options.agents.isEmpty:
+                Picker("OpenCode agent", selection: $form.openCodeAgent) {
+                    ForEach(options.agents) { Text($0.label).tag($0.id) }
+                }
+                .help("The agent inside OpenCode. The first is the project's default.")
+            case .loaded:
+                note("OpenCode listed no agents for this project — it will use its default.")
+            case .unavailable(let why):
+                note("OpenCode choices unavailable: \(why) It will use its own defaults.")
+            case .loading, nil:
+                note("Loading OpenCode choices…")
+            }
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 }
 

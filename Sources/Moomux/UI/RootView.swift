@@ -356,7 +356,6 @@ private struct NewSessionSheet: View {
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
-    private var hasModelList: Bool { app.hasModelList(for: form.agent) }
 
     private func attach(_ jobs: [AttachJob]) {
         attachments.run(jobs) { form.appendPath($0) }
@@ -404,12 +403,7 @@ private struct NewSessionSheet: View {
                         .help("Drop or paste a file to add its path. Leave it empty to start the agent idle.")
                     PromptBar(app: app, form: $form, uploading: attachments.pending > 0,
                               attach: attach, fileJobs: fileJobs)
-                    // Under the agent it belongs to, only for one with no
-                    // model list (opencode); the rest pick theirs in the menu.
-                    if !hasModelList && !form.agent.isEmpty {
-                        TextField("Model", text: $form.modelText, prompt: Text("default"))
-                            .help("\(form.agent) has no fixed model list — type one or leave it empty")
-                    }
+                    OpenCodeRow(app: app, form: $form)
                     // Here and not in an alert: the sheet is still open, and
                     // the paths that did land are right above it.
                     if let error = attachments.error {
@@ -503,6 +497,10 @@ private struct NewSessionSheet: View {
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
         .onChange(of: form.model) { _, _ in app.clampChoices(of: &form) }
+        .onChange(of: form.openCodeAgent) { _, _ in app.clampChoices(of: &form) }
+        // Discovery is per project, and only when OpenCode is the agent.
+        .task(id: form.isOpenCode ? form.project : "") { if form.isOpenCode { await app.loadOpenCodeOptions(project: form.project) } }
+        .onChange(of: app.openCodeLoads) { _, _ in app.keepChoices(of: &form) }
         .onChange(of: app.agentNames) { _, _ in app.presetAgent(in: &form) }
         .onChange(of: app.config?.lastAgent) { _, _ in app.presetAgent(in: &form) }
         // A new table or a newly hidden model: keep the choices by value.
