@@ -46,10 +46,17 @@ public enum Layout {
         case project(String, hidden: Int)
         case row(SidebarRow, project: String)
 
-        public var id: String {
+        public enum ID: Hashable {
+            case project(String)
+            case folder(project: String, name: String)
+            case session(String)
+        }
+
+        public var id: ID {
             switch self {
-            case let .project(name, _): "project:\(name)"
-            case let .row(row, _): row.id
+            case let .project(name, _): .project(name)
+            case let .row(.folder(name, _, _), project): .folder(project: project, name: name)
+            case let .row(.session(session, _), _): .session(session.id)
             }
         }
 

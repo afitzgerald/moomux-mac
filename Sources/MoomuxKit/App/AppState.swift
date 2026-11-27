@@ -2151,6 +2151,23 @@ public final class AppState {
             app.selectAdjacentSession(by: 1)
             assert(app.selectedSessionID == "a:one", "expanded again: back in the rotation")
 
+            // A global folder draws a separate header in each project.
+            app.rows["a"] = [Row(folder: "wip"), Row(id: "a:one", folder: "wip"), Row(id: "a:two")]
+            app.rows["b"] = [Row(folder: "wip"), Row(id: "b:three", folder: "wip")]
+            app.applyProjectCollapsed("b", true)
+            let collapsedIDs = app.projectFirstRows.map(\.id)
+            assert(collapsedIDs == [
+                .project("a"), .folder(project: "a", name: "wip"), .session("a:one"),
+                .session("a:two"), .project("b")
+            ])
+            app.applyProjectCollapsed("b", false)
+            assert(app.projectFirstRows.map(\.id) == collapsedIDs + [
+                .folder(project: "b", name: "wip"), .session("b:three")
+            ])
+            app.applyProjectCollapsed("b", true)
+            assert(app.projectFirstRows.map(\.id) == collapsedIDs)
+            app.applyProjectCollapsed("b", false)
+
             // With the core's layout in hand the sidebar draws its folders, and
             // ⌘↓ steps past the members a collapsed one is hiding.
             app.rows = ["a": [Row(folder: "wip", collapsed: true),
@@ -2158,6 +2175,7 @@ public final class AppState {
                               Row(id: "a:two")]]
             let drawn = app.sidebarRows(of: "a", in: app.sessions.filter { $0.project == "a" })
             assert(drawn.map(\.id) == ["folder:wip", "a:two"], "\(drawn.map(\.id))")
+
             app.config = try! Wire.decoder.decode(Config.self, from: Data(#"""
             {"projects":{},"folders":{"wip":{"order":2},"done":{"order":1},"zz":{}}}
             """#.utf8))
