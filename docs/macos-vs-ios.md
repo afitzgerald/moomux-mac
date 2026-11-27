@@ -632,10 +632,11 @@ attached to another one); Changes is the toolbar's own button, always shown. Pho
 Snippets (`Snippet`) are pasted and then sent Return as a keystroke, except one marked
 not to submit (`/spawn `, which takes an argument, and `/kill`, which parks the session, so it
 waits for the user's own Return). The default list carries moomux's own skills: `/spawn`, `/tag`,
-`/reseed`, `/kill` — sent as `$spawn` and so on in a codex session (`Snippet.text(for:)`), with a
-trailing space so the one Return submits rather than only accepting codex's completion popup. The
-menu's Edit Snippets… adds, removes, reorders and edits them, and the ⏎ button per row is the
-submit flag; the list lives in the phone's `UserDefaults`, not the core, so it is per device.
+`/reseed`, `/kill`. Like the first-prompt picker (D45), the menu displays and inserts skills
+with the target agent's prefix. In the terminal, a bare Codex skill gets a trailing space so
+one Return submits rather than only accepting Codex's completion popup. The menu's Edit
+Snippets… adds, removes, reorders and edits them, and the ⏎ button per row is the submit flag;
+the list lives in the phone's `UserDefaults`, not the core, so it is per device.
 Paste and Snippets clear an armed Ctrl/Alt first.
 Ceiling: the punctuation keys the package's bar had (`| ~ /`) are gone.
 
@@ -831,9 +832,12 @@ exits.** Both build on `NewSessionForm` and the core's `AgentOptions`.
   together. Neither sheet has More options or a send toggle any more (sending follows Settings'
   default); an agent with no model list (opencode) gets its free-text Model field right under
   that row. Prompt snippets are their own list
-  (`Snippet.promptKey`), starting empty, appended to the prompt, with no Return flag; the key
-  bar's list is untouched. What differs is size: the phone's pill is the key bar's, the Mac's is
-  sized to its own controls, and the Mac still takes drag and paste into the prompt as well.
+  (`Snippet.promptKey`), starting empty, appended to the prompt, with no Return flag. Both
+  pickers use `/` for Claude and [Antigravity](https://antigravity.google/docs/skills/), `$` for
+  Codex, and `@` for OpenCode on snippets marked as skills. Moomux's own skills opt in by default;
+  Edit Snippets… has an @ button to opt any snippet in or out. The phone's pill is the key
+  bar's size; the Mac's is sized to its own controls, and the Mac also takes drag and paste into
+  the prompt.
 
 ---
 

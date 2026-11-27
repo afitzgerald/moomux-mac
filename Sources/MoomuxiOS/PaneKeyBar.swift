@@ -273,7 +273,7 @@ final class PaneKeyBar: UIView {
         button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
             let agent = self?.agent ?? "claude"
             let items: [UIMenuElement] = Snippet.saved().map { snippet in
-                let title = snippet.text.trimmingCharacters(in: .whitespaces)
+                let title = snippet.text(for: agent).trimmingCharacters(in: .whitespaces)
                 // "…" marks one that takes an argument (a trailing space), not
                 // every one left unsubmitted: /kill waits for Return but needs
                 // nothing typed.
@@ -281,7 +281,7 @@ final class PaneKeyBar: UIView {
                     guard let view = self?.terminal else { return }
                     // An armed Ctrl would otherwise turn the Return into Ctrl+Return.
                     view.resetStickyModifiers()
-                    view.paste(text: snippet.text(for: agent))
+                    view.paste(text: snippet.text(for: self?.agent ?? agent, inTerminal: true))
                     if snippet.submit { view.sendKey(.enter) }
                     // One that takes an argument is waiting for it to be typed.
                     if snippet.text.hasSuffix(" ") { self?.keyboardHidden = false }
