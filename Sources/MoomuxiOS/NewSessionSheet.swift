@@ -19,7 +19,6 @@ struct NewSessionSheet: View {
 
     private var projects: [String] { app.config?.orderedProjectNames ?? [] }
     private var project: Project? { app.config?.projects[form.project] }
-    private var hasModelList: Bool { app.hasModelList(for: form.agent) }
     /// Anything typed. Pickers are cheap to redo; a half-written prompt is not.
     /// The base branch counts once it differs from the project's, which it
     /// arrives filled in with.
@@ -73,11 +72,7 @@ struct NewSessionSheet: View {
                         .accessibilityLabel("Prompt")
                     PromptBar(app: app, form: $form, uploading: attachments.pending > 0,
                               attach: attach, fileJobs: app.attachJobs)
-                    // Under the agent it belongs to, only for one with no
-                    // model list (opencode); the rest pick theirs in the menu.
-                    if !hasModelList && !form.agent.isEmpty {
-                        field("Model", $form.modelText, prompt: "default")
-                    }
+                    OpenCodeRow(app: app, form: $form)
                 } footer: {
                     if let error = form.promptProblem ?? attachments.error { Text(error).foregroundStyle(.red) }
                 }
@@ -142,6 +137,9 @@ struct NewSessionSheet: View {
         .onChange(of: form.project) { _, _ in app.applyProject(to: &form) }
         .onChange(of: form.agent) { _, _ in app.clampChoices(of: &form) }
         .onChange(of: form.model) { _, _ in app.clampChoices(of: &form) }
+        .onChange(of: form.openCodeAgent) { _, _ in app.clampChoices(of: &form) }
+        .task(id: form.isOpenCode ? form.project : "") { if form.isOpenCode { await app.loadOpenCodeOptions(project: form.project) } }
+        .onChange(of: app.openCodeLoads) { _, _ in app.keepChoices(of: &form) }
         .onChange(of: app.agentNames) { _, _ in app.presetAgent(in: &form) }
         .onChange(of: app.config?.lastAgent) { _, _ in app.presetAgent(in: &form) }
         .onChange(of: app.agentOptions) { _, _ in app.keepChoices(of: &form) }

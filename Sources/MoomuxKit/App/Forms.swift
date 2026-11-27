@@ -9,6 +9,25 @@ import Foundation
 /// sessions and projects that behave differently from the same fields typed
 /// into the TUI. Being pure is what lets `demo()` pin them.
 
+// MARK: - OpenCode choices
+
+extension OpenCodeOptions {
+    public func agent(_ id: String) -> OpenCodeAgent? { agents.first { $0.id == id } }
+
+    /// The model whose efforts the form offers: the picked one, else the
+    /// selected agent's own, else the project's default — `openCodeEffortModel`.
+    public func effortModel(model: String, agent id: String) -> String {
+        if model != NewSessionForm.defaultChoice { return model }
+        if let own = agent(id)?.model, models.contains(own) { return own }
+        return defaultModel
+    }
+
+    /// "default" plus the effective model's variants.
+    public func efforts(model: String, agent id: String) -> [String] {
+        [NewSessionForm.defaultChoice] + (variants[effortModel(model: model, agent: id)] ?? [])
+    }
+}
+
 // MARK: - New session
 
 /// Mirrors the TUI's new-session form. The picker *contents* come from the
@@ -29,10 +48,11 @@ public struct NewSessionForm: Equatable, Sendable {
     /// The selected entry from the agent's model list. "default" passes no
     /// `--model` flag at all.
     public var model = defaultChoice
-    /// The free-text model for an agent with no list worth offering
-    /// (opencode). Kept apart from `model` so switching agents back and forth
-    /// does not lose either one.
-    public var modelText = ""
+    /// OpenCode's native primary agent, by ID — the project's default (the
+    /// first the core lists) until the user picks another. Empty while that
+    /// project's options have not arrived. Kept when the agent switches away
+    /// from opencode, so switching back does not lose it.
+    public var openCodeAgent = ""
     /// A chosen model that a new table or a hidden-models change dropped from
     /// the shown list. Offered right after "default" for `extraAgent` only,
     /// and sent as-is.
@@ -137,12 +157,75 @@ public struct NewSessionForm: Equatable, Sendable {
         if !levels.isEmpty, !levels.contains(self.thinking) { self.thinking = Self.defaultChoice }
     }
 
-    /// What to send as the model: the free-text field for an agent with no
-    /// list, the picked entry otherwise. `internal/tui/update.go` makes exactly
-    /// this swap on `agent != "opencode"`, keyed off the list being empty here
-    /// so a future agent without models needs no change.
-    public func modelToSend(hasModelList: Bool) -> String {
-        hasModelList ? model : modelText
+    public static let openCode = "opencode"
+
+    public var isOpenCode: Bool { agent == Self.openCode }
+
+    /// Keeps the OpenCode agent on one the project offers, the project's
+    /// default (the first) otherwise.
+    public mutating func clampOpenCodeAgent(_ options: OpenCodeOptions?) {
+        guard isOpenCode, let options else { return }
+        if !options.agents.contains(where: { $0.id == openCodeAgent }) {
+            openCodeAgent = options.agents.first?.id ?? ""
+        }
+    }
+
+    /// The model, thinking and OpenCode agent a create sends. Everything but
+    /// OpenCode sends the picks as they are. OpenCode's reasoning is native:
+    /// an explicit effort rides in the model as `provider/model#variant`,
+    /// `Thinking` stays empty (the core would otherwise prepend a magic word
+    /// to the prompt), and the native agent goes in its own field —
+    /// `internal/tui/update.go`'s submit, step for step. With no options (an
+    /// older core, or discovery failed) there is nothing to name, so the
+    /// agent is not sent and an effort is dropped rather than guessed.
+    public func sendFields(opencode options: OpenCodeOptions?) -> (model: String, thinking: String, openCodeAgent: String) {
+        guard isOpenCode else { return (model, thinking, "") }
+        guard let options else { return (model, "", "") }
+        let efforts = options.efforts(model: model, agent: openCodeAgent)
+        var sent = model
+        if thinking != Self.defaultChoice, efforts.contains(thinking) {
+            sent = options.effortModel(model: model, agent: openCodeAgent) + "#" + thinking
+        }
+        return (sent, "", openCodeAgent)
+    }
+
+    private static func openCodeDemo() {
+        let o = OpenCodeOptions(
+            models: ["a/fast", "a/deep"], defaultModel: "a/fast",
+            variants: ["a/deep": ["low", "high"]],
+            agents: [OpenCodeAgent(id: "build", name: "Build"),
+                     OpenCodeAgent(id: "plan", name: "Plan", model: "a/deep")])
+        var f = NewSessionForm()
+        f.project = "p"
+        f.agent = "opencode"
+        // The project's default agent, and nothing sent for an untouched form.
+        f.clampOpenCodeAgent(o)
+        assert(f.openCodeAgent == "build")
+        var sent = f.sendFields(opencode: o)
+        assert(sent.model == "default" && sent.thinking.isEmpty && sent.openCodeAgent == "build")
+        assert(o.efforts(model: "default", agent: "build") == ["default"], "a/fast has no variants")
+        // The agent's own model decides which efforts are offered.
+        assert(o.efforts(model: "default", agent: "plan") == ["default", "low", "high"])
+        f.openCodeAgent = "plan"
+        f.thinking = "high"
+        sent = f.sendFields(opencode: o)
+        assert(sent.model == "a/deep#high" && sent.thinking.isEmpty && sent.openCodeAgent == "plan", "\(sent)")
+        // An explicit model wins over the agent's.
+        f.model = "a/fast"
+        assert(f.sendFields(opencode: o).model == "a/fast", "a stale effort is dropped, not sent")
+        // An agent the project no longer offers falls back to its default.
+        f.openCodeAgent = "gone"
+        f.clampOpenCodeAgent(o)
+        assert(f.openCodeAgent == "build")
+        // No options: nothing to name, no effort guessed.
+        f.thinking = "high"
+        sent = f.sendFields(opencode: nil)
+        assert(sent.model == "a/fast" && sent.thinking.isEmpty && sent.openCodeAgent.isEmpty)
+        // Other agents are untouched, and never send an OpenCode agent.
+        f.agent = "claude"
+        f.model = "sonnet"
+        sent = f.sendFields(opencode: o)
+        assert(sent.model == "sonnet" && sent.thinking == "high" && sent.openCodeAgent.isEmpty)
     }
 
     /// The core's refusal names the base branch the form sent, rather than the
@@ -169,6 +252,7 @@ public struct NewSessionForm: Equatable, Sendable {
     }
 
     public static func demo() {
+        openCodeDemo()
         let names = ["claude", "codex", "opencode"]
         var form = NewSessionForm()
         form.project = "moomux"
@@ -260,14 +344,10 @@ public struct NewSessionForm: Equatable, Sendable {
         switching.model = "small"
         switching.clampChoices(models: ["default", "big", "small"], thinking: perModel)
         assert(switching.thinking == "default")
-        // An agent with no model list keeps whatever the picker had — its
-        // control is the text field, and that is what gets sent.
+        // An agent with no model list at all keeps whatever the picker had.
         switching.model = "gpt"
         switching.clampChoices(models: [], thinking: { _ in ["default"] })
         assert(switching.model == "gpt")
-        switching.modelText = "anthropic/claude-x"
-        assert(switching.modelToSend(hasModelList: false) == "anthropic/claude-x")
-        assert(switching.modelToSend(hasModelList: true) == "gpt")
 
         // A table or hidden-list change keeps a chosen model that left the
         // list, as the extra entry, and keeps thinking by value.

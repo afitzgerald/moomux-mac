@@ -1074,6 +1074,66 @@ public struct Usage: Decodable, Equatable, Sendable {
     }
 }
 
+// MARK: - OpenCode choices
+
+/// `config.OpenCodeOptions` — what one project offers a new OpenCode session:
+/// its enabled models, per-model reasoning variants, and the visible primary
+/// agents. Served per project by `OpenCodeOptions` (core PR #389), because
+/// OpenCode's own config decides all of it; nothing here is hardcoded.
+public struct OpenCodeOptions: Decodable, Hashable, Sendable {
+    public var models: [String]
+    public var defaultModel: String
+    /// Model ID → the effort names it supports, without "default".
+    public var variants: [String: [String]]
+    /// The first agent is the project's default.
+    public var agents: [OpenCodeAgent]
+
+    enum CodingKeys: String, CodingKey {
+        case models, variants, agents
+        case defaultModel = "default_model"
+    }
+
+    public init(models: [String] = [], defaultModel: String = "",
+                variants: [String: [String]] = [:], agents: [OpenCodeAgent] = []) {
+        self.models = models
+        self.defaultModel = defaultModel
+        self.variants = variants
+        self.agents = agents
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        models = try c.decodeIfPresent([String].self, forKey: .models) ?? []
+        defaultModel = try c.decodeIfPresent(String.self, forKey: .defaultModel) ?? ""
+        variants = try c.decodeIfPresent([String: [String]].self, forKey: .variants) ?? [:]
+        agents = try c.decodeIfPresent([OpenCodeAgent].self, forKey: .agents) ?? []
+    }
+}
+
+public struct OpenCodeAgent: Decodable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var name: String
+    /// The model this agent is configured with, if any.
+    public var model: String
+
+    public init(id: String, name: String = "", model: String = "") {
+        self.id = id
+        self.name = name
+        self.model = model
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
+    }
+
+    enum CodingKeys: String, CodingKey { case id, name, model }
+
+    public var label: String { name.isEmpty ? id : name }
+}
+
 // MARK: - Creating a session
 
 /// `session.CreateRequest` — the whole "new session" transaction, in one
@@ -1103,8 +1163,14 @@ public struct CreateRequest: Encodable, Sendable {
     /// own flag applies. `OpenTerminal` is never sent: neither app opens a
     /// terminal tab.
     public var dangerous: Bool?
+    /// OpenCode's native primary agent (`Build`, `Plan`…), by ID. Empty for
+    /// every other agent, and for OpenCode when its options were unavailable —
+    /// nil then, so the key is absent and those requests are byte-identical to
+    /// what they were before OpenCode had one.
+    public var openCodeAgent: String?
 
     enum CodingKeys: String, CodingKey {
+        case openCodeAgent = "OpenCodeAgent"
         case project = "Project"
         case name = "Name"
         case agent = "Agent"
@@ -1122,7 +1188,8 @@ public struct CreateRequest: Encodable, Sendable {
     public init(project: String, name: String, agent: String = "", branch: String = "",
                 baseBranch: String = "", ticket: String = "", pr: String = "",
                 model: String = "", thinking: String = "", prompt: String = "",
-                autoSubmit: Bool = false, dangerous: Bool? = nil) {
+                autoSubmit: Bool = false, dangerous: Bool? = nil, openCodeAgent: String = "") {
+        self.openCodeAgent = openCodeAgent.isEmpty ? nil : openCodeAgent
         self.project = project
         self.name = name
         self.agent = agent
@@ -1723,6 +1790,12 @@ public enum Wire {
                + #""Dangerous":true,"Model":"gpt","Name":"macos","PR":"http://p/1","#
                + #""Project":"moomux","Prompt":"fix it","Thinking":"high","Ticket":"T-1"}"#, req)
         assert(!req.contains("OpenTerminal"), "a new session belongs in this app, not in iTerm")
+        assert(!req.contains("OpenCodeAgent"), "unset must vanish: other agents' requests are unchanged")
+        let oc = String(decoding: try! out.encode(CreateRequest(
+            project: "p", name: "n", agent: "opencode", model: "a/m#high", openCodeAgent: "plan")),
+            as: UTF8.self)
+        assert(oc.contains(#""OpenCodeAgent":"plan""#) && oc.contains(#""Model":"a/m#high""#)
+               && oc.contains(#""Thinking":"""#), oc)
     }
 }
 

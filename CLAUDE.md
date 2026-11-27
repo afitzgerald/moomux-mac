@@ -1021,7 +1021,13 @@ Decisions, not oversights. Don't "fix" these without being asked.
   Project, first prompt, name, existing branch, base branch, ticket and PR are on the face, with
   one row under the prompt shared by both apps (`MoomuxKit/App/PromptBar.swift`): Attach and
   Snippets in a pill, agent and model as one choice, and thinking level. There is no "More
-  options": a free-text model for an agent with no list appears right under that row. The agent
+  options". **OpenCode's choices are discovered, not typed**: with opencode selected, `OpenCodeOptions`
+  (per project, core moomux#389) supplies the models, the visible primary agents (first = the
+  project's default, shown as an "OpenCode agent" row) and, for the effective model (picked, else the
+  agent's own, else the project default), its effort variants as the Thinking list. The create sends
+  the agent in `OpenCodeAgent`, an explicit effort as `Model` = `provider/model#variant`, and leaves
+  `Thinking` empty. An older core ("unknown method") or a failed discovery leaves "default" only and
+  a note in the sheet; the create still goes, naming nothing. The agent
   starts on `Config.last_agent`, the agent the last session was created with, which the core
   writes on every create; a project switch leaves it alone, and model and thinking always start on
   "default" (`NewSessionForm.presetAgent`). There is no per-session skip-permissions: every
