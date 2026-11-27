@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// One entry in the key bar's Snippets menu. Pasted into the pane, then Return
-/// unless `submit` is false — a command that takes an argument is left open,
-/// with a trailing space, for the user to finish.
+/// An entry in a Snippets menu. The key bar pastes it into the pane, then
+/// sends Return if `submit` is true.
 public struct Snippet: Codable, Hashable, Identifiable {
     public var id = UUID()
     public var text: String
     public var submit: Bool
+    // Older saved lists have no flag; keep treating moomux's own skills as skills.
+    private var skill: Bool?
 
     public static let key = "snippets"
 
@@ -20,17 +21,35 @@ public struct Snippet: Codable, Hashable, Identifiable {
         .init(text: "y", submit: true), .init(text: "continue", submit: true),
     ]
 
-    /// moomux's own skills, which every agent but codex spells `/tag`.
-    static let skills: Set = ["kill", "tag", "reseed", "spawn"]
+    public init(text: String, submit: Bool) {
+        self.text = text
+        self.submit = submit
+    }
 
-    /// What is pasted. Codex names a skill `$tag`, not `/tag`, and Return on a
-    /// pasted `$tag` only accepts its completion popup; the trailing space
-    /// closes the popup so the one Return submits. Measured on codex-cli
-    /// 0.166. Applied here rather than stored, so one list serves both agents.
-    public func text(for agent: String) -> String {
-        let name = text.trimmingCharacters(in: .whitespaces).dropFirst()
-        guard agent == "codex", text.hasPrefix("/"), Self.skills.contains(String(name)) else { return text }
-        return "$\(name) "
+    private static let moomuxSkills: Set = ["/kill", "/tag", "/reseed", "/spawn"]
+
+    var usesAgentPrefix: Bool {
+        get { skill ?? Self.moomuxSkills.contains(String(text.prefix { !$0.isWhitespace })) }
+        set { skill = newValue }
+    }
+
+    public func text(for agent: String, inTerminal: Bool = false) -> String {
+        guard usesAgentPrefix, let first = text.first, "/$@".contains(first),
+              let next = text.dropFirst().first, !next.isWhitespace else { return text }
+        let prefix: Character
+        switch agent {
+        case "claude", "antigravity": prefix = "/"
+        case "codex": prefix = "$"
+        case "opencode": prefix = "@"
+        default: return text
+        }
+        let invocation = String(prefix) + text.dropFirst()
+        // On Codex, a space closes the skill completion popup so one Return
+        // submits. The prompt editor already adds its own separating space.
+        if inTerminal, agent == "codex", !invocation.contains(where: \.isWhitespace) {
+            return invocation + " "
+        }
+        return invocation
     }
 
     /// The New Session sheet's list, inserted into the first prompt. Its own
@@ -59,11 +78,24 @@ public struct Snippet: Codable, Hashable, Identifiable {
     }
 
     public static func demo() {
-        let tag = Snippet(text: "/tag", submit: true)
+        let tag = try! JSONDecoder().decode(Snippet.self, from: Data(
+            #"{"id":"38E776CB-0C6A-408B-968D-958401D5A904","text":"/tag","submit":true}"#.utf8))
         assert(tag.text(for: "claude") == "/tag")
-        assert(tag.text(for: "codex") == "$tag ", "codex spells a skill with $ and a closing space")
-        assert(Snippet(text: "/clear", submit: true).text(for: "codex") == "/clear", "not a moomux skill")
+        assert(tag.text(for: "codex") == "$tag")
+        assert(tag.text(for: "codex", inTerminal: true) == "$tag ", "close Codex's completion popup")
+        assert(tag.text(for: "opencode") == "@tag")
+        assert(Snippet(text: "/clear", submit: true).text(for: "opencode") == "/clear")
+        assert(Snippet(text: "/tmp/file", submit: true).text(for: "codex") == "/tmp/file")
         assert(Snippet(text: "y", submit: true).text(for: "codex") == "y")
+        var custom = Snippet(text: "$review  this ", submit: false)
+        custom.usesAgentPrefix = true
+        assert(custom.text(for: "antigravity") == "/review  this ")
+        assert(custom.text(for: "opencode") == "@review  this ")
+        assert(custom.text(for: "codex", inTerminal: true) == "$review  this ")
+        assert(custom.text(for: "unknown") == custom.text)
+        var literal = tag
+        literal.usesAgentPrefix = false
+        assert(literal.text(for: "opencode") == "/tag")
         // A scratch key, so the user's own list is untouched.
         let key = "snippets.selftest"
         let store = UserDefaults.standard
@@ -72,6 +104,8 @@ public struct Snippet: Codable, Hashable, Identifiable {
         assert(saved(key).isEmpty, "a prompt-style key starts empty")
         save([Snippet(text: "a", submit: true), Snippet(text: "  ", submit: true)], key)
         assert(saved(key).map(\.text) == ["a"], "blank rows are dropped on save")
+        save([custom, literal], key)
+        assert(saved(key).map { $0.text(for: "opencode") } == ["@review  this ", "/tag"])
         save([], key)
         assert(saved(key).isEmpty, "an emptied list stays empty")
         store.set(Data("nope".utf8), forKey: key)
@@ -177,6 +211,15 @@ public struct SnippetsSheet: View {
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
+                Button { snippet.usesAgentPrefix.toggle() } label: {
+                    Image(systemName: "at")
+                        .foregroundStyle(snippet.usesAgentPrefix ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                }
+                .buttonStyle(.borderless)
+                .help("Use the agent’s skill prefix")
+                .accessibilityLabel("Use agent’s skill prefix")
+                .accessibilityValue(snippet.usesAgentPrefix ? "On" : "Off")
+                .accessibilityAddTraits(snippet.usesAgentPrefix ? .isSelected : [])
                 // An icon rather than a switch: it says what it does, and it
                 // is what the menu row sends.
                 if sendsReturn {
@@ -213,11 +256,14 @@ public struct SnippetsSheet: View {
         }
     }
 
-    @ViewBuilder private var footer: some View {
-        if sendsReturn {
-            Text("\(Image(systemName: "return")) sends Return after pasting. Turn it off for a command you want to finish yourself; a trailing space is kept.")
-        } else {
-            Text("Added to the end of the prompt.")
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(Image(systemName: "at")) adjusts a skill’s leading /, $ or @ to match the agent.")
+            if sendsReturn {
+                Text("\(Image(systemName: "return")) sends Return after pasting. Turn it off for a command you want to finish yourself; a trailing space is kept.")
+            } else {
+                Text("Added to the end of the prompt.")
+            }
         }
     }
 }

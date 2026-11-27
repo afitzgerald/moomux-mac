@@ -54,8 +54,8 @@ public struct PromptBar: View {
                 #endif
                 Menu {
                     ForEach(snippets) { snippet in
-                        Button(snippet.text.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                            form.appendPath(snippet.text)
+                        Button(snippet.text(for: form.agent).trimmingCharacters(in: .whitespacesAndNewlines)) {
+                            form.appendPath(snippet.text(for: form.agent))
                         }
                     }
                     Section {
