@@ -446,6 +446,14 @@ private struct NewSessionSheet: View {
             // An empty `TextField` in a grouped Form draws no box at all, so a
             // blank field reads as a static label. A border is the whole fix.
             .textFieldStyle(.roundedBorder)
+            if app.agentNames.isEmpty {
+                Text(app.failedCreate == nil
+                     ? "Show an agent in Settings → General → Hidden agents to create a session."
+                     : "Close this sheet and show an agent in Settings → General → Hidden agents. "
+                       + "New Session will reopen your saved form.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             // Its own line: beside the buttons at this width it truncated.
             if let error = form.promptProblem ?? error {
                 Text(error)
@@ -475,7 +483,7 @@ private struct NewSessionSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 // Until every attachment's path is in the prompt.
-                .disabled(!form.canCreate || attachments.pending > 0)
+                .disabled(!form.canCreate || !app.agentNames.contains(form.agent) || attachments.pending > 0)
             }
         }
         .padding(20)
@@ -542,6 +550,9 @@ private struct EditSessionSheet: View {
             Form {
                 TextField("Name", text: $name)
                 Picker("Agent", selection: $agent) {
+                    if !app.agentNames.contains(session.agentName) {
+                        Text("Keep current (\(session.agentName))").tag(session.agentName)
+                    }
                     ForEach(app.agentNames, id: \.self) { Text($0).tag($0) }
                 }
                 Toggle("Skip permission prompts", isOn: $dangerous)
@@ -574,10 +585,8 @@ private struct EditSessionSheet: View {
         .frame(width: 400)
         .onAppear {
             name = session.name
-            // "" is not one of `agentNames`, and a session whose agent the core
-            // no longer offers would leave the picker unselectable.
-            agent = app.agentNames.contains(session.agentName)
-                ? session.agentName : (app.agentNames.first ?? "claude")
+            // Renaming a session must not silently switch its agent.
+            agent = session.agentName
             dangerous = session.dangerous
         }
     }

@@ -889,7 +889,8 @@ rg -n 'NSUbiquitousKeyValueStore' Sources                             # nothing:
 |---|---|---|---|
 | projects, skip-permissions, base branch, branch prefix, emoji | core | ✅ Settings → Projects | applies, not editable |
 | last agent (`last_agent`) | core | written by every create, presets New Session | the same |
-| hidden models (`excluded_models`) | core | ✅ Settings → General → Hidden models | applies to the pickers, not editable |
+| hidden models (`excluded_models`) | core | ✅ Settings → General → Hidden models; pick a project to list OpenCode models | applies to the pickers, including OpenCode, not editable |
+| hidden agent types (`hiddenAgents`) | device | ✅ Settings → General → Hidden agents; applies to session pickers | no control |
 | sort by last opened, send first prompt by default, terminal pane in new sessions | core | ✅ Settings → General | applies, not editable |
 | theme | core | ✅ Settings → Appearance | theme colours apply to the rows |
 | project collapsed, folder collapsed | core | ✅ | ✅ (both toggle the same flag) |

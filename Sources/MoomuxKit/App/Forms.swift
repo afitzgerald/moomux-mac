@@ -92,9 +92,16 @@ public struct NewSessionForm: Equatable, Sendable {
         let retry = agent.isEmpty || (agent == seededAgent && !seedSettled)
         guard retry || !agentNames.contains(agent) else { return }
         let want = lastAgent ?? ""
-        agent = agentNames.contains(want) ? want : (agentNames.first ?? want)
+        agent = agentNames.contains(want) ? want : (agentNames.first ?? "")
         seededAgent = agent
         seedSettled = lastAgent != nil && agent == want
+    }
+
+    /// Picking a model also confirms the agent, even if its name didn't change.
+    public mutating func selectAgent(_ agent: String, model: String) {
+        self.agent = agent
+        if !model.isEmpty { self.model = model }
+        seedSettled = true
     }
 
     /// Fills the base branch in with the project's own, so it can be edited
@@ -375,6 +382,13 @@ public struct NewSessionForm: Equatable, Sendable {
         // last_agent: the sheet is someone's half-typed session.
         noConfig.presetAgent("opencode", agentNames: names)
         assert(noConfig.agent == "codex", "a later last_agent must not flip an open sheet")
+        var hiddenFallback = NewSessionForm()
+        let visible = ["claude", "opencode"]
+        hiddenFallback.presetAgent("codex", agentNames: visible)
+        hiddenFallback.selectAgent("claude", model: "sonnet")
+        hiddenFallback.presetAgent("opencode", agentNames: visible)
+        assert(hiddenFallback.agent == "claude" && hiddenFallback.model == "sonnet",
+               "picking a fallback agent's model settles the choice")
         // ...but never overrides a choice the table still offers.
         late.agent = "opencode"
         late.presetAgent("claude", agentNames: names)

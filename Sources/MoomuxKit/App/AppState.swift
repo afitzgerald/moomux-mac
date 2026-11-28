@@ -788,8 +788,8 @@ public final class AppState {
     }
 
     public let client: MoomuxClient
-    /// Where `promptDraft` is kept; the selftest passes its own suite.
-    @ObservationIgnored private let drafts: UserDefaults
+    /// Where the prompt draft and hidden agents are kept; selftests use their own suite.
+    @ObservationIgnored private let defaults: UserDefaults
 
     private var tasks: [Task<Void, Never>] = []
     /// Whether the snapshot stream is currently delivering. It owns the
@@ -812,9 +812,10 @@ public final class AppState {
     /// Named on a banner when the phone has more than one computer.
     @ObservationIgnored public var computerName = ""
 
-    public init(client: MoomuxClient = MoomuxClient(), drafts: UserDefaults = .standard) {
+    public init(client: MoomuxClient = MoomuxClient(), defaults: UserDefaults = .standard) {
         self.client = client
-        self.drafts = drafts
+        self.defaults = defaults
+        self.hiddenAgents = Set(defaults.stringArray(forKey: Self.hiddenAgentsKey) ?? [])
     }
 
     // MARK: Derived
@@ -1244,10 +1245,25 @@ public final class AppState {
     // and an agent the table does not mention gets none: no fallback to
     // another agent's.
 
-    public var agentNames: [String] {
+    public var allAgentNames: [String] {
         // A core that answered with nothing at all would otherwise leave every
         // picker empty and unselectable; claude is what the TUI falls back to.
         agentOptions.isEmpty ? ["claude"] : agentOptions.map(\.name)
+    }
+
+    public var agentNames: [String] {
+        allAgentNames.filter { !hiddenAgents.contains($0) }
+    }
+
+    public private(set) var hiddenAgents: Set<String> {
+        didSet { defaults.set(hiddenAgents.sorted(), forKey: Self.hiddenAgentsKey) }
+    }
+
+    private static let hiddenAgentsKey = "hiddenAgents"
+
+    public func setAgentHidden(_ agent: String, hidden: Bool) {
+        if hidden { hiddenAgents.insert(agent) }
+        else { hiddenAgents.remove(agent) }
     }
 
     private func option(_ agent: String) -> AgentOption? {
@@ -1255,18 +1271,26 @@ public final class AppState {
     }
 
     /// The model IDs `agent`'s picker offers: the core's full list minus the
-    /// hidden ones, "default" always kept. Empty means the agent has no fixed
-    /// list (opencode) and the control is a free-text field.
+    /// hidden ones, "default" always kept. OpenCode's list belongs to the
+    /// project; until discovery succeeds it offers only "default".
     public func models(for agent: String, project: String = "") -> [String] {
-        // OpenCode's list is the project's own, discovered; until it
-        // arrives (or if it never does) "default" is the only choice.
-        if agent == NewSessionForm.openCode {
-            return [NewSessionForm.defaultChoice] + (openCodeOptions(for: project)?.models ?? [])
-        }
-        let hidden = config?.excludedModels[agent] ?? []
-        return (option(agent)?.models ?? []).filter {
+        let hidden = Set(config?.excludedModels[agent] ?? [])
+        return allModels(for: agent, project: project).filter {
             $0 == NewSessionForm.defaultChoice || !hidden.contains($0)
         }
+    }
+
+    private func allModels(for agent: String, project: String) -> [String] {
+        if agent == NewSessionForm.openCode {
+            let models = openCodeOptions(for: project)?.models ?? []
+            return [NewSessionForm.defaultChoice] + models.sorted(by: Self.openCodeModelOrder)
+        }
+        return option(agent)?.models ?? []
+    }
+
+    private static func openCodeModelOrder(_ lhs: String, _ rhs: String) -> Bool {
+        // Numeric comparison puts version 6.10 before 6.2 in descending order.
+        lhs.compare(rhs, options: .numeric) == .orderedDescending
     }
 
     /// What a picker shows for `id`: the core's display name, else the ID.
@@ -1333,22 +1357,36 @@ public final class AppState {
 
     /// One row of Settings' Hidden models list.
     public struct ModelRow: Identifiable, Hashable, Sendable {
-        public var agent: String
         public var id: String
         public var label: String
         public var hidden: Bool
-        public var key: String { agent + "\u{0}" + id }
     }
 
-    /// Every named model the core serves, agent by agent in its own order,
-    /// "default" skipped: the TUI's `modelFilterRows`.
-    public var modelRows: [ModelRow] {
-        agentOptions.flatMap { o in
-            o.models.filter { $0 != NewSessionForm.defaultChoice }.map {
-                ModelRow(agent: o.name, id: $0, label: o.modelNames[$0] ?? $0,
-                         hidden: config?.excludedModels[o.name]?.contains($0) == true)
-            }
+    /// Every named model for this agent, including the ones hidden in pickers.
+    public func modelRows(for agent: String, project: String = "") -> [ModelRow] {
+        let hidden = Set(config?.excludedModels[agent] ?? [])
+        return allModels(for: agent, project: project).filter { $0 != NewSessionForm.defaultChoice }.map {
+            ModelRow(id: $0, label: modelLabel($0, agent: agent), hidden: hidden.contains($0))
         }
+    }
+
+    /// A global exclusion remains editable even when no project lists its model.
+    public func otherHiddenOpenCodeModels(project: String) -> [ModelRow] {
+        let agent = NewSessionForm.openCode
+        let listed = openCodeOptions(for: project)?.models ?? []
+        return hiddenOpenCodeIDs.subtracting(listed).sorted(by: Self.openCodeModelOrder).map {
+            ModelRow(id: $0, label: modelLabel($0, agent: agent), hidden: true)
+        }
+    }
+
+    private var hiddenOpenCodeIDs: Set<String> {
+        Set(config?.excludedModels[NewSessionForm.openCode] ?? []).subtracting([NewSessionForm.defaultChoice])
+    }
+
+    public var hiddenModelCount: Int {
+        hiddenOpenCodeIDs.count
+            + allAgentNames.filter { $0 != NewSessionForm.openCode }
+                .flatMap { modelRows(for: $0) }.filter(\.hidden).count
     }
 
     public func setModelExcluded(agent: String, model: String, hidden: Bool) {
@@ -1373,8 +1411,12 @@ public final class AppState {
     /// the saved prompt draft.
     public func openNewSessionForm(project: String) -> (NewSessionForm, error: String?) {
         if let failed = failedCreate {
-            failedCreate = nil
-            return (failed.form, failed.error)
+            // The sheet has to close before Settings can show an agent again.
+            // Keep the original form for the next open in that case.
+            if !agentNames.isEmpty { failedCreate = nil }
+            var form = failed.form
+            if !agentNames.contains(form.agent) { presetAgent(in: &form) }
+            return (form, failed.error)
         }
         var form = newSessionForm(project: project)
         form.prompt = promptDraft
@@ -1392,10 +1434,10 @@ public final class AppState {
     /// file: it is this front end's own state, like `diffTool`. Both sheets
     /// write it on every edit, which is what covers a quit or a crash too.
     public var promptDraft: String {
-        get { drafts.string(forKey: Self.promptDraftKey) ?? "" }
+        get { defaults.string(forKey: Self.promptDraftKey) ?? "" }
         set {
-            if newValue.trimmed.isEmpty { drafts.removeObject(forKey: Self.promptDraftKey) }
-            else { drafts.set(newValue, forKey: Self.promptDraftKey) }
+            if newValue.trimmed.isEmpty { defaults.removeObject(forKey: Self.promptDraftKey) }
+            else { defaults.set(newValue, forKey: Self.promptDraftKey) }
         }
     }
 
@@ -1960,7 +2002,10 @@ public final class AppState {
         // new-session form contains. Same rules as `internal/tui`'s
         // agentNames / modelNamesFor / thinkingNamesFor.
         MainActor.assumeIsolated {
-            let app = AppState()
+            let suite = "app.moomux.agent-choices-test.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let app = AppState(defaults: defaults)
             app.streamAnswered = true  // not the saved Group-by-Folder preference
             // A core that never answered must still leave the form usable.
             assert(app.agentNames == ["claude"], "\(app.agentNames)")
@@ -1982,6 +2027,19 @@ public final class AppState {
                 agents: [OpenCodeAgent(id: "build"), OpenCodeAgent(id: "plan", model: "a/deep")]))
             assert(app.models(for: "opencode", project: "p") == ["default", "a/fast", "a/deep"])
             assert(app.models(for: "opencode", project: "q") == ["default"], "another project's list is not p's")
+            app.openCodeLoads["q"] = .loaded(OpenCodeOptions(models: ["a/gpt-6.2", "a/gpt-6.10", "a/gpt-5.6"]))
+            let descendingModels = ["a/gpt-6.10", "a/gpt-6.2", "a/gpt-5.6"]
+            assert(app.models(for: "opencode", project: "q") == ["default"] + descendingModels)
+            assert(app.modelRows(for: "opencode", project: "q").map(\.id) == descendingModels)
+            app.config = try! Wire.decoder.decode(Config.self, from: Data(
+                #"{"excluded_models":{"opencode":["a/fast"]}}"#.utf8))
+            assert(app.models(for: "opencode", project: "p") == ["default", "a/deep"])
+            assert(app.modelRows(for: "opencode", project: "p").map(\.hidden) == [true, false])
+            assert(app.modelRows(for: "opencode", project: "q").allSatisfy { !$0.hidden } && app.hiddenModelCount == 1)
+            assert(app.otherHiddenOpenCodeModels(project: "p").isEmpty, "do not duplicate a catalog row")
+            assert(app.otherHiddenOpenCodeModels(project: "q").map(\.id) == ["a/fast"])
+            assert(app.otherHiddenOpenCodeModels(project: "").map(\.id) == ["a/fast"], "editable without a project")
+            app.config = nil
             var oc = NewSessionForm()
             oc.project = "p"
             oc.agent = "opencode"
@@ -2012,6 +2070,25 @@ public final class AppState {
             var preset = app.newSessionForm(project: "p")
             assert(preset.agent == "codex", "last_agent, not the project's stale agent")
             assert(preset.model == "default" && preset.thinking == "default")
+            app.setAgentHidden("codex", hidden: true)
+            assert(app.agentNames == ["claude", "opencode"] && app.allAgentNames.contains("codex"))
+            assert(app.newSessionForm(project: "p").agent == "claude", "skip the hidden last agent")
+            assert(AppState(defaults: defaults).hiddenAgents == ["codex"])
+            app.setAgentHidden("claude", hidden: true)
+            app.setAgentHidden("opencode", hidden: true)
+            assert(app.agentNames.isEmpty && !app.newSessionForm(project: "p").canCreate)
+            var failed = preset
+            failed.existingBranch = "work"
+            failed.ticket = "T-123"
+            failed.prompt = "Continue the work"
+            app.failedCreate = FailedCreate(form: failed, error: "Create refused")
+            let blocked = app.openNewSessionForm(project: "p")
+            assert(!blocked.0.canCreate && blocked.error == "Create refused")
+            assert(app.failedCreate?.form == failed, "keep the retry while the user returns to Settings")
+            app.setAgentHidden("codex", hidden: false)
+            let recovered = app.openNewSessionForm(project: "p")
+            assert(recovered.0 == failed && recovered.error == "Create refused" && app.failedCreate == nil)
+            for agent in app.allAgentNames { app.setAgentHidden(agent, hidden: false) }
             preset.project = ""
             app.applyProject(to: &preset)
             assert(preset.agent == "codex")
@@ -2040,8 +2117,8 @@ public final class AppState {
             app.config = try! Wire.decoder.decode(Config.self, from: Data(
                 #"{"excluded_models":{"claude":["haiku-4","default"]}}"#.utf8))
             assert(app.models(for: "claude") == ["default", "opus-5"], "hidden dropped, default kept")
-            assert(app.modelRows.map(\.id) == ["opus-5", "haiku-4"], "every named model, default skipped")
-            assert(app.modelRows.map(\.hidden) == [false, true])
+            assert(app.modelRows(for: "claude").map(\.id) == ["opus-5", "haiku-4"], "every named model, default skipped")
+            assert(app.modelRows(for: "claude").map(\.hidden) == [false, true])
             var open = app.newSessionForm(project: "")
             open.agent = "claude"
             open.model = "opus-5"
@@ -3433,7 +3510,7 @@ extension AppState {
         let suite = "moomux-selftest-\(getpid())"
         let drafts = UserDefaults(suiteName: suite)!
         defer { drafts.removePersistentDomain(forName: suite) }
-        let creator = AppState(client: MoomuxClient(socketPath: core.path), drafts: drafts)
+        let creator = AppState(client: MoomuxClient(socketPath: core.path), defaults: drafts)
         assert(creator.openNewSessionForm(project: "p").0.prompt.isEmpty)
         var sent = creator.openNewSessionForm(project: "p").0
         sent.agent = "claude"
@@ -3469,12 +3546,12 @@ extension AppState {
         assert(creator.failedCreate?.error == MoomuxClient.Failure.emptyResponse.errorDescription)
         assert(creator.failedCreate?.form == sent)
         creator.failedCreate = nil
-        let orphan = AppState(client: MoomuxClient(socketPath: "/tmp/mmx-nobody-\(getpid()).sock"), drafts: drafts)
+        let orphan = AppState(client: MoomuxClient(socketPath: "/tmp/mmx-nobody-\(getpid()).sock"), defaults: drafts)
         orphan.create(sent)
         assert(FakeCore.spin { orphan.failedCreate != nil }, "an unreachable core must still give the form back")
         assert(orphan.failedCreate?.form == sent)
         // The draft outlives the app: a fresh store over the same defaults has it.
-        assert(AppState(client: creator.client, drafts: drafts).openNewSessionForm(project: "p").0.prompt
+        assert(AppState(client: creator.client, defaults: drafts).openNewSessionForm(project: "p").0.prompt
                == sent.prompt)
         // Success clears it — unless another sheet has since typed a new one.
         core.on("CreateSession") {
