@@ -1390,7 +1390,12 @@ public final class AppState {
     }
 
     public func setModelExcluded(agent: String, model: String, hidden: Bool) {
-        mutate("Save setting") { try $0.setModelExcluded(agent: agent, model: model, on: hidden); return nil }
+        // The toggle and any save error are shown in Settings. A transient
+        // progress item in the main toolbar makes the adjacent usage badge blink.
+        mutate("Save setting", showsProgress: false) {
+            try $0.setModelExcluded(agent: agent, model: model, on: hidden)
+            return nil
+        }
     }
 
     // MARK: New-session form
@@ -2473,11 +2478,11 @@ public final class AppState {
     ///
     /// A non-nil return replaces `hint`; nil means the action had nothing to
     /// say and leaves whatever is there.
-    private func mutate(_ what: String, onSuccess: (() -> Void)? = nil,
+    private func mutate(_ what: String, showsProgress: Bool = true, onSuccess: (() -> Void)? = nil,
                         _ work: @Sendable @escaping (MoomuxClient) throws -> String?) {
         Task {
-            busy = what
-            defer { busy = nil }
+            if showsProgress { busy = what }
+            defer { if showsProgress { busy = nil } }
             do {
                 if let hint = try await withoutBlockingTheUI({ [client] in try work(client) }) {
                     self.hint = hint.isEmpty ? nil : hint
@@ -3456,10 +3461,8 @@ private func withoutBlockingTheUI<T: Sendable>(
 // MARK: - Flow checks
 
 extension AppState {
-    /// The store's two flows that only exist end to end, against `FakeCore`:
-    /// the delete dialog's status-then-delete sequence, and the watch loop's
-    /// reaction to what a stream can do. Both are `withoutBlockingTheUI` hops
-    /// and main-actor tasks, so they are run, not read.
+    /// Runs the store's asynchronous flows end to end against `FakeCore`,
+    /// including the main-actor tasks and their socket calls.
     public static func flowsDemo() {
         let core = FakeCore()
         // One answer for every one-shot call: the session the stream will
@@ -3501,6 +3504,24 @@ extension AppState {
         assert(FakeCore.spin { app.actionError != nil })
         assert(app.actionError == "Delete failed: worktree is locked", app.actionError ?? "")
         assert(!app.connection.isDown)
+
+        // Hold a model save in flight to check that it never inserts a
+        // progress item beside the usage badge, then let Settings refresh.
+        let modelSave = FakeCore()
+        let saveReply = DispatchSemaphore(value: 0)
+        modelSave.on("SetModelExcluded") { socket in
+            _ = saveReply.wait(timeout: .now() + 5)
+            try? socket.write(Data(#"{"result":{}}"#.utf8))
+        }
+        modelSave.on("Config") {
+            try? $0.write(Data(#"{"result":{"cfg":{"excluded_models":{"claude":["haiku-4"]}}}}"#.utf8))
+        }
+        let settings = AppState(client: MoomuxClient(socketPath: modelSave.path))
+        settings.setModelExcluded(agent: "claude", model: "haiku-4", hidden: true)
+        assert(FakeCore.spin { modelSave.count("SetModelExcluded") == 1 })
+        assert(settings.busy == nil, "model toggles must not change the toolbar")
+        saveReply.signal()
+        assert(FakeCore.spin { settings.config?.excludedModels["claude"] == ["haiku-4"] })
 
         // MARK: Create
 
