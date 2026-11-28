@@ -527,6 +527,16 @@ private struct GeneralPane: View {
             if cfg != nil { ClaudeUsageSection() }
 
             Section("Sessions") {
+                DisclosureGroup("Hidden agents") {
+                    ForEach(app.allAgentNames, id: \.self) { agent in
+                        Toggle(agent, isOn: Binding(
+                            get: { !app.hiddenAgents.contains(agent) },
+                            set: { app.setAgentHidden(agent, hidden: !$0) }))
+                    }
+                    Text("Turn off an agent to remove it from session pickers on this Mac.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if cfg != nil {
                     Toggle("Sort sessions by last opened", isOn: Binding(
                         get: { cfg?.sortRecentFirst ?? false },
@@ -542,11 +552,11 @@ private struct GeneralPane: View {
                         .help("New sessions open with a shell beside the agent. Turn off for "
                               + "the agent alone. A project's .moomux-panes.toml still wins.")
                     LabeledContent("Hidden models") {
-                        let n = app.modelRows.filter(\.hidden).count
+                        let n = app.hiddenModelCount
                         Text(n == 0 ? "none" : "\(n)").foregroundStyle(.secondary)
                         Button("Choose…") { choosingModels = true }
                     }
-                    .help("Models left out of the model pickers, here and in the TUI")
+                    .help("Models left out of the model pickers")
                 }
                 // This app's own (`UserDefaults`), so it stays usable with no
                 // core — which is why the gate above is per row and not over
@@ -608,22 +618,43 @@ private struct GeneralPane: View {
 private struct HiddenModelsSheet: View {
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedProject = ""
+
+    private var projects: [String] { app.config?.orderedProjectNames ?? [] }
+    private var project: String {
+        projects.contains(selectedProject) ? selectedProject : (projects.first ?? "")
+    }
+    private var supportsOpenCode: Bool { app.allAgentNames.contains(NewSessionForm.openCode) }
+    private var openCodeProject: String { supportsOpenCode ? project : "" }
 
     var body: some View {
-        let rows = app.modelRows
+        let otherOpenCodeModels = app.otherHiddenOpenCodeModels(project: openCodeProject)
         VStack(alignment: .trailing, spacing: 12) {
             Form {
-                if rows.isEmpty {
-                    Text("No model lists yet. They come from agent-usage.").foregroundStyle(.secondary)
-                }
-                ForEach(app.agentNames.filter { a in rows.contains { $0.agent == a } }, id: \.self) { agent in
-                    Section(agent) {
-                        ForEach(rows.filter { $0.agent == agent }, id: \.key) { row in
-                            Toggle(row.label, isOn: Binding(
-                                get: { !row.hidden },
-                                set: { app.setModelExcluded(agent: row.agent, model: row.id, hidden: !$0) }))
+                ForEach(app.allAgentNames.filter { $0 != NewSessionForm.openCode }, id: \.self) { agent in
+                    let rows = app.modelRows(for: agent)
+                    if !rows.isEmpty {
+                        Section(agent) {
+                            modelToggles(rows, agent: agent)
                         }
                     }
+                }
+                if supportsOpenCode || !otherOpenCodeModels.isEmpty {
+                    Section {
+                        if supportsOpenCode {
+                            openCodeModels(app.modelRows(for: NewSessionForm.openCode, project: project))
+                        }
+                        if !otherOpenCodeModels.isEmpty {
+                            Text("Other hidden OpenCode models").foregroundStyle(.secondary)
+                            modelToggles(otherOpenCodeModels, agent: NewSessionForm.openCode)
+                        }
+                    } header: {
+                        Text("OpenCode")
+                    } footer: {
+                        Text("The project determines which models are listed. Hiding a model applies across projects.")
+                    }
+                } else if app.allAgentNames.allSatisfy({ app.modelRows(for: $0).isEmpty }) {
+                    Text("No model lists yet. They come from agent-usage.").foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -642,7 +673,40 @@ private struct HiddenModelsSheet: View {
                 .keyboardShortcut(.defaultAction)
         }
         .padding(20)
-        .frame(width: 400)
+        .frame(width: 460)
+        .task(id: openCodeProject) { await app.loadOpenCodeOptions(project: openCodeProject) }
+    }
+
+    @ViewBuilder
+    private func openCodeModels(_ rows: [AppState.ModelRow]) -> some View {
+        if project.isEmpty {
+            Text("Add a project to list OpenCode models.").foregroundStyle(.secondary)
+        } else {
+            Picker("Project", selection: Binding(get: { project }, set: { selectedProject = $0 })) {
+                ForEach(projects, id: \.self) { Text($0).tag($0) }
+            }
+            switch app.openCodeLoads[project] {
+            case .loaded:
+                if rows.isEmpty {
+                    Text("No OpenCode models available for this project.").foregroundStyle(.secondary)
+                } else {
+                    modelToggles(rows, agent: NewSessionForm.openCode)
+                }
+            case .unavailable(let message):
+                Text(message).foregroundStyle(.secondary)
+            case .loading, nil:
+                ProgressView("Finding OpenCode models…")
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private func modelToggles(_ rows: [AppState.ModelRow], agent: String) -> some View {
+        ForEach(rows) { row in
+            Toggle(row.label, isOn: Binding(
+                get: { !row.hidden },
+                set: { app.setModelExcluded(agent: agent, model: row.id, hidden: !$0) }))
+        }
     }
 }
 

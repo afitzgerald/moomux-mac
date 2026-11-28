@@ -170,8 +170,7 @@ public struct PromptBar: View {
         Binding {
             AgentChoice(agent: form.agent, model: hasModelList ? form.model : "")
         } set: {
-            form.agent = $0.agent
-            if !$0.model.isEmpty { form.model = $0.model }
+            form.selectAgent($0.agent, model: $0.model)
         }
     }
 }
